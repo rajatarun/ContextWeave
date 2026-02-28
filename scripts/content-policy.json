@@ -1,0 +1,85 @@
+{
+  "filtersConfig": [
+    {
+      "type": "HATE",
+      "inputStrength": "HIGH",
+      "outputStrength": "HIGH",
+      "inputModalities": [
+        "TEXT"
+      ],
+      "outputModalities": [
+        "TEXT"
+      ],
+      "inputAction": "BLOCK",
+      "outputAction": "BLOCK"
+    },
+    {
+      "type": "INSULTS",
+      "inputStrength": "HIGH",
+      "outputStrength": "HIGH",
+      "inputModalities": [
+        "TEXT"
+      ],
+      "outputModalities": [
+        "TEXT"
+      ],
+      "inputAction": "BLOCK",
+      "outputAction": "BLOCK"
+    },
+    {
+      "type": "SEXUAL",
+      "inputStrength": "HIGH",
+      "outputStrength": "HIGH",
+      "inputModalities": [
+        "TEXT"
+      ],
+      "outputModalities": [
+        "TEXT"
+      ],
+      "inputAction": "BLOCK",
+      "outputAction": "BLOCK"
+    },
+    {
+      "type": "VIOLENCE",
+      "inputStrength": "HIGH",
+      "outputStrength": "HIGH",
+      "inputModalities": [
+        "TEXT"
+      ],
+      "outputModalities": [
+        "TEXT"
+      ],
+      "inputAction": "BLOCK",
+      "outputAction": "BLOCK"
+    },
+    {
+      "type": "MISCONDUCT",
+      "inputStrength": "HIGH",
+      "outputStrength": "HIGH",
+      "inputModalities": [
+        "TEXT"
+      ],
+      "outputModalities": [
+        "TEXT"
+      ],
+      "inputAction": "BLOCK",
+      "outputAction": "BLOCK"
+    },
+    {
+      "type": "PROMPT_ATTACK",
+      "inputStrength": "HIGH",
+      "outputStrength": "NONE",
+      "inputModalities": [
+        "TEXT"
+      ],
+      "outputModalities": [
+        "TEXT"
+      ],
+      "inputAction": "BLOCK",
+      "outputAction": "BLOCK"
+    }
+  ],
+  "tierConfig": {
+    "tierName": "CLASSIC"
+  }
+}

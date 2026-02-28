@@ -1,0 +1,43 @@
+{
+  "managedWordListsConfig": [
+    {
+      "type": "PROFANITY",
+      "inputAction": "BLOCK",
+      "outputAction": "BLOCK",
+      "inputEnabled": true,
+      "outputEnabled": true
+    }
+  ],
+  "wordsConfig": [
+    {
+      "text": "ignore instructions",
+      "inputAction": "BLOCK",
+      "outputAction": "BLOCK"
+    },
+    {
+      "text": "ignore previous",
+      "inputAction": "BLOCK",
+      "outputAction": "BLOCK"
+    },
+    {
+      "text": "disregard context",
+      "inputAction": "BLOCK",
+      "outputAction": "BLOCK"
+    },
+    {
+      "text": "act as DAN",
+      "inputAction": "BLOCK",
+      "outputAction": "BLOCK"
+    },
+    {
+      "text": "jailbreak",
+      "inputAction": "BLOCK",
+      "outputAction": "BLOCK"
+    },
+    {
+      "text": "override system",
+      "inputAction": "BLOCK",
+      "outputAction": "BLOCK"
+    }
+  ]
+}

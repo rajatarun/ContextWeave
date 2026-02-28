@@ -1,0 +1,92 @@
+{
+  "piiEntitiesConfig": [
+    {
+      "type": "US_SOCIAL_SECURITY_NUMBER",
+      "action": "BLOCK"
+    },
+    {
+      "type": "US_BANK_ACCOUNT_NUMBER",
+      "action": "BLOCK"
+    },
+    {
+      "type": "US_BANK_ROUTING_NUMBER",
+      "action": "BLOCK"
+    },
+    {
+      "type": "US_PASSPORT_NUMBER",
+      "action": "BLOCK"
+    },
+    {
+      "type": "US_INDIVIDUAL_TAX_IDENTIFICATION_NUMBER",
+      "action": "BLOCK"
+    },
+    {
+      "type": "DRIVER_ID",
+      "action": "BLOCK"
+    },
+    {
+      "type": "CREDIT_DEBIT_CARD_NUMBER",
+      "action": "BLOCK"
+    },
+    {
+      "type": "CREDIT_DEBIT_CARD_CVV",
+      "action": "BLOCK"
+    },
+    {
+      "type": "CREDIT_DEBIT_CARD_EXPIRY",
+      "action": "BLOCK"
+    },
+    {
+      "type": "PASSWORD",
+      "action": "BLOCK"
+    },
+    {
+      "type": "PIN",
+      "action": "BLOCK"
+    },
+    {
+      "type": "AWS_ACCESS_KEY",
+      "action": "BLOCK"
+    },
+    {
+      "type": "AWS_SECRET_KEY",
+      "action": "BLOCK"
+    },
+    {
+      "type": "IP_ADDRESS",
+      "action": "BLOCK"
+    },
+    {
+      "type": "MAC_ADDRESS",
+      "action": "BLOCK"
+    },
+    {
+      "type": "ADDRESS",
+      "action": "BLOCK"
+    },
+    {
+      "type": "AGE",
+      "action": "BLOCK"
+    },
+    {
+      "type": "USERNAME",
+      "action": "BLOCK"
+    },
+    {
+      "type": "LICENSE_PLATE",
+      "action": "BLOCK"
+    },
+    {
+      "type": "VEHICLE_IDENTIFICATION_NUMBER",
+      "action": "BLOCK"
+    }
+  ],
+  "regexesConfig": [
+    {
+      "name": "LinkedIn-Profile-URL",
+      "description": "Catches LinkedIn profile URLs on resume documents",
+      "pattern": "https?://(www\\.)?linkedin\\.com/in/[a-zA-Z0-9\\-]+/?",
+      "action": "ANONYMIZE"
+    }
+  ]
+}
