@@ -95,7 +95,7 @@ Resources:
           - Sid: AllowBedrockKnowledgeBase
             Effect: Allow
             Principal:
-              AWS: !GetAtt BedrockKnowledgeBaseRole.Arn
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:role/expertise-rag-bedrock-kb-${Environment}
             Action:
               - kms:Decrypt
               - kms:GenerateDataKey
@@ -233,7 +233,6 @@ Resources:
   # ───────────────────────────────────────────
   BedrockKnowledgeBase:
     Type: AWS::Bedrock::KnowledgeBase
-    DependsOn: NeptuneAnalyticsGraph
     Properties:
       Name: !Sub expertise-rag-kb-${Environment}
       Description: >
@@ -252,6 +251,10 @@ Resources:
         Type: NEPTUNE_ANALYTICS
         NeptuneAnalyticsConfiguration:
           GraphArn: !GetAtt NeptuneAnalyticsGraph.GraphArn
+          FieldMapping:
+            MetadataField: AMAZON_BEDROCK_METADATA
+            TextField: AMAZON_BEDROCK_TEXT_CHUNK
+            VectorField: AMAZON_BEDROCK_EMBEDDING
       Tags:
         Project: ExpertiseRAG
         Environment: !Ref Environment
@@ -272,7 +275,6 @@ Resources:
           BucketArn: !GetAtt ArtifactsBucket.Arn
           InclusionPrefixes:
             - raw/
-            - derived/
       VectorIngestionConfiguration:
         ChunkingConfiguration:
           ChunkingStrategy: HIERARCHICAL
@@ -734,9 +736,6 @@ Resources:
   # ───────────────────────────────────────────
   PostDeploymentIngestionJob:
     Type: AWS::CloudFormation::CustomResource
-    DependsOn:
-      - BedrockDataSource
-      - BedrockKnowledgeBase
     Properties:
       ServiceToken: !GetAtt IngestionTriggerFunction.Arn
       KnowledgeBaseId: !Ref BedrockKnowledgeBase
