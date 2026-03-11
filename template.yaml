@@ -61,7 +61,7 @@ Globals:
         POWERTOOLS_SERVICE_NAME: expertise-rag
         LOG_LEVEL: INFO
         ENVIRONMENT: !Ref Environment
-        ARTIFACTS_BUCKET: !Ref ArtifactsBucket
+        ARTIFACTS_BUCKET: !Sub expertise-rag-artifacts-${AWS::AccountId}-${Environment}
         NEPTUNE_GRAPH_ID: !GetAtt NeptuneAnalyticsGraph.GraphId
         KNOWLEDGE_BASE_ID: !Ref BedrockKnowledgeBase
         DATA_SOURCE_ID: !Ref BedrockDataSource
