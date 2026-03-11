@@ -1,0 +1,35 @@
+{
+  "version": "2.0",
+  "routeKey": "POST /query-expertise",
+  "rawPath": "/dev/query-expertise",
+  "rawQueryString": "",
+  "headers": {
+    "accept": "application/json",
+    "content-type": "application/json",
+    "host": "abcdef1234.execute-api.us-east-1.amazonaws.com",
+    "user-agent": "Mozilla/5.0",
+    "x-forwarded-for": "203.0.113.42",
+    "x-forwarded-port": "443",
+    "x-forwarded-proto": "https"
+  },
+  "requestContext": {
+    "accountId": "123456789012",
+    "apiId": "abcdef1234",
+    "domainName": "abcdef1234.execute-api.us-east-1.amazonaws.com",
+    "domainPrefix": "abcdef1234",
+    "http": {
+      "method": "POST",
+      "path": "/dev/query-expertise",
+      "protocol": "HTTP/1.1",
+      "sourceIp": "203.0.113.42",
+      "userAgent": "Mozilla/5.0"
+    },
+    "requestId": "WPfhd-EXAMPLE",
+    "routeKey": "POST /query-expertise",
+    "stage": "dev",
+    "time": "15/Jan/2025:10:30:00 +0000",
+    "timeEpoch": 1736937000000
+  },
+  "body": "{\"question\": \"What AWS services has this developer built production systems with, and what patterns do they use?\", \"topK\": 10, \"includeGraphExpansion\": true}",
+  "isBase64Encoded": false
+}

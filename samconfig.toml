@@ -1,0 +1,91 @@
+version = 0.1
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ExpertiseRAG SAM deployment configuration
+# ─────────────────────────────────────────────────────────────────────────────
+# Usage:
+#   sam build && sam deploy           # uses [default.deploy.parameters]
+#   sam deploy --config-env staging   # uses [staging.deploy.parameters]
+#   sam deploy --config-env prod      # uses [prod.deploy.parameters]
+# ─────────────────────────────────────────────────────────────────────────────
+
+[default]
+[default.global.parameters]
+stack_name = "expertise-rag-dev"
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.deploy.parameters]
+stack_name           = "expertise-rag-dev"
+s3_prefix            = "expertise-rag"
+region               = "us-east-1"
+confirm_changeset    = true
+capabilities         = "CAPABILITY_NAMED_IAM"
+disable_rollback     = false
+# TODO: Replace 'your-sam-deployment-bucket' with your SAM artifacts bucket
+# or let SAM create a managed bucket by omitting s3_bucket.
+# s3_bucket          = "your-sam-deployment-bucket"
+parameter_overrides  = [
+    "Environment=dev",
+    "NeptuneVectorDimension=1024",
+    "NeptuneProvisionedMemory=16",
+    "LogRetentionDays=30",
+    "EnableStepFunctions=true",
+    # TODO: Uncomment and set after choosing generation model:
+    # "GenerationModelId=anthropic.claude-3-5-sonnet-20241022-v2:0",
+]
+tags = [
+    "Project=ExpertiseRAG",
+    "Environment=dev",
+    "ManagedBy=SAM",
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Staging environment
+# ─────────────────────────────────────────────────────────────────────────────
+[staging]
+[staging.deploy.parameters]
+stack_name           = "expertise-rag-staging"
+s3_prefix            = "expertise-rag-staging"
+region               = "us-east-1"
+confirm_changeset    = true
+capabilities         = "CAPABILITY_NAMED_IAM"
+parameter_overrides  = [
+    "Environment=staging",
+    "NeptuneVectorDimension=1024",
+    "NeptuneProvisionedMemory=32",
+    "LogRetentionDays=60",
+    "EnableStepFunctions=true",
+]
+tags = [
+    "Project=ExpertiseRAG",
+    "Environment=staging",
+    "ManagedBy=SAM",
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Production environment
+# ─────────────────────────────────────────────────────────────────────────────
+[prod]
+[prod.deploy.parameters]
+stack_name           = "expertise-rag-prod"
+s3_prefix            = "expertise-rag-prod"
+region               = "us-east-1"
+confirm_changeset    = true
+capabilities         = "CAPABILITY_NAMED_IAM"
+disable_rollback     = false
+parameter_overrides  = [
+    "Environment=prod",
+    "NeptuneVectorDimension=1024",
+    "NeptuneProvisionedMemory=64",
+    "LogRetentionDays=365",
+    "EnableStepFunctions=true",
+]
+tags = [
+    "Project=ExpertiseRAG",
+    "Environment=prod",
+    "ManagedBy=SAM",
+    "CostCenter=Engineering",
+]

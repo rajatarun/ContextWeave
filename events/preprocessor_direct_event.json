@@ -1,0 +1,5 @@
+{
+  "repo_prefix": "raw/my-saas-platform/",
+  "bucket": "expertise-rag-artifacts-123456789012-dev",
+  "trigger_source": "manual"
+}

@@ -1,0 +1,181 @@
+[
+  {
+    "node_id": "person_jane_smith",
+    "node_type": "Person",
+    "label": "Jane Smith",
+    "properties": { "name": "Jane Smith" },
+    "source_file": "",
+    "confidence": 1.0
+  },
+  {
+    "node_id": "repository_expertise_rag_platform",
+    "node_type": "Repository",
+    "label": "expertise-rag-platform",
+    "properties": {
+      "repo_id": "expertise_rag_platform",
+      "production_status": "production",
+      "description": "AWS-native GraphRAG platform for expertise queries"
+    },
+    "source_file": "repo-signals.yaml",
+    "confidence": 1.0
+  },
+  {
+    "node_id": "document_architecture_md",
+    "node_type": "Document",
+    "label": "architecture.md",
+    "properties": {
+      "source_file": "architecture.md",
+      "file_type": "markdown",
+      "weight": 1.0
+    },
+    "source_file": "architecture.md",
+    "confidence": 1.0
+  },
+  {
+    "node_id": "document_claude_md",
+    "node_type": "Document",
+    "label": "CLAUDE.md",
+    "properties": {
+      "source_file": "CLAUDE.md",
+      "file_type": "markdown",
+      "weight": 1.0
+    },
+    "source_file": "CLAUDE.md",
+    "confidence": 1.0
+  },
+  {
+    "node_id": "skill_graphrag",
+    "node_type": "Skill",
+    "label": "GraphRAG",
+    "properties": { "category": "skill", "frequency": 12 },
+    "source_file": "architecture.md",
+    "confidence": 0.97
+  },
+  {
+    "node_id": "skill_bedrock_knowledge_bases",
+    "node_type": "Skill",
+    "label": "Bedrock Knowledge Bases",
+    "properties": { "category": "skill", "frequency": 8 },
+    "source_file": "architecture.md",
+    "confidence": 0.95
+  },
+  {
+    "node_id": "skill_aws_sam_cloudformation",
+    "node_type": "Skill",
+    "label": "AWS SAM / CloudFormation",
+    "properties": { "category": "skill", "frequency": 15 },
+    "source_file": "repo-signals.yaml",
+    "confidence": 0.98
+  },
+  {
+    "node_id": "technology_python",
+    "node_type": "Technology",
+    "label": "Python",
+    "properties": { "frequency": 20 },
+    "source_file": "architecture.md",
+    "confidence": 0.99
+  },
+  {
+    "node_id": "technology_typescript",
+    "node_type": "Technology",
+    "label": "TypeScript",
+    "properties": { "frequency": 7 },
+    "source_file": "CLAUDE.md",
+    "confidence": 0.9
+  },
+  {
+    "node_id": "awsservice_amazon_bedrock",
+    "node_type": "AWSService",
+    "label": "Amazon Bedrock",
+    "properties": { "service_name": "Amazon Bedrock", "frequency": 22 },
+    "source_file": "architecture.md",
+    "confidence": 0.99
+  },
+  {
+    "node_id": "awsservice_neptune_analytics",
+    "node_type": "AWSService",
+    "label": "Neptune Analytics",
+    "properties": { "service_name": "Neptune Analytics", "frequency": 14 },
+    "source_file": "architecture.md",
+    "confidence": 0.99
+  },
+  {
+    "node_id": "awsservice_aws_lambda",
+    "node_type": "AWSService",
+    "label": "AWS Lambda",
+    "properties": { "service_name": "AWS Lambda", "frequency": 18 },
+    "source_file": "architecture.md",
+    "confidence": 0.99
+  },
+  {
+    "node_id": "awsservice_amazon_s3",
+    "node_type": "AWSService",
+    "label": "Amazon S3",
+    "properties": { "service_name": "Amazon S3", "frequency": 11 },
+    "source_file": "architecture.md",
+    "confidence": 0.99
+  },
+  {
+    "node_id": "awsservice_api_gateway",
+    "node_type": "AWSService",
+    "label": "API Gateway",
+    "properties": { "service_name": "API Gateway", "frequency": 9 },
+    "source_file": "architecture.md",
+    "confidence": 0.99
+  },
+  {
+    "node_id": "pattern_serverless",
+    "node_type": "Pattern",
+    "label": "serverless",
+    "properties": { "pattern_name": "serverless", "frequency": 16 },
+    "source_file": "architecture.md",
+    "confidence": 0.97
+  },
+  {
+    "node_id": "pattern_event_driven",
+    "node_type": "Pattern",
+    "label": "event-driven",
+    "properties": { "pattern_name": "event-driven", "frequency": 9 },
+    "source_file": "architecture.md",
+    "confidence": 0.94
+  },
+  {
+    "node_id": "pattern_infrastructure_as_code",
+    "node_type": "Pattern",
+    "label": "infrastructure-as-code",
+    "properties": { "pattern_name": "infrastructure-as-code", "frequency": 12 },
+    "source_file": "repo-signals.yaml",
+    "confidence": 0.96
+  },
+  {
+    "node_id": "architecturestyle_rag",
+    "node_type": "ArchitectureStyle",
+    "label": "RAG",
+    "properties": { "full_name": "Retrieval-Augmented Generation" },
+    "source_file": "architecture.md",
+    "confidence": 1.0
+  },
+  {
+    "node_id": "evidence_graphrag_implementation",
+    "node_type": "Evidence",
+    "label": "Neptune Analytics GraphRAG implementation",
+    "properties": {
+      "source": "architecture.md",
+      "type": "implementation",
+      "strength": "strong"
+    },
+    "source_file": "architecture.md",
+    "confidence": 0.95
+  },
+  {
+    "node_id": "claim_expert_aws_serverless",
+    "node_type": "Claim",
+    "label": "Expert in AWS serverless architecture",
+    "properties": {
+      "claim_type": "skill_claim",
+      "supported_by": ["evidence_graphrag_implementation"]
+    },
+    "source_file": "repo-signals.yaml",
+    "confidence": 0.92
+  }
+]
