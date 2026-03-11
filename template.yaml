@@ -376,17 +376,17 @@ Resources:
                 Action:
                   - s3:GetObject
                   - s3:HeadObject
-                Resource: !Sub ${ArtifactsBucket.Arn}/raw/*
+                Resource: !Sub arn:aws:s3:::expertise-rag-artifacts-${AWS::AccountId}-${Environment}/raw/*
               - Sid: WriteDerived
                 Effect: Allow
                 Action:
                   - s3:PutObject
                   - s3:PutObjectTagging
-                Resource: !Sub ${ArtifactsBucket.Arn}/derived/*
+                Resource: !Sub arn:aws:s3:::expertise-rag-artifacts-${AWS::AccountId}-${Environment}/derived/*
               - Sid: ListBucket
                 Effect: Allow
                 Action: s3:ListBucket
-                Resource: !GetAtt ArtifactsBucket.Arn
+                Resource: !Sub arn:aws:s3:::expertise-rag-artifacts-${AWS::AccountId}-${Environment}
                 Condition:
                   StringLike:
                     s3:prefix:
@@ -544,13 +544,13 @@ Resources:
               - Sid: ListBucket
                 Effect: Allow
                 Action: s3:ListBucket
-                Resource: !GetAtt ArtifactsBucket.Arn
+                Resource: !Sub arn:aws:s3:::expertise-rag-artifacts-${AWS::AccountId}-${Environment}
               - Sid: GetObjects
                 Effect: Allow
                 Action:
                   - s3:GetObject
                   - s3:HeadObject
-                Resource: !Sub ${ArtifactsBucket.Arn}/*
+                Resource: !Sub arn:aws:s3:::expertise-rag-artifacts-${AWS::AccountId}-${Environment}/*
         - PolicyName: NeptuneAnalyticsWrite
           PolicyDocument:
             Version: '2012-10-17'
