@@ -1,0 +1,185 @@
+@startuml ExpertiseRAG-AWS-Infrastructure
+
+' ─────────────────────────────────────────────────────────────────────────────
+' ExpertiseRAG – AWS Infrastructure Diagram
+' Uses AWS PlantUML sprites (stdlib)
+' ─────────────────────────────────────────────────────────────────────────────
+
+!define AWSPuml https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/v18.0/dist
+!include AWSPuml/AWSCommon.puml
+!include AWSPuml/AWSSimplified.puml
+!include AWSPuml/Compute/Lambda.puml
+!include AWSPuml/Storage/SimpleStorageService.puml
+!include AWSPuml/Database/Neptune.puml
+!include AWSPuml/MachineLearning/Bedrock.puml
+!include AWSPuml/ApplicationIntegration/APIGateway.puml
+!include AWSPuml/ApplicationIntegration/StepFunctions.puml
+!include AWSPuml/ApplicationIntegration/EventBridge.puml
+!include AWSPuml/ManagementGovernance/CloudWatch.puml
+!include AWSPuml/ManagementGovernance/CloudFormation.puml
+!include AWSPuml/SecurityIdentityCompliance/IAMRole.puml
+!include AWSPuml/SecurityIdentityCompliance/KeyManagementService.puml
+!include AWSPuml/SecurityIdentityCompliance/SecurityTokenService.puml
+
+' ─────────────────────────────────────────────────────────────────────────────
+title ExpertiseRAG – AWS Infrastructure\n(Account: 239571291755 | Region: us-east-1)
+' ─────────────────────────────────────────────────────────────────────────────
+
+skinparam backgroundColor #FAFAFA
+skinparam rectangle {
+    BackgroundColor #F0F8FF
+    BorderColor #4A90D9
+    FontSize 12
+}
+skinparam arrow {
+    Color #555555
+    FontSize 10
+}
+
+' ─────────────────────────────────────────────────────────────────────────────
+' CI/CD LAYER
+' ─────────────────────────────────────────────────────────────────────────────
+rectangle "CI/CD – GitHub Actions" #E8F4F8 {
+    actor "GitHub Actions\nWorkflow" as GHA
+    note right of GHA
+        Trigger: push to main/master
+        or workflow_dispatch
+        --
+        Stages:
+        1. sam validate --lint
+        2. sam build --parallel
+        3. sam deploy (OIDC)
+        4. aws s3 cp docs + signals
+    end note
+}
+
+' ─────────────────────────────────────────────────────────────────────────────
+' SECURITY LAYER
+' ─────────────────────────────────────────────────────────────────────────────
+rectangle "Security & Identity" #FFF8E1 {
+    IAMRole(deployRole, "teamweave-github-actions-sam-deployer", "OIDC federated role\nAssumed by GitHub Actions\nfor SAM deploy + S3 upload")
+    SecurityTokenService(sts, "AWS STS", "AssumeRoleWithWebIdentity\nOIDC token → temporary credentials")
+    KeyManagementService(kms, "KMS CMK\nalias/expertise-rag-{env}", "Customer-managed key\nAuto-rotation enabled\nSSE for all S3 objects")
+    IAMRole(preprocessorRole, "expertise-rag-preprocessor-{env}", "S3 GetObject(raw/*)\nS3 PutObject(derived/*)\nKMS Decrypt+GenerateDataKey")
+    IAMRole(queryRole, "expertise-rag-query-api-{env}", "Bedrock Retrieve+InvokeModel\nNeptune ReadDataViaQuery\nS3 GetObject(derived/*)")
+    IAMRole(ingestionRole, "expertise-rag-ingestion-trigger-{env}", "Bedrock StartIngestionJob\nGetIngestionJob\nS3 ListBucket")
+    IAMRole(bedrockKBRole, "expertise-rag-bedrock-kb-{env}", "S3 GetObject+ListBucket\nNeptune Write+Read\nBedrock InvokeModel(Titan)")
+    IAMRole(sfnRole, "expertise-rag-sfn-{env}", "Lambda InvokeFunction\nCloudWatch Logs\nX-Ray Tracing")
+}
+
+' ─────────────────────────────────────────────────────────────────────────────
+' STORAGE LAYER
+' ─────────────────────────────────────────────────────────────────────────────
+rectangle "Storage" #E8F5E9 {
+    SimpleStorageService(s3Artifacts, "expertise-rag-artifacts-\n239571291755-{env}", "Versioning: Enabled\nSSE: aws:kms (CMK)\nPublic access: Blocked\nSSL-only bucket policy\nLifecycle: IA after 30d,\nExpire noncurrent after 365d")
+    note bottom of s3Artifacts
+        Prefixes:
+        raw/<repo>/     → original uploads (triggers Preprocessor)
+        derived/<repo>/ → preprocessor output (fed to Bedrock KB)
+    end note
+}
+
+' ─────────────────────────────────────────────────────────────────────────────
+' COMPUTE LAYER
+' ─────────────────────────────────────────────────────────────────────────────
+rectangle "Compute – Lambda Functions" #F3E5F5 {
+    Lambda(preprocessor, "expertise-rag-preprocessor-{env}", "Python 3.12 | 1024 MB | 600s\nExtractors: Markdown, YAML, PlantUML\nGraphBuilder: entities + edges\nOutput: derived/ artifacts")
+    Lambda(queryAPI, "expertise-rag-query-api-{env}", "Python 3.12 | 512 MB | 60s\n1. classify_question()\n2. retrieve_chunks() – Bedrock\n3. expand_graph_context() – Neptune\n4. synthesize_answer() – Bedrock")
+    Lambda(ingestionTrigger, "expertise-rag-ingestion-trigger-{env}", "Python 3.12 | 512 MB | 900s\nActions: start | status\nCF custom resource post-deploy")
+}
+
+' ─────────────────────────────────────────────────────────────────────────────
+' ORCHESTRATION LAYER
+' ─────────────────────────────────────────────────────────────────────────────
+rectangle "Orchestration" #FBE9E7 {
+    StepFunctions(sfn, "expertise-rag-ingestion-{env}", "STANDARD type\nX-Ray tracing: ON\nStates:\n• PreprocessRawFiles\n• StartIngestionJob\n• WaitForIngestion (30s)\n• CheckIngestionStatus\n• IsIngestionComplete\n• IngestionSuccess / IngestionFailed")
+    EventBridge(eventBridge, "EventBridge", "Rule: source=expertise-rag\ndetail-type=PreprocessorRequest\n→ Preprocessor Lambda")
+    CloudFormation(cfnCustom, "PostDeploymentIngestionJob\n(CF Custom Resource)", "Triggers Ingestion Trigger Lambda\nafter every CloudFormation deploy\nServiceToken = IngestionTriggerFunction.Arn")
+}
+
+' ─────────────────────────────────────────────────────────────────────────────
+' API LAYER
+' ─────────────────────────────────────────────────────────────────────────────
+rectangle "API Layer" #E0F7FA {
+    APIGateway(apigw, "ExpertiseAPI\n(HTTP API v2)", "Stage: {env}\nThrottle: 5 RPS / 10 burst\nCORS: * (configurable)\nAccess logs → CloudWatch\nRoutes:\nPOST /query-expertise\nGET /health")
+}
+
+' ─────────────────────────────────────────────────────────────────────────────
+' AI / ML LAYER
+' ─────────────────────────────────────────────────────────────────────────────
+rectangle "AI / ML Services" #FFF3E0 {
+    Bedrock(bedrockKB, "Bedrock Knowledge Base\nexpertise-rag-kb-{env}", "Type: VECTOR\nVector store: Neptune Analytics\nEmbedding: Titan Text Embeddings V2 (1024-dim)\nChunking: HIERARCHICAL (1500/300 tokens, 60 overlap)\nParsing: Claude 3 Haiku (domain-specific prompt)")
+    Bedrock(bedrockInference, "Bedrock Inference\n(Converse API)", "Model: Claude 3.x (configurable)\nAnswer synthesis with\ngrounded system prompt\nStreaming optional")
+    Neptune(neptuneGraph, "Neptune Analytics Graph\nexpertise-rag-{env}", "Memory: 16 GB (dev) / 32 (staging) / 64 (prod)\nVector dim: 1024\nQuery: openCypher\nDeletion protection: prod only\nReplica: prod only (1)\nNode types: Person, Repository,\nDocument, Skill, Technology,\nAWSService, Pattern, Evidence, Claim\nEdge types: BUILT, CONTAINS,\nUSES_TECH, USES_AWS_SERVICE,\nDEMONSTRATES_PATTERN, SUPPORTS_CLAIM,\nINDICATES_SKILL, STRENGTHENS")
+}
+
+' ─────────────────────────────────────────────────────────────────────────────
+' OBSERVABILITY LAYER
+' ─────────────────────────────────────────────────────────────────────────────
+rectangle "Observability – CloudWatch Log Groups" #ECEFF1 {
+    CloudWatch(cwPreprocessor, "/aws/lambda/expertise-rag-preprocessor-{env}", "Retention: 30d (dev) / 60d (staging) / 365d (prod)")
+    CloudWatch(cwQueryAPI, "/aws/lambda/expertise-rag-query-api-{env}", "Retention: 30d (dev)")
+    CloudWatch(cwIngestion, "/aws/lambda/expertise-rag-ingestion-trigger-{env}", "Retention: 30d (dev)")
+    CloudWatch(cwSFN, "/aws/states/expertise-rag-ingestion-{env}", "Step Functions execution logs\nLevel: ALL | IncludeExecutionData: true")
+    CloudWatch(cwAPI, "/aws/apigateway/expertise-rag-{env}", "Access logs: requestId, IP, latency, status")
+}
+
+' ─────────────────────────────────────────────────────────────────────────────
+' CONNECTIONS – CI/CD flow
+' ─────────────────────────────────────────────────────────────────────────────
+GHA -[#1565C0]-> sts : "1. Exchange OIDC token"
+sts -[#1565C0]-> deployRole : "2. Issue temp credentials"
+GHA -[#1565C0]-> s3Artifacts : "4. aws s3 cp\nCLAUDE.md, architecture.md,\nrepo-signals.yaml, *.puml\n→ raw/contextweave/"
+
+' ─────────────────────────────────────────────────────────────────────────────
+' CONNECTIONS – Ingestion flow
+' ─────────────────────────────────────────────────────────────────────────────
+s3Artifacts -[#2E7D32,dashed]-> preprocessor : "S3 ObjectCreated\n(raw/* prefix)"
+preprocessor -[#2E7D32]-> s3Artifacts : "Write derived/\n*.extracted.txt\n*.derived.json\ngraph_entities.json"
+preprocessor -[#2E7D32]-> cwPreprocessor : "Structured logs\n+ X-Ray traces"
+sfn -[#E65100]-> preprocessor : "PreprocessRawFiles step"
+sfn -[#E65100]-> ingestionTrigger : "StartIngestionJob step\nCheckIngestionStatus step"
+sfn -[#E65100]-> cwSFN : "Execution logs"
+cfnCustom -[#6A1B9A]-> ingestionTrigger : "CF custom resource\npost-deploy trigger"
+eventBridge -[#0277BD,dashed]-> preprocessor : "EventBridgeRule\nPreprocessorRequest"
+ingestionTrigger -[#6A1B9A]-> bedrockKB : "StartIngestionJob\nGetIngestionJob"
+bedrockKB -[#FF6F00]-> s3Artifacts : "Read derived/\n*.extracted.txt"
+bedrockKB -[#FF6F00]-> neptuneGraph : "Store 1024-dim\nvector embeddings"
+bedrockKB -[#FF6F00]-> bedrockInference : "Titan Embeddings V2\nClaude Haiku (parsing)"
+
+' ─────────────────────────────────────────────────────────────────────────────
+' CONNECTIONS – Query flow
+' ─────────────────────────────────────────────────────────────────────────────
+apigw -[#0D47A1]-> queryAPI : "POST /query-expertise\nGET /health"
+queryAPI -[#0D47A1]-> bedrockKB : "bedrock-agent-runtime\n.retrieve() HYBRID"
+queryAPI -[#0D47A1]-> neptuneGraph : "openCypher:\nSKILL_NEIGHBOURHOOD\nPATTERN_EVIDENCE\nAWS_SERVICE_CONTEXT"
+queryAPI -[#0D47A1]-> bedrockInference : "Converse API\ngrounded answer synthesis"
+queryAPI -[#0D47A1]-> cwQueryAPI : "Structured logs\n+ X-Ray traces"
+
+' ─────────────────────────────────────────────────────────────────────────────
+' CONNECTIONS – IAM role bindings
+' ─────────────────────────────────────────────────────────────────────────────
+preprocessorRole -[#9E9E9E,dotted]-> preprocessor : "execution role"
+queryRole -[#9E9E9E,dotted]-> queryAPI : "execution role"
+ingestionRole -[#9E9E9E,dotted]-> ingestionTrigger : "execution role"
+bedrockKBRole -[#9E9E9E,dotted]-> bedrockKB : "service role"
+sfnRole -[#9E9E9E,dotted]-> sfn : "execution role"
+
+' ─────────────────────────────────────────────────────────────────────────────
+' CONNECTIONS – KMS encryption
+' ─────────────────────────────────────────────────────────────────────────────
+kms -[#B71C1C,dotted]-> s3Artifacts : "SSE-KMS"
+
+legend right
+  |= Arrow Color |= Meaning |
+  |<#1565C0>  | CI/CD / GitHub Actions flow |
+  |<#2E7D32>  | Ingestion – preprocessing flow |
+  |<#E65100>  | Ingestion – orchestration (Step Functions) |
+  |<#6A1B9A>  | Ingestion – Bedrock KB trigger |
+  |<#FF6F00>  | Ingestion – Bedrock KB sync |
+  |<#0D47A1>  | Query – runtime path |
+  |<#9E9E9E>  | IAM role bindings |
+  |<#B71C1C>  | KMS encryption |
+endlegend
+
+@enduml
