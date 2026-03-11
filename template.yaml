@@ -100,17 +100,6 @@ Resources:
               - kms:Decrypt
               - kms:GenerateDataKey
             Resource: '*'
-          - Sid: AllowLambdaFunctions
-            Effect: Allow
-            Principal:
-              AWS:
-                - !GetAtt PreprocessorRole.Arn
-                - !GetAtt QueryAPIRole.Arn
-                - !GetAtt IngestionTriggerRole.Arn
-            Action:
-              - kms:Decrypt
-              - kms:GenerateDataKey
-            Resource: '*'
       Tags:
         - Key: Project
           Value: ExpertiseRAG
@@ -254,7 +243,6 @@ Resources:
           FieldMapping:
             MetadataField: AMAZON_BEDROCK_METADATA
             TextField: AMAZON_BEDROCK_TEXT_CHUNK
-            VectorField: AMAZON_BEDROCK_EMBEDDING
       Tags:
         Project: ExpertiseRAG
         Environment: !Ref Environment
