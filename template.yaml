@@ -1,0 +1,937 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  ExpertiseRAG - AWS-native GraphRAG platform using Amazon Bedrock Knowledge Bases
+  with Neptune Analytics for deep expertise queries about a developer's background,
+  skills, architecture patterns, and professional accomplishments.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Parameters
+# ─────────────────────────────────────────────────────────────────────────────
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment
+
+  NeptuneVectorDimension:
+    Type: Number
+    Default: 1024
+    Description: >
+      Vector dimension – MUST match Amazon Titan Text Embeddings V2 (1024).
+      Changing this after deployment requires recreating the Neptune graph.
+
+  NeptuneProvisionedMemory:
+    Type: Number
+    Default: 16
+    AllowedValues: [16, 32, 64, 128, 256, 512, 1024]
+    Description: Neptune Analytics provisioned memory in GB (16 is minimum)
+
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653]
+    Description: CloudWatch log retention period in days
+
+  EnableStepFunctions:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Deploy Step Functions ingestion orchestration state machine
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Conditions
+# ─────────────────────────────────────────────────────────────────────────────
+Conditions:
+  IsProduction: !Equals [!Ref Environment, prod]
+  DeployStepFunctions: !Equals [!Ref EnableStepFunctions, 'true']
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Globals
+# ─────────────────────────────────────────────────────────────────────────────
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 300
+    MemorySize: 512
+    Tracing: Active
+    Environment:
+      Variables:
+        POWERTOOLS_SERVICE_NAME: expertise-rag
+        LOG_LEVEL: INFO
+        ENVIRONMENT: !Ref Environment
+        ARTIFACTS_BUCKET: !Ref ArtifactsBucket
+        NEPTUNE_GRAPH_ID: !GetAtt NeptuneAnalyticsGraph.GraphId
+        KNOWLEDGE_BASE_ID: !Ref BedrockKnowledgeBase
+        DATA_SOURCE_ID: !Ref BedrockDataSource
+    Tags:
+      Project: ExpertiseRAG
+      Environment: !Ref Environment
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Resources
+# ─────────────────────────────────────────────────────────────────────────────
+Resources:
+
+  # ───────────────────────────────────────────
+  # KMS Key for encryption at rest
+  # ───────────────────────────────────────────
+  ArtifactsKMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub ExpertiseRAG S3 and Lambda encryption key (${Environment})
+      EnableKeyRotation: true
+      MultiRegion: false
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowRootAccount
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: '*'
+          - Sid: AllowBedrockKnowledgeBase
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt BedrockKnowledgeBaseRole.Arn
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey
+            Resource: '*'
+          - Sid: AllowLambdaFunctions
+            Effect: Allow
+            Principal:
+              AWS:
+                - !GetAtt PreprocessorRole.Arn
+                - !GetAtt QueryAPIRole.Arn
+                - !GetAtt IngestionTriggerRole.Arn
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey
+            Resource: '*'
+      Tags:
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
+  ArtifactsKMSKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/expertise-rag-${Environment}
+      TargetKeyId: !Ref ArtifactsKMSKey
+
+  # ───────────────────────────────────────────
+  # S3 Bucket – raw uploads and derived artifacts
+  # ───────────────────────────────────────────
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub expertise-rag-artifacts-${AWS::AccountId}-${Environment}
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref ArtifactsKMSKey
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: TransitionNoncurrentToIA
+            Status: Enabled
+            NoncurrentVersionTransitions:
+              - StorageClass: STANDARD_IA
+                TransitionInDays: 30
+            NoncurrentVersionExpirationInDays: 365
+          - Id: CleanupIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: raw/
+            Function: !GetAtt PreprocessorFunction.Arn
+      Tags:
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
+  ArtifactsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ArtifactsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyNonSSLRequests
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt ArtifactsBucket.Arn
+              - !Sub ${ArtifactsBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+          - Sid: AllowBedrockKnowledgeBaseRead
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt BedrockKnowledgeBaseRole.Arn
+            Action:
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+              - !GetAtt ArtifactsBucket.Arn
+              - !Sub ${ArtifactsBucket.Arn}/*
+
+  # Trigger permission: S3 → PreprocessorFunction
+  PreprocessorS3InvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt PreprocessorFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !GetAtt ArtifactsBucket.Arn
+      SourceAccount: !Ref AWS::AccountId
+
+  # ───────────────────────────────────────────
+  # Neptune Analytics Graph
+  # ───────────────────────────────────────────
+  NeptuneAnalyticsGraph:
+    Type: AWS::NeptuneGraph::Graph
+    Properties:
+      GraphName: !Sub expertise-rag-${Environment}
+      ProvisionedMemory: !Ref NeptuneProvisionedMemory
+      VectorSearchConfiguration:
+        VectorSearchDimension: !Ref NeptuneVectorDimension
+      DeletionProtection: !If [IsProduction, true, false]
+      ReplicaCount: !If [IsProduction, 1, 0]
+      Tags:
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ───────────────────────────────────────────
+  # Bedrock Knowledge Base (Neptune Analytics vector store)
+  # ───────────────────────────────────────────
+  BedrockKnowledgeBase:
+    Type: AWS::Bedrock::KnowledgeBase
+    DependsOn: NeptuneAnalyticsGraph
+    Properties:
+      Name: !Sub expertise-rag-kb-${Environment}
+      Description: >
+        ExpertiseRAG knowledge base – ingests developer expertise artifacts (repos,
+        architecture docs, resume) and enables GraphRAG queries via Neptune Analytics.
+      RoleArn: !GetAtt BedrockKnowledgeBaseRole.Arn
+      KnowledgeBaseConfiguration:
+        Type: VECTOR
+        VectorKnowledgeBaseConfiguration:
+          EmbeddingModelArn: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0
+          EmbeddingModelConfiguration:
+            BedrockEmbeddingModelConfiguration:
+              # Must match NeptuneVectorDimension parameter
+              Dimensions: !Ref NeptuneVectorDimension
+      StorageConfiguration:
+        Type: NEPTUNE_ANALYTICS
+        NeptuneAnalyticsConfiguration:
+          GraphArn: !GetAtt NeptuneAnalyticsGraph.GraphArn
+      Tags:
+        Project: ExpertiseRAG
+        Environment: !Ref Environment
+
+  # ───────────────────────────────────────────
+  # Bedrock Data Source – S3 (raw/ + derived/)
+  # ───────────────────────────────────────────
+  BedrockDataSource:
+    Type: AWS::Bedrock::DataSource
+    Properties:
+      KnowledgeBaseId: !Ref BedrockKnowledgeBase
+      Name: !Sub expertise-rag-s3-source-${Environment}
+      Description: >
+        S3 data source covering raw/ (original uploads) and derived/ (preprocessor output).
+      DataSourceConfiguration:
+        Type: S3
+        S3Configuration:
+          BucketArn: !GetAtt ArtifactsBucket.Arn
+          InclusionPrefixes:
+            - raw/
+            - derived/
+      VectorIngestionConfiguration:
+        ChunkingConfiguration:
+          ChunkingStrategy: HIERARCHICAL
+          HierarchicalChunkingConfiguration:
+            LevelConfigurations:
+              - MaxTokens: 1500  # Parent chunks – full section context
+              - MaxTokens: 300   # Child chunks – precise retrieval units
+            OverlapTokens: 60
+        ParsingConfiguration:
+          ParsingStrategy: BEDROCK_FOUNDATION_MODEL
+          BedrockFoundationModelConfiguration:
+            # TODO: Replace with preferred parsing model (Claude 3 Haiku is cost-effective)
+            ModelArn: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0
+            ParsingPrompt:
+              ParsingPromptText: |
+                Extract all technical content from this document. Focus on:
+                - Programming languages, frameworks, and libraries
+                - AWS services and cloud architecture patterns
+                - Design patterns and engineering decisions
+                - Measurable outcomes and accomplishments
+                - Architecture component relationships (from PlantUML diagrams, describe as text)
+                - Expertise signals, skill depth indicators, and technology preferences
+                Preserve technical terminology exactly. Output clean structured text.
+
+  # ───────────────────────────────────────────
+  # CloudWatch Log Groups
+  # ───────────────────────────────────────────
+  PreprocessorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/expertise-rag-preprocessor-${Environment}
+      RetentionInDays: !Ref LogRetentionDays
+      Tags:
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
+  QueryAPILogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/expertise-rag-query-api-${Environment}
+      RetentionInDays: !Ref LogRetentionDays
+      Tags:
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
+  IngestionTriggerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/expertise-rag-ingestion-trigger-${Environment}
+      RetentionInDays: !Ref LogRetentionDays
+      Tags:
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
+  StepFunctionsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: DeployStepFunctions
+    Properties:
+      LogGroupName: !Sub /aws/states/expertise-rag-ingestion-${Environment}
+      RetentionInDays: !Ref LogRetentionDays
+      Tags:
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
+  ApiGatewayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/apigateway/expertise-rag-${Environment}
+      RetentionInDays: !Ref LogRetentionDays
+      Tags:
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ───────────────────────────────────────────
+  # IAM Roles
+  # ───────────────────────────────────────────
+
+  # Role: Preprocessor Lambda
+  PreprocessorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub expertise-rag-preprocessor-${Environment}
+      Description: Allows preprocessor Lambda to read/write S3 and log to CloudWatch
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: S3ReadWriteDerived
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ReadRaw
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:HeadObject
+                Resource: !Sub ${ArtifactsBucket.Arn}/raw/*
+              - Sid: WriteDerived
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:PutObjectTagging
+                Resource: !Sub ${ArtifactsBucket.Arn}/derived/*
+              - Sid: ListBucket
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt ArtifactsBucket.Arn
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - raw/*
+                      - derived/*
+        - PolicyName: KMSDecryptEncrypt
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: !GetAtt ArtifactsKMSKey.Arn
+      Tags:
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Role: Query API Lambda
+  QueryAPIRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub expertise-rag-query-api-${Environment}
+      Description: Allows Query API Lambda to call Bedrock Retrieve, Neptune Analytics, and read S3
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: BedrockRetrieveAndGenerate
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: BedrockRetrieve
+                Effect: Allow
+                Action:
+                  - bedrock:Retrieve
+                  - bedrock:RetrieveAndGenerate
+                Resource: !GetAtt BedrockKnowledgeBase.KnowledgeBaseArn
+              - Sid: BedrockInvokeModel
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                # TODO: Restrict to specific model ARN(s) once generation model is selected
+                Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/*
+        - PolicyName: NeptuneAnalyticsQuery
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: NeptuneQuery
+                Effect: Allow
+                Action:
+                  - neptune-graph:ReadDataViaQuery
+                  - neptune-graph:GetGraph
+                Resource: !GetAtt NeptuneAnalyticsGraph.GraphArn
+        - PolicyName: S3ReadDerived
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub ${ArtifactsBucket.Arn}/derived/*
+        - PolicyName: KMSDecrypt
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource: !GetAtt ArtifactsKMSKey.Arn
+      Tags:
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Role: Ingestion Trigger Lambda (custom resource + post-upload)
+  IngestionTriggerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub expertise-rag-ingestion-trigger-${Environment}
+      Description: Allows ingestion trigger Lambda to start Bedrock ingestion jobs
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: BedrockIngestion
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: StartAndQueryIngestionJob
+                Effect: Allow
+                Action:
+                  - bedrock:StartIngestionJob
+                  - bedrock:GetIngestionJob
+                  - bedrock:ListIngestionJobs
+                Resource: !GetAtt BedrockKnowledgeBase.KnowledgeBaseArn
+        - PolicyName: S3ListRead
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetObject
+                Resource:
+                  - !GetAtt ArtifactsBucket.Arn
+                  - !Sub ${ArtifactsBucket.Arn}/*
+      Tags:
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Role: Bedrock Knowledge Base Service Role
+  BedrockKnowledgeBaseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub expertise-rag-bedrock-kb-${Environment}
+      Description: Allows Amazon Bedrock Knowledge Base to access S3 and Neptune Analytics
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/*
+      Policies:
+        - PolicyName: S3ReadForIngestion
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ListBucket
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt ArtifactsBucket.Arn
+              - Sid: GetObjects
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:HeadObject
+                Resource: !Sub ${ArtifactsBucket.Arn}/*
+        - PolicyName: NeptuneAnalyticsWrite
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - neptune-graph:WriteDataViaQuery
+                  - neptune-graph:ReadDataViaQuery
+                  - neptune-graph:GetGraph
+                Resource: !GetAtt NeptuneAnalyticsGraph.GraphArn
+        - PolicyName: BedrockEmbeddings
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0
+        - PolicyName: KMSForS3
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: !GetAtt ArtifactsKMSKey.Arn
+      Tags:
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Role: Step Functions
+  StepFunctionsRole:
+    Type: AWS::IAM::Role
+    Condition: DeployStepFunctions
+    Properties:
+      RoleName: !Sub expertise-rag-sfn-${Environment}
+      Description: Allows Step Functions ingestion state machine to invoke Lambdas
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: !Sub states.${AWS::Region}.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeLambda
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource:
+                  - !GetAtt PreprocessorFunction.Arn
+                  - !GetAtt IngestionTriggerFunction.Arn
+        - PolicyName: CloudWatchLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:PutLogEvents
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+                Resource: '*'
+        - PolicyName: XRayTracing
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                Resource: '*'
+      Tags:
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ───────────────────────────────────────────
+  # Lambda: Preprocessor
+  # ───────────────────────────────────────────
+  PreprocessorFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: PreprocessorLogGroup
+    Properties:
+      FunctionName: !Sub expertise-rag-preprocessor-${Environment}
+      Description: >
+        Reads raw repo uploads from S3, extracts text from Markdown/YAML,
+        transforms PlantUML to architecture summaries, and emits derived
+        JSON (expertise signals, graph entities, graph edges) back to S3.
+      CodeUri: src/preprocessor/
+      Handler: handler.lambda_handler
+      Role: !GetAtt PreprocessorRole.Arn
+      Timeout: 600
+      MemorySize: 1024
+      Environment:
+        Variables:
+          DERIVED_PREFIX: derived
+          RAW_PREFIX: raw
+      Events:
+        # Also triggered directly by S3 via bucket notification (see ArtifactsBucket)
+        StepFunctionsTrigger:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source: [expertise-rag]
+              detail-type: [PreprocessorRequest]
+
+  # ───────────────────────────────────────────
+  # Lambda: Query API
+  # ───────────────────────────────────────────
+  QueryAPIFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: QueryAPILogGroup
+    Properties:
+      FunctionName: !Sub expertise-rag-query-api-${Environment}
+      Description: >
+        Reasoning API: classifies questions, calls Bedrock Retrieve, expands
+        graph-linked evidence via Neptune Analytics, synthesizes answers with
+        evidence weighting, and returns structured expertise responses.
+      CodeUri: src/query_api/
+      Handler: handler.lambda_handler
+      Role: !GetAtt QueryAPIRole.Arn
+      Timeout: 60
+      MemorySize: 512
+      Events:
+        QueryExpertise:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ExpertiseAPI
+            Path: /query-expertise
+            Method: POST
+        HealthCheck:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ExpertiseAPI
+            Path: /health
+            Method: GET
+
+  # ───────────────────────────────────────────
+  # Lambda: Ingestion Trigger (custom resource + post-deployment)
+  # ───────────────────────────────────────────
+  IngestionTriggerFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: IngestionTriggerLogGroup
+    Properties:
+      FunctionName: !Sub expertise-rag-ingestion-trigger-${Environment}
+      Description: >
+        Starts a Bedrock Knowledge Base ingestion job. Invoked as a CloudFormation
+        custom resource after deployment and callable manually / via Step Functions
+        after new uploads.
+      CodeUri: src/ingestion_trigger/
+      Handler: handler.lambda_handler
+      Role: !GetAtt IngestionTriggerRole.Arn
+      Timeout: 900  # 15 min – ingestion can take a while
+
+  # ───────────────────────────────────────────
+  # CloudFormation Custom Resource: post-deployment ingestion
+  # ───────────────────────────────────────────
+  PostDeploymentIngestionJob:
+    Type: AWS::CloudFormation::CustomResource
+    DependsOn:
+      - BedrockDataSource
+      - BedrockKnowledgeBase
+    Properties:
+      ServiceToken: !GetAtt IngestionTriggerFunction.Arn
+      KnowledgeBaseId: !Ref BedrockKnowledgeBase
+      DataSourceId: !Ref BedrockDataSource
+      TriggerReason: post-deployment
+
+  # ───────────────────────────────────────────
+  # HTTP API (API Gateway v2)
+  # ───────────────────────────────────────────
+  ExpertiseAPI:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Environment
+      Description: ExpertiseRAG query API – POST /query-expertise
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiGatewayLogGroup.Arn
+        Format: >
+          {"requestId":"$context.requestId","ip":"$context.identity.sourceIp",
+          "requestTime":"$context.requestTime","httpMethod":"$context.httpMethod",
+          "routeKey":"$context.routeKey","status":"$context.status",
+          "protocol":"$context.protocol","responseLength":"$context.responseLength",
+          "integrationLatency":"$context.integrationLatency",
+          "responseLatency":"$context.responseLatency"}
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 10
+        ThrottlingRateLimit: 5
+      CorsConfiguration:
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+        AllowMethods:
+          - POST
+          - GET
+          - OPTIONS
+        AllowOrigins:
+          - '*'
+      Tags:
+        Project: ExpertiseRAG
+        Environment: !Ref Environment
+
+  # ───────────────────────────────────────────
+  # Step Functions: Ingestion Orchestration
+  # ───────────────────────────────────────────
+  IngestionStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Condition: DeployStepFunctions
+    Properties:
+      Name: !Sub expertise-rag-ingestion-${Environment}
+      Type: STANDARD
+      Role: !GetAtt StepFunctionsRole.Arn
+      Logging:
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt StepFunctionsLogGroup.Arn
+        IncludeExecutionData: true
+        Level: ALL
+      Tracing:
+        Enabled: true
+      Definition:
+        Comment: >
+          ExpertiseRAG ingestion orchestration – preprocesses raw S3 uploads,
+          triggers Bedrock KB ingestion, and polls until complete.
+        StartAt: PreprocessRawFiles
+        States:
+          PreprocessRawFiles:
+            Type: Task
+            Resource: !GetAtt PreprocessorFunction.Arn
+            Parameters:
+              repo_prefix.$: $.repo_prefix
+              bucket.$: $.bucket
+              trigger_source.$: $.trigger_source
+            ResultPath: $.preprocessor_output
+            Retry:
+              - ErrorEquals: [States.TaskFailed, Lambda.ServiceException]
+                IntervalSeconds: 10
+                MaxAttempts: 3
+                BackoffRate: 2.0
+            Catch:
+              - ErrorEquals: [States.ALL]
+                Next: IngestionFailed
+                ResultPath: $.error
+            Next: StartIngestionJob
+
+          StartIngestionJob:
+            Type: Task
+            Resource: !GetAtt IngestionTriggerFunction.Arn
+            Parameters:
+              action: start
+              knowledge_base_id.$: $.knowledge_base_id
+              data_source_id.$: $.data_source_id
+            ResultPath: $.ingestion_job
+            Retry:
+              - ErrorEquals: [States.TaskFailed]
+                IntervalSeconds: 5
+                MaxAttempts: 3
+                BackoffRate: 2.0
+            Catch:
+              - ErrorEquals: [States.ALL]
+                Next: IngestionFailed
+                ResultPath: $.error
+            Next: WaitForIngestion
+
+          WaitForIngestion:
+            Type: Wait
+            Seconds: 30
+            Next: CheckIngestionStatus
+
+          CheckIngestionStatus:
+            Type: Task
+            Resource: !GetAtt IngestionTriggerFunction.Arn
+            Parameters:
+              action: status
+              knowledge_base_id.$: $.knowledge_base_id
+              data_source_id.$: $.data_source_id
+              ingestion_job_id.$: $.ingestion_job.ingestion_job_id
+            ResultPath: $.ingestion_status
+            Retry:
+              - ErrorEquals: [States.TaskFailed]
+                IntervalSeconds: 5
+                MaxAttempts: 3
+                BackoffRate: 2.0
+            Next: IsIngestionComplete
+
+          IsIngestionComplete:
+            Type: Choice
+            Choices:
+              - Variable: $.ingestion_status.status
+                StringEquals: COMPLETE
+                Next: IngestionSuccess
+              - Variable: $.ingestion_status.status
+                StringEquals: FAILED
+                Next: IngestionFailed
+            Default: WaitForIngestion
+
+          IngestionSuccess:
+            Type: Succeed
+
+          IngestionFailed:
+            Type: Fail
+            Error: IngestionJobFailed
+            Cause: Bedrock Knowledge Base ingestion job did not complete successfully
+
+      Tags:
+        Project: ExpertiseRAG
+        Environment: !Ref Environment
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Outputs
+# ─────────────────────────────────────────────────────────────────────────────
+Outputs:
+  ArtifactsBucketName:
+    Description: S3 bucket for raw uploads and derived artifacts
+    Value: !Ref ArtifactsBucket
+    Export:
+      Name: !Sub ${AWS::StackName}-ArtifactsBucket
+
+  APIEndpoint:
+    Description: ExpertiseRAG query API endpoint
+    Value: !Sub https://${ExpertiseAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}
+    Export:
+      Name: !Sub ${AWS::StackName}-APIEndpoint
+
+  QueryExpertiseURL:
+    Description: Full URL for the POST /query-expertise endpoint
+    Value: !Sub https://${ExpertiseAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/query-expertise
+
+  NeptuneGraphIdentifier:
+    Description: Neptune Analytics graph identifier
+    Value: !GetAtt NeptuneAnalyticsGraph.GraphId
+    Export:
+      Name: !Sub ${AWS::StackName}-NeptuneGraphId
+
+  NeptuneGraphArn:
+    Description: Neptune Analytics graph ARN
+    Value: !GetAtt NeptuneAnalyticsGraph.GraphArn
+
+  KnowledgeBaseId:
+    Description: Bedrock Knowledge Base ID
+    Value: !Ref BedrockKnowledgeBase
+    Export:
+      Name: !Sub ${AWS::StackName}-KnowledgeBaseId
+
+  DataSourceId:
+    Description: Bedrock Data Source ID
+    Value: !Ref BedrockDataSource
+    Export:
+      Name: !Sub ${AWS::StackName}-DataSourceId
+
+  IngestionStateMachineArn:
+    Description: Step Functions ingestion state machine ARN
+    Condition: DeployStepFunctions
+    Value: !Ref IngestionStateMachine
+    Export:
+      Name: !Sub ${AWS::StackName}-IngestionStateMachine
+
+  KMSKeyArn:
+    Description: KMS key ARN for artifact encryption
+    Value: !GetAtt ArtifactsKMSKey.Arn

@@ -1,0 +1,7 @@
+{
+  "repo_prefix": "raw/my-saas-platform/",
+  "bucket": "expertise-rag-artifacts-123456789012-dev",
+  "trigger_source": "manual",
+  "knowledge_base_id": "KBID1234567890",
+  "data_source_id": "DSID1234567890"
+}

@@ -1,0 +1,109 @@
+# ExpertiseRAG Repository Signals Manifest
+# Upload this file as raw/<repo-name>/repo-signals.yaml
+# Schema reference: examples/repo_manifest_schema.json
+#
+# This file provides authoritative, structured expertise signals
+# that the preprocessor uses to build the knowledge graph.
+# Evidence weight: 0.7 (high – curated, structured)
+
+repo_name: expertise-rag-platform
+owner: Jane Smith
+description: >
+  AWS-native GraphRAG platform using Bedrock Knowledge Bases + Neptune Analytics
+  to answer deep expertise questions about a developer's background and skills.
+production_status: production
+started_at: "2024-06-01"
+role: Lead Architect
+team_size: 1
+
+tech_stack:
+  - name: Python
+    role: primary
+    depth: expert
+  - name: AWS SAM / CloudFormation
+    role: primary
+    depth: expert
+  - name: TypeScript
+    role: secondary
+    depth: proficient
+  - name: openCypher
+    role: secondary
+    depth: proficient
+
+aws_services:
+  - name: Amazon Bedrock
+    purpose: Knowledge Base embeddings + LLM answer synthesis
+    scale: "< 1K queries/day"
+  - name: Neptune Analytics
+    purpose: GraphRAG vector and graph store
+  - name: AWS Lambda
+    purpose: Preprocessing pipeline and reasoning API
+  - name: Amazon S3
+    purpose: Artifact storage (raw and derived)
+  - name: API Gateway
+    purpose: HTTP API (POST /query-expertise)
+  - name: AWS Step Functions
+    purpose: Ingestion orchestration state machine
+  - name: AWS KMS
+    purpose: Envelope encryption for S3
+  - name: Amazon CloudWatch
+    purpose: Logs, metrics, tracing
+  - name: AWS X-Ray
+    purpose: Distributed tracing
+  - name: AWS IAM
+    purpose: Least-privilege role design
+
+architecture_patterns:
+  - name: serverless
+    rationale: Zero operational overhead; Lambda + API Gateway + S3
+  - name: event-driven
+    rationale: S3 ObjectCreated triggers preprocessing pipeline
+  - name: infrastructure-as-code
+    rationale: Full stack in SAM/CloudFormation; reproducible deploys
+  - name: GraphRAG
+    rationale: Neptune Analytics enables richer evidence traversal than pure vector search
+  - name: hierarchical chunking
+    rationale: 1500-token parent + 300-token child chunks balance context and precision
+
+skills_demonstrated:
+  - skill: Amazon Bedrock Knowledge Bases
+    level: expert
+    evidence: Configured KB with Neptune Analytics storage, Titan embeddings, hierarchical chunking
+  - skill: Neptune Analytics / GraphRAG
+    level: expert
+    evidence: Defined graph schema (10 node types, 9 edge types), openCypher queries
+  - skill: AWS SAM / CloudFormation
+    level: expert
+    evidence: Full IaC stack with 20+ resource types, custom resources, Step Functions
+  - skill: Python Lambda development
+    level: expert
+    evidence: Three Lambda handlers with boto3, S3 events, custom resource protocol
+  - skill: IAM least-privilege design
+    level: proficient
+    evidence: Six IAM roles with resource-scoped policies and condition keys
+
+outcomes:
+  - description: Full infrastructure deployed via sam deploy in under 10 minutes
+    metric: "< 10 min cold deploy"
+    verified: true
+  - description: Query pipeline returns grounded answers with citations
+    metric: "P95 latency < 3s"
+    verified: false  # to be measured post-deployment
+  - description: Zero hardcoded secrets; all config via environment variables
+    metric: "0 secrets in code"
+    verified: true
+
+related_repos:
+  - contextweave  # predecessor pgvector-based system
+
+tags:
+  - ai
+  - rag
+  - graphrag
+  - aws
+  - bedrock
+  - neptune
+  - serverless
+  - sam
+  - cloudformation
+  - python

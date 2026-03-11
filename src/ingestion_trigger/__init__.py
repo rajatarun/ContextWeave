@@ -1,0 +1,1 @@
+# ExpertiseRAG ingestion trigger Lambda

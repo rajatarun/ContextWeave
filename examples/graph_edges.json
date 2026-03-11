@@ -1,0 +1,182 @@
+[
+  {
+    "edge_id": "person_jane_smith__built__repository_expertise_rag_platform",
+    "from_id": "person_jane_smith",
+    "to_id": "repository_expertise_rag_platform",
+    "relationship": "BUILT",
+    "weight": 1.0,
+    "source_file": "",
+    "properties": {}
+  },
+  {
+    "edge_id": "repository_expertise_rag_platform__contains__document_architecture_md",
+    "from_id": "repository_expertise_rag_platform",
+    "to_id": "document_architecture_md",
+    "relationship": "CONTAINS",
+    "weight": 1.0,
+    "source_file": "architecture.md",
+    "properties": {}
+  },
+  {
+    "edge_id": "repository_expertise_rag_platform__contains__document_claude_md",
+    "from_id": "repository_expertise_rag_platform",
+    "to_id": "document_claude_md",
+    "relationship": "CONTAINS",
+    "weight": 1.0,
+    "source_file": "CLAUDE.md",
+    "properties": {}
+  },
+  {
+    "edge_id": "document_architecture_md__indicates_skill__skill_graphrag",
+    "from_id": "document_architecture_md",
+    "to_id": "skill_graphrag",
+    "relationship": "INDICATES_SKILL",
+    "weight": 1.0,
+    "source_file": "architecture.md",
+    "properties": {}
+  },
+  {
+    "edge_id": "person_jane_smith__demonstrates_skill__skill_graphrag",
+    "from_id": "person_jane_smith",
+    "to_id": "skill_graphrag",
+    "relationship": "DEMONSTRATES_SKILL",
+    "weight": 1.0,
+    "source_file": "architecture.md",
+    "properties": {}
+  },
+  {
+    "edge_id": "person_jane_smith__demonstrates_skill__skill_bedrock_knowledge_bases",
+    "from_id": "person_jane_smith",
+    "to_id": "skill_bedrock_knowledge_bases",
+    "relationship": "DEMONSTRATES_SKILL",
+    "weight": 0.98,
+    "source_file": "architecture.md",
+    "properties": {}
+  },
+  {
+    "edge_id": "person_jane_smith__demonstrates_skill__skill_aws_sam_cloudformation",
+    "from_id": "person_jane_smith",
+    "to_id": "skill_aws_sam_cloudformation",
+    "relationship": "DEMONSTRATES_SKILL",
+    "weight": 0.97,
+    "source_file": "repo-signals.yaml",
+    "properties": {}
+  },
+  {
+    "edge_id": "document_architecture_md__uses_tech__technology_python",
+    "from_id": "document_architecture_md",
+    "to_id": "technology_python",
+    "relationship": "USES_TECH",
+    "weight": 0.99,
+    "source_file": "architecture.md",
+    "properties": {}
+  },
+  {
+    "edge_id": "repository_expertise_rag_platform__uses_tech__technology_python",
+    "from_id": "repository_expertise_rag_platform",
+    "to_id": "technology_python",
+    "relationship": "USES_TECH",
+    "weight": 0.99,
+    "source_file": "architecture.md",
+    "properties": {}
+  },
+  {
+    "edge_id": "document_architecture_md__uses_aws_service__awsservice_amazon_bedrock",
+    "from_id": "document_architecture_md",
+    "to_id": "awsservice_amazon_bedrock",
+    "relationship": "USES_AWS_SERVICE",
+    "weight": 1.0,
+    "source_file": "architecture.md",
+    "properties": {}
+  },
+  {
+    "edge_id": "repository_expertise_rag_platform__uses_aws_service__awsservice_amazon_bedrock",
+    "from_id": "repository_expertise_rag_platform",
+    "to_id": "awsservice_amazon_bedrock",
+    "relationship": "USES_AWS_SERVICE",
+    "weight": 1.0,
+    "source_file": "architecture.md",
+    "properties": {}
+  },
+  {
+    "edge_id": "repository_expertise_rag_platform__uses_aws_service__awsservice_neptune_analytics",
+    "from_id": "repository_expertise_rag_platform",
+    "to_id": "awsservice_neptune_analytics",
+    "relationship": "USES_AWS_SERVICE",
+    "weight": 1.0,
+    "source_file": "architecture.md",
+    "properties": {}
+  },
+  {
+    "edge_id": "repository_expertise_rag_platform__uses_aws_service__awsservice_aws_lambda",
+    "from_id": "repository_expertise_rag_platform",
+    "to_id": "awsservice_aws_lambda",
+    "relationship": "USES_AWS_SERVICE",
+    "weight": 1.0,
+    "source_file": "architecture.md",
+    "properties": {}
+  },
+  {
+    "edge_id": "document_architecture_md__demonstrates_pattern__pattern_serverless",
+    "from_id": "document_architecture_md",
+    "to_id": "pattern_serverless",
+    "relationship": "DEMONSTRATES_PATTERN",
+    "weight": 1.0,
+    "source_file": "architecture.md",
+    "properties": {}
+  },
+  {
+    "edge_id": "person_jane_smith__demonstrates_pattern__pattern_serverless",
+    "from_id": "person_jane_smith",
+    "to_id": "pattern_serverless",
+    "relationship": "DEMONSTRATES_PATTERN",
+    "weight": 1.0,
+    "source_file": "architecture.md",
+    "properties": {}
+  },
+  {
+    "edge_id": "person_jane_smith__demonstrates_pattern__pattern_event_driven",
+    "from_id": "person_jane_smith",
+    "to_id": "pattern_event_driven",
+    "relationship": "DEMONSTRATES_PATTERN",
+    "weight": 0.94,
+    "source_file": "architecture.md",
+    "properties": {}
+  },
+  {
+    "edge_id": "person_jane_smith__demonstrates_pattern__pattern_infrastructure_as_code",
+    "from_id": "person_jane_smith",
+    "to_id": "pattern_infrastructure_as_code",
+    "relationship": "DEMONSTRATES_PATTERN",
+    "weight": 0.97,
+    "source_file": "repo-signals.yaml",
+    "properties": {}
+  },
+  {
+    "edge_id": "skill_graphrag__strengthens__pattern_serverless",
+    "from_id": "skill_graphrag",
+    "to_id": "pattern_serverless",
+    "relationship": "STRENGTHENS",
+    "weight": 0.5,
+    "source_file": "architecture.md",
+    "properties": {}
+  },
+  {
+    "edge_id": "technology_python__strengthens__awsservice_amazon_bedrock",
+    "from_id": "technology_python",
+    "to_id": "awsservice_amazon_bedrock",
+    "relationship": "STRENGTHENS",
+    "weight": 0.6,
+    "source_file": "architecture.md",
+    "properties": {}
+  },
+  {
+    "edge_id": "evidence_graphrag_implementation__supports_claim__claim_expert_aws_serverless",
+    "from_id": "evidence_graphrag_implementation",
+    "to_id": "claim_expert_aws_serverless",
+    "relationship": "SUPPORTS_CLAIM",
+    "weight": 0.95,
+    "source_file": "architecture.md",
+    "properties": {}
+  }
+]

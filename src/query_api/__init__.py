@@ -1,0 +1,1 @@
+# ExpertiseRAG query API Lambda

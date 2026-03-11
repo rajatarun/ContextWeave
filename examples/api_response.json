@@ -1,0 +1,69 @@
+{
+  "answer": "Based on the architectural evidence from architecture.md, CLAUDE.md, and repo-signals.yaml, this developer has built production systems using the following AWS services:\n\n**Core Infrastructure (Expert level)**\n- **Amazon Bedrock** – Knowledge Bases with Neptune Analytics GraphRAG, custom parsing prompts, Titan Text Embeddings V2 (1024-dim)\n- **Neptune Analytics** – Graph database for GraphRAG, vector search configuration matching embedding dimensions\n- **AWS Lambda** – Preprocessing pipelines, reasoning APIs, ingestion triggers (Python 3.12)\n- **Amazon S3** – Encrypted artifact storage with lifecycle policies, S3 event-driven Lambda triggers\n- **API Gateway (HTTP API v2)** – REST exposure with CORS, access logging, throttling\n\n**Orchestration & Operations**\n- **AWS Step Functions** – Ingestion orchestration state machines with polling loops\n- **AWS IAM** – Least-privilege role design with condition keys\n- **AWS KMS** – Customer-managed keys for S3 encryption\n- **Amazon CloudWatch** – Structured log groups, retention policies, X-Ray tracing\n\n**Repeatedly applied architecture patterns** (cross-repo evidence):\n1. **Serverless** – All compute uses Lambda; no EC2 instances\n2. **Event-driven** – S3 ObjectCreated events trigger preprocessing; EventBridge for cross-service coordination\n3. **Infrastructure-as-Code** – AWS SAM/CloudFormation for all resources; reproducible deploys\n4. **GraphRAG** – Neptune Analytics + Bedrock Knowledge Bases for richer retrieval than pure vector search\n\nThese patterns are corroborated across architecture.md (weight 1.0), CLAUDE.md (weight 1.0), and repo-signals.yaml (weight 0.7), with additional signal from PlantUML architecture diagrams.",
+  "sources": [
+    {
+      "file": "architecture.md",
+      "excerpt": "Amazon Bedrock Knowledge Bases backed by Neptune Analytics GraphRAG enables hybrid vector + graph traversal for evidence retrieval...",
+      "weight": 1.0,
+      "score": 0.94,
+      "effectiveScore": 0.94,
+      "sourceUri": "s3://expertise-rag-artifacts-123456789012-dev/raw/expertise-rag-platform/architecture.md"
+    },
+    {
+      "file": "CLAUDE.md",
+      "excerpt": "This project uses AWS Lambda (Python 3.12), Amazon Bedrock, Neptune Analytics, S3, and API Gateway with full SAM IaC...",
+      "weight": 1.0,
+      "score": 0.91,
+      "effectiveScore": 0.91,
+      "sourceUri": "s3://expertise-rag-artifacts-123456789012-dev/raw/expertise-rag-platform/CLAUDE.md"
+    },
+    {
+      "file": "repo-signals.yaml",
+      "excerpt": "aws_services: [Amazon Bedrock, Neptune Analytics, AWS Lambda, Amazon S3, API Gateway, Step Functions, KMS, CloudWatch]",
+      "weight": 0.7,
+      "score": 0.88,
+      "effectiveScore": 0.616,
+      "sourceUri": "s3://expertise-rag-artifacts-123456789012-dev/raw/expertise-rag-platform/repo-signals.yaml"
+    },
+    {
+      "file": "aws_architecture.puml",
+      "excerpt": "[Derived] Architecture diagram: Components: Lambda Preprocessor, S3 Artifacts, Bedrock Knowledge Base, Neptune Analytics Graph. Data flows: S3 → Lambda [S3 event trigger] → S3 [derived artifacts] → Bedrock KB [ingestion].",
+      "weight": 0.8,
+      "score": 0.82,
+      "effectiveScore": 0.656,
+      "sourceUri": "s3://expertise-rag-artifacts-123456789012-dev/derived/expertise-rag-platform/aws_architecture.puml.extracted.txt"
+    }
+  ],
+  "inferredSkills": [
+    "AWS SAM / CloudFormation",
+    "Amazon Bedrock Knowledge Bases",
+    "Neptune Analytics",
+    "GraphRAG",
+    "Python",
+    "Serverless Architecture",
+    "Event-Driven Architecture",
+    "Infrastructure-as-Code",
+    "AWS Lambda",
+    "Step Functions"
+  ],
+  "repeatedPatterns": [
+    "serverless",
+    "event-driven",
+    "infrastructure-as-code",
+    "GraphRAG"
+  ],
+  "confidence": 0.94,
+  "questionType": "architecture",
+  "graphEntitiesUsed": [
+    "Amazon Bedrock",
+    "Neptune Analytics",
+    "AWS Lambda",
+    "Amazon S3",
+    "serverless",
+    "event-driven",
+    "GraphRAG"
+  ],
+  "retrievalCount": 8,
+  "modelId": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+  "latencyMs": 2341
+}

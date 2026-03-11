@@ -1,0 +1,191 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://expertise-rag/schemas/repo-signals.yaml",
+  "title": "ExpertiseRAG Repository Signals Manifest",
+  "description": "Schema for repo-signals.yaml – the structured metadata file uploaded alongside each repository to provide authoritative expertise signals.",
+  "type": "object",
+  "required": ["repo_name", "owner"],
+  "properties": {
+    "repo_name": {
+      "type": "string",
+      "description": "Repository slug (used as graph node label)",
+      "examples": ["my-saas-platform", "ml-pipeline-infra"]
+    },
+    "owner": {
+      "type": "string",
+      "description": "Developer name (mapped to Person graph node)",
+      "examples": ["Jane Smith"]
+    },
+    "description": {
+      "type": "string",
+      "description": "Short description of what the repo does"
+    },
+    "production_status": {
+      "type": "string",
+      "enum": ["production", "staging", "prototype", "archived", "open-source"],
+      "description": "Deployment status – production has highest evidence weight"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date",
+      "description": "Project start date (YYYY-MM-DD)"
+    },
+    "tech_stack": {
+      "type": "array",
+      "description": "Primary technologies used",
+      "items": {
+        "oneOf": [
+          { "type": "string" },
+          {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string" },
+              "role": {
+                "type": "string",
+                "description": "How this tech is used (primary, secondary, tooling, etc.)"
+              },
+              "depth": {
+                "type": "string",
+                "enum": ["expert", "proficient", "familiar", "learning"],
+                "description": "Developer's depth with this technology"
+              }
+            }
+          }
+        ]
+      },
+      "examples": [
+        ["Python", "TypeScript", "React"],
+        [{"name": "AWS Lambda", "role": "primary", "depth": "expert"}]
+      ]
+    },
+    "aws_services": {
+      "type": "array",
+      "description": "AWS services used in this project",
+      "items": {
+        "oneOf": [
+          { "type": "string" },
+          {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string" },
+              "purpose": { "type": "string" },
+              "scale": { "type": "string", "description": "e.g. '10M req/month', '5TB data'" }
+            }
+          }
+        ]
+      }
+    },
+    "architecture_patterns": {
+      "type": "array",
+      "description": "High-level design patterns applied in this project",
+      "items": {
+        "oneOf": [
+          { "type": "string" },
+          {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string" },
+              "rationale": { "type": "string" }
+            }
+          }
+        ]
+      },
+      "examples": [
+        ["event-driven", "serverless", "CQRS"],
+        [{"name": "GraphRAG", "rationale": "Needed rich relationship queries over expertise graph"}]
+      ]
+    },
+    "skills_demonstrated": {
+      "type": "array",
+      "description": "Explicit skill claims backed by this repo",
+      "items": {
+        "type": "object",
+        "required": ["skill"],
+        "properties": {
+          "skill": { "type": "string" },
+          "evidence": {
+            "type": "string",
+            "description": "Brief description of how this skill is demonstrated"
+          },
+          "level": {
+            "type": "string",
+            "enum": ["expert", "proficient", "familiar"]
+          }
+        }
+      }
+    },
+    "outcomes": {
+      "type": "array",
+      "description": "Measurable outcomes and achievements",
+      "items": {
+        "type": "object",
+        "required": ["description"],
+        "properties": {
+          "description": { "type": "string" },
+          "metric": { "type": "string", "description": "e.g. '40% cost reduction', '99.99% uptime'" },
+          "verified": { "type": "boolean" }
+        }
+      }
+    },
+    "team_size": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Size of engineering team on this project"
+    },
+    "role": {
+      "type": "string",
+      "description": "Developer's role",
+      "examples": ["Lead Architect", "Solo Engineer", "Senior Backend Engineer"]
+    },
+    "related_repos": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Other repo slugs that are architecturally related"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Free-form tags for categorisation"
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "repo_name": "expertise-rag-platform",
+      "owner": "Jane Smith",
+      "description": "AWS-native GraphRAG platform for expertise queries",
+      "production_status": "production",
+      "started_at": "2024-06-01",
+      "tech_stack": [
+        {"name": "Python", "role": "primary", "depth": "expert"},
+        {"name": "TypeScript", "role": "secondary", "depth": "proficient"}
+      ],
+      "aws_services": [
+        {"name": "Amazon Bedrock", "purpose": "Knowledge Base + LLM generation"},
+        {"name": "Neptune Analytics", "purpose": "GraphRAG vector + graph store"},
+        {"name": "AWS Lambda", "purpose": "Preprocessing + reasoning API"},
+        {"name": "Amazon S3", "purpose": "Artifact storage"},
+        {"name": "API Gateway", "purpose": "REST API exposure"}
+      ],
+      "architecture_patterns": [
+        {"name": "serverless", "rationale": "Zero operational overhead"},
+        {"name": "GraphRAG", "rationale": "Richer evidence retrieval than pure vector search"},
+        {"name": "event-driven", "rationale": "S3 events trigger preprocessing pipeline"}
+      ],
+      "skills_demonstrated": [
+        {"skill": "AWS SAM / CloudFormation", "level": "expert", "evidence": "Full IaC stack"},
+        {"skill": "Bedrock Knowledge Bases", "level": "expert", "evidence": "Neptune Analytics KB"},
+        {"skill": "GraphRAG", "level": "proficient", "evidence": "Neptune Analytics graph schema"}
+      ],
+      "outcomes": [
+        {"description": "Reduced expertise query latency", "metric": "< 3s P95"},
+        {"description": "Full IaC deployment", "metric": "sam deploy < 10 minutes"}
+      ],
+      "role": "Lead Architect",
+      "tags": ["ai", "rag", "aws", "bedrock", "neptune", "graphrag"]
+    }
+  ]
+}

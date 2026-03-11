@@ -1,0 +1,6 @@
+{
+  "question": "What AWS services has this developer built production systems with, and what architecture patterns do they repeatedly use?",
+  "topK": 10,
+  "includeGraphExpansion": true,
+  "minConfidence": 0.3
+}
