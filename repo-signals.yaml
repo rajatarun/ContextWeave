@@ -1,0 +1,320 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# repo-signals.yaml – ContextWeave / ExpertiseRAG
+#
+# Structured expertise signals for the ExpertiseRAG GraphRAG system.
+# Evidence weight: 0.7 (high-authority structured metadata).
+#
+# This file is uploaded to S3 (raw/contextweave/repo-signals.yaml) by the
+# GitHub Actions workflow after every successful SAM deploy, and ingested
+# into the Bedrock Knowledge Base → Neptune Analytics graph.
+# ─────────────────────────────────────────────────────────────────────────────
+
+schema_version: "1.0"
+generated_at: "2026-03-11"
+repo: contextweave
+owner: rajatarun
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Project metadata
+# ─────────────────────────────────────────────────────────────────────────────
+project:
+  name: ContextWeave / ExpertiseRAG
+  type: production-platform
+  domain: graphrag-expertise-retrieval
+  description: >
+    AWS-native GraphRAG platform that combines Amazon Bedrock Knowledge Bases
+    with Neptune Analytics to answer deep, evidence-backed questions about a
+    developer's professional expertise. Uses semantic retrieval + graph
+    traversal for evidence synthesis.
+  aws_account: "239571291755"
+  region: us-east-1
+  stack_names:
+    dev: expertise-rag-dev
+    staging: expertise-rag-staging
+    prod: expertise-rag-prod
+  cicd:
+    platform: github-actions
+    auth_method: oidc-keyless
+    deploy_role: arn:aws:iam::239571291755:role/teamweave-github-actions-sam-deployer
+    stages:
+      - sam-validate
+      - sam-build
+      - sam-deploy
+      - s3-artifact-upload
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Architecture patterns demonstrated
+# ─────────────────────────────────────────────────────────────────────────────
+architecture_patterns:
+  - name: GraphRAG
+    description: >
+      Graph-augmented retrieval-augmented generation. Combines vector
+      similarity search (Bedrock KB) with graph traversal (Neptune Analytics)
+      to surface co-occurring skills, pattern evidence, and cross-repository
+      context that pure vector search cannot recover.
+    evidence_files:
+      - src/query_api/graph_expander.py
+      - src/query_api/retriever.py
+      - src/preprocessor/graph_builder.py
+    repeat_count: 1
+
+  - name: Serverless Event-Driven Architecture
+    description: >
+      Fully serverless. S3 ObjectCreated events trigger Lambda. Step Functions
+      orchestrates multi-step workflows without any always-on compute. API
+      Gateway routes HTTP requests to Lambda. No EC2, no containers.
+    evidence_files:
+      - template.yaml
+      - src/preprocessor/handler.py
+      - src/ingestion_trigger/handler.py
+    repeat_count: 1
+
+  - name: Hierarchical RAG Chunking
+    description: >
+      Parent chunks (1500 tokens) preserve full section context for answer
+      synthesis; child chunks (300 tokens) are the precision retrieval units.
+      60-token overlap ensures continuity at boundaries.
+    evidence_files:
+      - template.yaml  # BedrockDataSource HierarchicalChunkingConfiguration
+    repeat_count: 1
+
+  - name: Infrastructure as Code (SAM)
+    description: >
+      All AWS resources defined in template.yaml using AWS SAM. Reproducible
+      across dev / staging / prod environments via samconfig.toml. CI/CD
+      deploys exclusively via SAM CLI, never via console clicks.
+    evidence_files:
+      - template.yaml
+      - samconfig.toml
+      - .github/workflows/deploy.yaml
+    repeat_count: 1
+
+  - name: Least-Privilege IAM
+    description: >
+      Every Lambda has a separate IAM role with only the permissions required
+      for that function. No wildcard resource ARNs except where unavoidable
+      (X-Ray, CloudWatch). S3 access scoped to specific prefixes.
+    evidence_files:
+      - template.yaml  # PreprocessorRole, QueryAPIRole, IngestionTriggerRole
+    repeat_count: 1
+
+  - name: OIDC Keyless Authentication
+    description: >
+      GitHub Actions assumes the deployer IAM role via OIDC token exchange.
+      No long-lived AWS access keys stored in GitHub secrets. Token scoped
+      to specific repo and workflow run.
+    evidence_files:
+      - .github/workflows/deploy.yaml
+    repeat_count: 1
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AWS services used
+# ─────────────────────────────────────────────────────────────────────────────
+aws_services:
+  compute:
+    - service: AWS Lambda
+      runtime: python3.12
+      count: 3
+      functions:
+        - expertise-rag-preprocessor
+        - expertise-rag-query-api
+        - expertise-rag-ingestion-trigger
+      depth: advanced   # custom event routing, custom resource, Step Functions integration
+
+  storage:
+    - service: Amazon S3
+      usage: artifact-store
+      encryption: SSE-KMS
+      depth: advanced   # bucket notification, lifecycle, versioning, bucket policy, KMS
+
+  database:
+    - service: Amazon Neptune Analytics
+      usage: vector-graph-hybrid-store
+      query_language: openCypher
+      vector_dimension: 1024
+      depth: advanced   # GraphRAG traversal, vector similarity, custom node/edge schema
+
+  ai_ml:
+    - service: Amazon Bedrock Knowledge Bases
+      usage: rag-knowledge-base
+      vector_store: Neptune Analytics
+      chunking: HIERARCHICAL
+      depth: advanced
+
+    - service: Amazon Bedrock (Titan Text Embeddings V2)
+      usage: 1024-dim-embeddings
+      model_id: amazon.titan-embed-text-v2:0
+      depth: intermediate
+
+    - service: Amazon Bedrock (Claude 3 Haiku)
+      usage: document-parsing-during-ingestion
+      model_id: anthropic.claude-3-haiku-20240307-v1:0
+      depth: intermediate
+
+    - service: Amazon Bedrock (Converse API)
+      usage: answer-synthesis
+      depth: advanced   # grounded system prompts, structured JSON response schema
+
+  integration:
+    - service: Amazon API Gateway (HTTP API v2)
+      usage: rest-api
+      depth: intermediate   # throttling, CORS, access logging, stage config
+
+    - service: AWS Step Functions
+      usage: ingestion-orchestration
+      type: STANDARD
+      depth: advanced   # wait/poll pattern, retry + catch, conditional branching, X-Ray
+
+    - service: Amazon EventBridge
+      usage: lambda-event-routing
+      depth: intermediate
+
+  security:
+    - service: AWS KMS
+      usage: SSE-CMK
+      depth: intermediate   # key policy, cross-service grants, auto-rotation
+
+    - service: AWS IAM
+      usage: least-privilege-roles
+      depth: advanced   # resource-scoped policies, condition keys, OIDC federation
+
+    - service: AWS STS
+      usage: oidc-assume-role
+      depth: intermediate
+
+  observability:
+    - service: AWS X-Ray
+      usage: distributed-tracing
+      depth: intermediate   # active tracing on all Lambdas and Step Functions
+
+    - service: Amazon CloudWatch Logs
+      usage: structured-logging
+      depth: intermediate   # log groups, retention, access log format
+
+  iac_cicd:
+    - service: AWS SAM
+      usage: infrastructure-as-code
+      depth: advanced   # custom resources, state machine definition, multi-env samconfig
+
+    - service: AWS CloudFormation
+      usage: underlying-iac
+      depth: intermediate
+
+    - service: GitHub Actions
+      usage: cicd-pipeline
+      depth: advanced   # OIDC, SAM validate stage, build caching, multi-env dispatch
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Technical skills demonstrated
+# ─────────────────────────────────────────────────────────────────────────────
+skills:
+  languages:
+    - name: Python
+      version: "3.12"
+      depth: advanced
+      evidence:
+        - src/preprocessor/
+        - src/query_api/
+        - src/ingestion_trigger/
+        - src/shared/
+
+    - name: YAML
+      depth: advanced
+      evidence:
+        - template.yaml
+        - samconfig.toml
+        - .github/workflows/deploy.yaml
+        - repo-signals.yaml
+
+    - name: Bash
+      depth: intermediate
+      evidence:
+        - deploy.sh
+        - guardrail.sh
+
+    - name: JavaScript (Node.js)
+      version: "20"
+      depth: intermediate
+      evidence:
+        - src/index.mjs
+
+  cloud_platforms:
+    - name: Amazon Web Services
+      depth: expert
+      specialisations:
+        - Serverless (Lambda, API Gateway, Step Functions)
+        - AI/ML (Bedrock, Neptune Analytics, Titan Embeddings)
+        - Storage (S3, KMS)
+        - Security (IAM, OIDC, KMS)
+        - Observability (CloudWatch, X-Ray)
+        - IaC (SAM, CloudFormation)
+
+  concepts:
+    - name: Retrieval-Augmented Generation (RAG)
+      depth: advanced
+    - name: GraphRAG
+      depth: advanced
+    - name: Knowledge Graph Design
+      depth: advanced
+    - name: Event-Driven Architecture
+      depth: advanced
+    - name: Serverless Architecture
+      depth: advanced
+    - name: CI/CD Pipeline Design
+      depth: advanced
+    - name: Security Best Practices (Zero Trust, Least Privilege)
+      depth: advanced
+    - name: Infrastructure as Code
+      depth: advanced
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Documentation and diagrams in this repository
+# ─────────────────────────────────────────────────────────────────────────────
+documentation:
+  - file: CLAUDE.md
+    type: authoritative-context
+    evidence_weight: 1.0
+    description: AI project context – architecture decisions, patterns, anti-patterns
+
+  - file: docs/architecture.md
+    type: architecture-doc
+    evidence_weight: 1.0
+    description: Full system architecture with component details, data flows, IAM model
+
+  - file: docs/c4.puml
+    type: c4-diagram
+    evidence_weight: 0.8
+    description: C4 Level 1 (System Context) and Level 2 (Container) PlantUML diagrams
+
+  - file: docs/aws-infrastructure.puml
+    type: infrastructure-diagram
+    evidence_weight: 0.8
+    description: AWS service topology with all connections, IAM roles, data flows
+
+  - file: repo-signals.yaml
+    type: structured-signals
+    evidence_weight: 0.7
+    description: This file – machine-readable expertise signals for RAG ingestion
+
+  - file: docs/graph_schema.md
+    type: schema-doc
+    evidence_weight: 0.8
+    description: Neptune Analytics node/edge schema definition
+
+  - file: docs/api_reference.md
+    type: api-reference
+    evidence_weight: 0.6
+    description: Query API endpoint reference
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Accomplishments / measurable outcomes
+# ─────────────────────────────────────────────────────────────────────────────
+accomplishments:
+  - Built production-grade GraphRAG platform entirely on AWS managed services
+  - Eliminated long-lived credentials by implementing GitHub Actions OIDC federated auth
+  - Designed multi-environment SAM pipeline (dev/staging/prod) with automated CI/CD
+  - Implemented custom C4 + AWS infrastructure diagrams as PlantUML for living documentation
+  - Achieved least-privilege IAM across 5 separate service roles with resource-scoped policies
+  - Architected Neptune Analytics graph schema with 10 node types and 9 edge types for expertise modelling
+  - Integrated hierarchical chunking (1500/300 token parent/child) for precision RAG retrieval
+  - Built evidence weighting system that prioritises architecture docs over resume claims

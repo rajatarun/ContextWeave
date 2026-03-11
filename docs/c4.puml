@@ -1,0 +1,109 @@
+@startuml ExpertiseRAG-C4
+
+' ─────────────────────────────────────────────────────────────────────────────
+' ExpertiseRAG – C4 Architecture Diagram
+' Levels: System Context (L1) and Container (L2)
+' ─────────────────────────────────────────────────────────────────────────────
+
+!define C4Puml https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master
+!include C4Puml/C4_Context.puml
+!include C4Puml/C4_Container.puml
+
+' ─────────────────────────────────────────────────────────────────────────────
+' LEVEL 1 – System Context
+' ─────────────────────────────────────────────────────────────────────────────
+
+title ExpertiseRAG – System Context (C4 Level 1)
+
+LAYOUT_WITH_LEGEND()
+
+Person(developer, "Developer / Owner", "Uploads expertise artifacts:\narchitecture.md, CLAUDE.md,\nrepo-signals.yaml, *.puml files")
+Person(recruiter, "Recruiter / Interviewer", "Queries the system to validate\nskills, patterns, and accomplishments")
+Person(devops, "DevOps / CI Pipeline", "GitHub Actions triggers SAM deploy\nand S3 artifact upload via OIDC")
+
+System(expertiseRAG, "ExpertiseRAG", "AWS-native GraphRAG platform.\nAnswers evidence-backed questions\nabout developer expertise using\nBedrock + Neptune Analytics.")
+
+System_Ext(github, "GitHub", "Source control and CI/CD.\nOIDC token provider for\nkeyless AWS authentication.")
+System_Ext(bedrock, "Amazon Bedrock", "Foundation model inference\n(Claude 3 Haiku, Titan Embeddings V2)\nand Knowledge Base service.")
+System_Ext(neptune, "Neptune Analytics", "Graph + vector store.\nopenCypher queries for\nGraphRAG traversal.")
+
+Rel(developer, expertiseRAG, "Uploads raw artifacts to S3", "AWS Console / CLI / GitHub Actions")
+Rel(recruiter, expertiseRAG, "POST /query-expertise", "HTTPS / API Gateway")
+Rel(devops, expertiseRAG, "Deploys via SAM + uploads docs to S3", "GitHub Actions OIDC")
+Rel(expertiseRAG, bedrock, "Embed, parse, retrieve, generate", "AWS SDK / HTTPS")
+Rel(expertiseRAG, neptune, "Vector search + graph traversal", "AWS SDK / openCypher")
+Rel(devops, github, "Push code, trigger workflow", "Git / HTTPS")
+Rel(github, expertiseRAG, "OIDC token → assume deploy role", "OIDC / STS")
+
+@enduml
+
+' ─────────────────────────────────────────────────────────────────────────────
+' LEVEL 2 – Container Diagram
+' ─────────────────────────────────────────────────────────────────────────────
+
+@startuml ExpertiseRAG-C4-Containers
+
+!define C4Puml https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master
+!include C4Puml/C4_Container.puml
+
+title ExpertiseRAG – Container Diagram (C4 Level 2)
+
+LAYOUT_TOP_DOWN()
+LAYOUT_WITH_LEGEND()
+
+Person(developer, "Developer", "Uploads expertise artifacts")
+Person(recruiter, "Recruiter", "Queries developer expertise")
+
+System_Boundary(expertiseRAG, "ExpertiseRAG (AWS Account: 239571291755)") {
+
+    ' ── Ingestion path ──────────────────────────────────────────────────────
+    ContainerDb(s3Raw, "S3 – Raw Artifacts", "Amazon S3\nSSE-KMS encrypted", "Stores original uploads:\nraw/<repo>/architecture.md\nraw/<repo>/CLAUDE.md\nraw/<repo>/repo-signals.yaml\nraw/<repo>/*.puml")
+
+    Container(preprocessor, "Preprocessor Lambda", "AWS Lambda\nPython 3.12", "Extracts text from Markdown,\nYAML, PlantUML files.\nBuilds graph entities and edges.\nEmits derived JSON + extracted text.")
+
+    ContainerDb(s3Derived, "S3 – Derived Artifacts", "Amazon S3\nSSE-KMS encrypted", "Stores preprocessor output:\nderived/<repo>/*.extracted.txt\nderived/<repo>/graph_entities.json\nderived/<repo>/expertise_signals.json")
+
+    Container(sfn, "Ingestion State Machine", "AWS Step Functions\nSTANDARD type", "Orchestrates:\n1. Preprocess raw files\n2. Start Bedrock ingestion job\n3. Poll until COMPLETE/FAILED")
+
+    Container(ingestionTrigger, "Ingestion Trigger Lambda", "AWS Lambda\nPython 3.12", "Starts and polls\nBedrock KB ingestion jobs.\nAlso runs as CF custom resource\npost-deployment.")
+
+    ContainerDb(bedrockKB, "Bedrock Knowledge Base", "Amazon Bedrock KB\nNeptune Analytics vector store", "Ingests derived/* artifacts.\nHierarchical chunking (1500/300 tokens).\nHybrid semantic + keyword search.\nStores 1024-dim Titan embeddings.")
+
+    ContainerDb(neptune, "Neptune Analytics Graph", "Amazon Neptune Analytics\nopenCypher + vector", "Nodes: Person, Repository, Document,\nSkill, Technology, AWSService, Pattern.\nEdges: BUILT, CONTAINS, USES_TECH,\nDEMONSTRATES_PATTERN, STRENGTHENS.\n16GB provisioned memory (dev).")
+
+    ' ── Query path ──────────────────────────────────────────────────────────
+    Container(apiGateway, "HTTP API", "Amazon API Gateway v2\nThrottle: 5 RPS / 10 burst", "Routes:\nPOST /query-expertise\nGET /health")
+
+    Container(queryAPI, "Query API Lambda", "AWS Lambda\nPython 3.12", "1. classify_question()\n2. retrieve_chunks() → Bedrock\n3. expand_graph_context() → Neptune\n4. synthesize_answer() → Bedrock Converse\nReturns: answer + sources + graph entities")
+
+    ' ── Security ────────────────────────────────────────────────────────────
+    ContainerDb(kms, "KMS Key", "AWS KMS\nCustomer-managed, auto-rotate", "Encrypts all S3 objects.\nUsed by Bedrock KB and all Lambdas.")
+}
+
+System_Ext(bedrock, "Amazon Bedrock", "Titan Embeddings V2 (1024-dim)\nClaude 3 Haiku (document parsing)\nBedrock Converse API (answer synthesis)")
+System_Ext(github, "GitHub Actions", "CI/CD: SAM validate → build → deploy\nOIDC token provider")
+
+' Ingestion flow
+Rel(developer, s3Raw, "aws s3 cp raw files", "HTTPS / AWS CLI")
+Rel(github, s3Raw, "aws s3 cp docs + signals", "HTTPS / GitHub Actions")
+Rel(s3Raw, preprocessor, "S3 ObjectCreated event", "S3 notification")
+Rel(preprocessor, s3Derived, "Writes derived artifacts", "AWS SDK s3.put_object")
+Rel(sfn, preprocessor, "Step: PreprocessRawFiles", "Lambda invoke")
+Rel(sfn, ingestionTrigger, "Step: StartIngestionJob / CheckStatus", "Lambda invoke")
+Rel(ingestionTrigger, bedrockKB, "StartIngestionJob / GetIngestionJob", "AWS SDK bedrock-agent")
+Rel(bedrockKB, s3Derived, "Reads extracted text files", "AWS SDK")
+Rel(bedrockKB, neptune, "Stores vector embeddings + graph links", "Neptune Analytics API")
+Rel(bedrockKB, bedrock, "Calls Titan Embeddings V2 + Haiku parser", "AWS internal")
+
+' Query flow
+Rel(recruiter, apiGateway, "POST /query-expertise\n{question: string}", "HTTPS")
+Rel(apiGateway, queryAPI, "Proxy to Lambda", "Lambda proxy integration")
+Rel(queryAPI, bedrockKB, "Retrieve top-K chunks (hybrid search)", "bedrock-agent-runtime.retrieve()")
+Rel(queryAPI, neptune, "Graph expand: skill neighbourhood,\npattern evidence, AWS co-services", "openCypher query")
+Rel(queryAPI, bedrock, "Bedrock Converse API\nsynthesise grounded answer", "AWS SDK")
+
+' Security
+Rel(s3Raw, kms, "SSE-KMS encrypt/decrypt", "")
+Rel(s3Derived, kms, "SSE-KMS encrypt/decrypt", "")
+
+@enduml
