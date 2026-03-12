@@ -73,7 +73,7 @@ jobs:
         run: sam validate --template ${{ env.SAM_TEMPLATE }} --region ${{ env.AWS_REGION }} --lint
 
   # ───────────────────────────────────────────────────────────────────────────
-  # Job 2: build – compile and cache the SAM build artefact
+  # Job 2: build – compile and verify the SAM build succeeds
   # ───────────────────────────────────────────────────────────────────────────
   build:
     name: SAM Build
@@ -94,23 +94,8 @@ jobs:
         with:
           use-installer: true
 
-      - name: Cache SAM build
-        uses: actions/cache@v4
-        id: sam-cache
-        with:
-          path: .aws-sam
-          key: sam-build-${{ runner.os }}-${{ hashFiles('template.yaml', 'src/**', 'samconfig.toml') }}
-
       - name: SAM build
-        if: steps.sam-cache.outputs.cache-hit != 'true'
         run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel --cached
-
-      - name: Upload SAM build artefact
-        uses: actions/upload-artifact@v4
-        with:
-          name: sam-build-${{ github.sha }}
-          path: .aws-sam/
-          retention-days: 1
 
   # ───────────────────────────────────────────────────────────────────────────
   # Job 3: deploy-dev – deploy to dev on push to main/master
@@ -143,11 +128,8 @@ jobs:
         with:
           use-installer: true
 
-      - name: Download SAM build artefact
-        uses: actions/download-artifact@v4
-        with:
-          name: sam-build-${{ github.sha }}
-          path: .aws-sam/
+      - name: SAM build
+        run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel --cached
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -265,11 +247,8 @@ jobs:
         with:
           use-installer: true
 
-      - name: Download SAM build artefact
-        uses: actions/download-artifact@v4
-        with:
-          name: sam-build-${{ github.sha }}
-          path: .aws-sam/
+      - name: SAM build
+        run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel --cached
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -360,11 +339,8 @@ jobs:
         with:
           use-installer: true
 
-      - name: Download SAM build artefact
-        uses: actions/download-artifact@v4
-        with:
-          name: sam-build-${{ github.sha }}
-          path: .aws-sam/
+      - name: SAM build
+        run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel --cached
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
