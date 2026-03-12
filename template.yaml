@@ -188,7 +188,7 @@ Resources:
       FunctionName: !GetAtt PreprocessorFunction.Arn
       Action: lambda:InvokeFunction
       Principal: s3.amazonaws.com
-      SourceArn: !GetAtt ArtifactsBucket.Arn
+      SourceArn: !Sub arn:aws:s3:::expertise-rag-artifacts-${AWS::AccountId}-${Environment}
       SourceAccount: !Ref AWS::AccountId
 
   # ───────────────────────────────────────────
