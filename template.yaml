@@ -92,14 +92,6 @@ Resources:
               AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
             Action: kms:*
             Resource: '*'
-          - Sid: AllowBedrockKnowledgeBase
-            Effect: Allow
-            Principal:
-              AWS: !Sub arn:aws:iam::${AWS::AccountId}:role/expertise-rag-bedrock-kb-${Environment}
-            Action:
-              - kms:Decrypt
-              - kms:GenerateDataKey
-            Resource: '*'
       Tags:
         - Key: Project
           Value: ExpertiseRAG
