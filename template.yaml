@@ -109,6 +109,7 @@ Resources:
   # ───────────────────────────────────────────
   ArtifactsBucket:
     Type: AWS::S3::Bucket
+    DependsOn: PreprocessorS3InvokePermission
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
@@ -188,7 +189,6 @@ Resources:
       FunctionName: !GetAtt PreprocessorFunction.Arn
       Action: lambda:InvokeFunction
       Principal: s3.amazonaws.com
-      SourceArn: !Sub arn:aws:s3:::expertise-rag-artifacts-${AWS::AccountId}-${Environment}
       SourceAccount: !Ref AWS::AccountId
 
   # ───────────────────────────────────────────
