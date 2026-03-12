@@ -136,7 +136,6 @@ jobs:
         with:
           role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: GitHubActions-Deploy-dev-${{ github.run_id }}
 
       - name: SAM deploy – dev
         run: |
