@@ -144,10 +144,8 @@ jobs:
             --capabilities CAPABILITY_NAMED_IAM \
             --parameter-overrides \
               Environment=dev \
-              NeptuneVectorDimension=1024 \
               NeptuneProvisionedMemory=16 \
               LogRetentionDays=30 \
-              EnableStepFunctions=true \
             --tags \
               Project=ExpertiseRAG \
               Environment=dev \
@@ -263,10 +261,8 @@ jobs:
             --capabilities CAPABILITY_NAMED_IAM \
             --parameter-overrides \
               Environment=staging \
-              NeptuneVectorDimension=1024 \
               NeptuneProvisionedMemory=32 \
               LogRetentionDays=60 \
-              EnableStepFunctions=true \
             --tags \
               Project=ExpertiseRAG \
               Environment=staging \
@@ -355,10 +351,8 @@ jobs:
             --capabilities CAPABILITY_NAMED_IAM \
             --parameter-overrides \
               Environment=prod \
-              NeptuneVectorDimension=1024 \
               NeptuneProvisionedMemory=64 \
               LogRetentionDays=365 \
-              EnableStepFunctions=true \
             --tags \
               Project=ExpertiseRAG \
               Environment=prod \
