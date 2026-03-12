@@ -52,15 +52,8 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install AWS SAM CLI
+      - name: Setup SAM
         uses: aws-actions/setup-sam@v2
-        with:
-          use-installer: true
 
       - name: SAM validate
         run: sam validate --template ${{ env.SAM_TEMPLATE }} --region ${{ env.AWS_REGION }} --lint
@@ -77,15 +70,8 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install AWS SAM CLI
+      - name: Setup SAM
         uses: aws-actions/setup-sam@v2
-        with:
-          use-installer: true
 
       - name: SAM build
         run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel --cached
@@ -111,25 +97,18 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install AWS SAM CLI
-        uses: aws-actions/setup-sam@v2
-        with:
-          use-installer: true
-
-      - name: SAM build
-        run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel --cached
-
-      - name: Configure AWS credentials (OIDC)
+      - name: Configure AWS (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: GitHubActions-Deploy-dev-${{ github.run_id }}
+
+      - name: Setup SAM
+        uses: aws-actions/setup-sam@v2
+
+      - name: SAM build
+        run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel --cached
 
       - name: SAM deploy – dev
         run: |
@@ -228,25 +207,18 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install AWS SAM CLI
-        uses: aws-actions/setup-sam@v2
-        with:
-          use-installer: true
-
-      - name: SAM build
-        run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel --cached
-
-      - name: Configure AWS credentials (OIDC)
+      - name: Configure AWS (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: GitHubActions-Deploy-staging-${{ github.run_id }}
+
+      - name: Setup SAM
+        uses: aws-actions/setup-sam@v2
+
+      - name: SAM build
+        run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel --cached
 
       - name: SAM deploy – staging
         run: |
@@ -318,25 +290,18 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install AWS SAM CLI
-        uses: aws-actions/setup-sam@v2
-        with:
-          use-installer: true
-
-      - name: SAM build
-        run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel --cached
-
-      - name: Configure AWS credentials (OIDC)
+      - name: Configure AWS (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: GitHubActions-Deploy-prod-${{ github.run_id }}
+
+      - name: Setup SAM
+        uses: aws-actions/setup-sam@v2
+
+      - name: SAM build
+        run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel --cached
 
       - name: SAM deploy – prod
         run: |
