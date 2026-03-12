@@ -260,7 +260,7 @@ Resources:
       DataSourceConfiguration:
         Type: S3
         S3Configuration:
-          BucketArn: !GetAtt ArtifactsBucket.Arn
+          BucketArn: !Sub arn:aws:s3:::expertise-rag-artifacts-${AWS::AccountId}-${Environment}
           InclusionPrefixes:
             - raw/
       VectorIngestionConfiguration:
