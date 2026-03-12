@@ -278,6 +278,12 @@ Resources:
                 - Architecture component relationships (from PlantUML diagrams, describe as text)
                 - Expertise signals, skill depth indicators, and technology preferences
                 Preserve technical terminology exactly. Output clean structured text.
+        ContextEnrichmentConfiguration:
+          Type: BEDROCK_FOUNDATION_MODEL
+          BedrockFoundationModelConfiguration:
+            ModelArn: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0
+            EnrichmentStrategyConfiguration:
+              Method: CHUNK_ENTITY_EXTRACTION
 
   # ───────────────────────────────────────────
   # CloudWatch Log Groups
