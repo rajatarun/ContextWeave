@@ -62,13 +62,6 @@ jobs:
         with:
           use-installer: true
 
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          role-session-name: GitHubActions-Validate-${{ github.run_id }}
-
       - name: SAM validate
         run: sam validate --template ${{ env.SAM_TEMPLATE }} --region ${{ env.AWS_REGION }} --lint
 
