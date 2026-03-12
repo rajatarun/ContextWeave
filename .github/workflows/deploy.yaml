@@ -119,7 +119,7 @@ jobs:
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
             --resolve-s3 \
-            --capabilities CAPABILITY_NAMED_IAM \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameter-overrides \
               Environment=dev \
               NeptuneProvisionedMemory=16 \
@@ -229,7 +229,7 @@ jobs:
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
             --resolve-s3 \
-            --capabilities CAPABILITY_NAMED_IAM \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameter-overrides \
               Environment=staging \
               NeptuneProvisionedMemory=32 \
@@ -312,7 +312,7 @@ jobs:
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
             --resolve-s3 \
-            --capabilities CAPABILITY_NAMED_IAM \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameter-overrides \
               Environment=prod \
               NeptuneProvisionedMemory=64 \
