@@ -64,7 +64,7 @@ Globals:
         ARTIFACTS_BUCKET: !Sub expertise-rag-artifacts-${AWS::AccountId}-${Environment}
         NEPTUNE_GRAPH_ID: !GetAtt NeptuneAnalyticsGraph.GraphId
         KNOWLEDGE_BASE_ID: !Ref BedrockKnowledgeBase
-        DATA_SOURCE_ID: !Ref BedrockDataSource
+        DATA_SOURCE_ID: !GetAtt BedrockDataSource.DataSourceId
     Tags:
       Project: ExpertiseRAG
       Environment: !Ref Environment
@@ -725,7 +725,7 @@ Resources:
     Properties:
       ServiceToken: !GetAtt IngestionTriggerFunction.Arn
       KnowledgeBaseId: !Ref BedrockKnowledgeBase
-      DataSourceId: !Ref BedrockDataSource
+      DataSourceId: !GetAtt BedrockDataSource.DataSourceId
       TriggerReason: post-deployment
 
   # ───────────────────────────────────────────
@@ -906,7 +906,7 @@ Outputs:
 
   DataSourceId:
     Description: Bedrock Data Source ID
-    Value: !Ref BedrockDataSource
+    Value: !GetAtt BedrockDataSource.DataSourceId
     Export:
       Name: !Sub ${AWS::StackName}-DataSourceId
 
