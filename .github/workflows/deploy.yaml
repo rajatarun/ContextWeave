@@ -62,7 +62,7 @@ jobs:
         uses: aws-actions/setup-sam@v2
 
       - name: SAM build
-        run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel --cached
+        run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel
 
   # ───────────────────────────────────────────────────────────────────────────
   # Job 3: deploy-prod – runs on push to main/master and workflow_dispatch
@@ -94,7 +94,7 @@ jobs:
         uses: aws-actions/setup-sam@v2
 
       - name: SAM build
-        run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel --cached
+        run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel
 
       - name: SAM deploy – prod
         run: |
