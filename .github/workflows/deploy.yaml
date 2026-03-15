@@ -110,7 +110,7 @@ jobs:
               Environment=prod \
               NeptuneProvisionedMemory=16 \
               LogRetentionDays=365 \
-              GenerationModelId=us.anthropic.claude-3-5-sonnet-20241022-v2:0 \
+              GenerationModelId=us.anthropic.claude-3-7-sonnet-20250219-v1:0 \
             --tags \
               Project=ExpertiseRAG \
               Environment=prod \
