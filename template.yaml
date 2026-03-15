@@ -79,8 +79,6 @@ Resources:
   # ───────────────────────────────────────────
   ArtifactsKMSKey:
     Type: AWS::KMS::Key
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       Description: !Sub ExpertiseRAG S3 and Lambda encryption key (${Environment})
       EnableKeyRotation: true
@@ -102,8 +100,6 @@ Resources:
 
   ArtifactsKMSKeyAlias:
     Type: AWS::KMS::Alias
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       AliasName: !Sub alias/expertise-rag-${Environment}
       TargetKeyId: !Ref ArtifactsKMSKey
@@ -159,8 +155,6 @@ Resources:
 
   ArtifactsBucketPolicy:
     Type: AWS::S3::BucketPolicy
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       Bucket: !Ref ArtifactsBucket
       PolicyDocument:
@@ -190,8 +184,6 @@ Resources:
   # Trigger permission: S3 → PreprocessorFunction
   PreprocessorS3InvokePermission:
     Type: AWS::Lambda::Permission
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       FunctionName: !GetAtt PreprocessorFunction.Arn
       Action: lambda:InvokeFunction
@@ -204,8 +196,6 @@ Resources:
   # ───────────────────────────────────────────
   NeptuneAnalyticsGraph:
     Type: AWS::NeptuneGraph::Graph
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       GraphName: !Sub expertise-rag-${Environment}
       ProvisionedMemory: !Ref NeptuneProvisionedMemory
@@ -224,8 +214,6 @@ Resources:
   # ───────────────────────────────────────────
   BedrockKnowledgeBase:
     Type: AWS::Bedrock::KnowledgeBase
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       Name: !Sub expertise-rag-kb-${Environment}
       Description: >
@@ -256,8 +244,6 @@ Resources:
   # ───────────────────────────────────────────
   BedrockDataSource:
     Type: AWS::Bedrock::DataSource
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       KnowledgeBaseId: !Ref BedrockKnowledgeBase
       Name: !Sub expertise-rag-s3-source-${Environment}
@@ -304,8 +290,6 @@ Resources:
   # ───────────────────────────────────────────
   PreprocessorLogGroup:
     Type: AWS::Logs::LogGroup
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub /aws/lambda/expertise-rag-preprocessor-${Environment}
       RetentionInDays: !Ref LogRetentionDays
@@ -317,8 +301,6 @@ Resources:
 
   QueryAPILogGroup:
     Type: AWS::Logs::LogGroup
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub /aws/lambda/expertise-rag-query-api-${Environment}
       RetentionInDays: !Ref LogRetentionDays
@@ -330,8 +312,6 @@ Resources:
 
   IngestionTriggerLogGroup:
     Type: AWS::Logs::LogGroup
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub /aws/lambda/expertise-rag-ingestion-trigger-${Environment}
       RetentionInDays: !Ref LogRetentionDays
@@ -344,8 +324,6 @@ Resources:
   StepFunctionsLogGroup:
     Type: AWS::Logs::LogGroup
     Condition: DeployStepFunctions
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub /aws/states/expertise-rag-ingestion-${Environment}
       RetentionInDays: !Ref LogRetentionDays
@@ -357,8 +335,6 @@ Resources:
 
   ApiGatewayLogGroup:
     Type: AWS::Logs::LogGroup
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub /aws/apigateway/expertise-rag-${Environment}
       RetentionInDays: !Ref LogRetentionDays
@@ -375,8 +351,6 @@ Resources:
   # Role: Preprocessor Lambda
   PreprocessorRole:
     Type: AWS::IAM::Role
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       RoleName: !Sub expertise-rag-preprocessor-${Environment}
       Description: Allows preprocessor Lambda to read/write S3 and log to CloudWatch
@@ -434,8 +408,6 @@ Resources:
   # Role: Query API Lambda
   QueryAPIRole:
     Type: AWS::IAM::Role
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       RoleName: !Sub expertise-rag-query-api-${Environment}
       Description: Allows Query API Lambda to call Bedrock Retrieve, Neptune Analytics, and read S3
@@ -502,8 +474,6 @@ Resources:
   # Role: Ingestion Trigger Lambda (custom resource + post-upload)
   IngestionTriggerRole:
     Type: AWS::IAM::Role
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       RoleName: !Sub expertise-rag-ingestion-trigger-${Environment}
       Description: Allows ingestion trigger Lambda to start Bedrock ingestion jobs
@@ -549,8 +519,6 @@ Resources:
   # Role: Bedrock Knowledge Base Service Role
   BedrockKnowledgeBaseRole:
     Type: AWS::IAM::Role
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       RoleName: !Sub expertise-rag-bedrock-kb-${Environment}
       Description: Allows Amazon Bedrock Knowledge Base to access S3 and Neptune Analytics
@@ -620,8 +588,6 @@ Resources:
   StepFunctionsRole:
     Type: AWS::IAM::Role
     Condition: DeployStepFunctions
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       RoleName: !Sub expertise-rag-sfn-${Environment}
       Description: Allows Step Functions ingestion state machine to invoke Lambdas
@@ -680,8 +646,6 @@ Resources:
   # ───────────────────────────────────────────
   PreprocessorFunction:
     Type: AWS::Serverless::Function
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     DependsOn: PreprocessorLogGroup
     Properties:
       FunctionName: !Sub expertise-rag-preprocessor-${Environment}
@@ -712,8 +676,6 @@ Resources:
   # ───────────────────────────────────────────
   QueryAPIFunction:
     Type: AWS::Serverless::Function
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     DependsOn: QueryAPILogGroup
     Properties:
       FunctionName: !Sub expertise-rag-query-api-${Environment}
@@ -745,8 +707,6 @@ Resources:
   # ───────────────────────────────────────────
   IngestionTriggerFunction:
     Type: AWS::Serverless::Function
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     DependsOn: IngestionTriggerLogGroup
     Properties:
       FunctionName: !Sub expertise-rag-ingestion-trigger-${Environment}
@@ -764,8 +724,6 @@ Resources:
   # ───────────────────────────────────────────
   PostDeploymentIngestionJob:
     Type: AWS::CloudFormation::CustomResource
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       ServiceToken: !GetAtt IngestionTriggerFunction.Arn
       KnowledgeBaseId: !Ref BedrockKnowledgeBase
@@ -777,8 +735,6 @@ Resources:
   # ───────────────────────────────────────────
   ExpertiseAPI:
     Type: AWS::Serverless::HttpApi
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       StageName: !Ref Environment
       Description: ExpertiseRAG query API – POST /query-expertise
@@ -814,8 +770,6 @@ Resources:
   IngestionStateMachine:
     Type: AWS::Serverless::StateMachine
     Condition: DeployStepFunctions
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       Name: !Sub expertise-rag-ingestion-${Environment}
       Type: STANDARD
