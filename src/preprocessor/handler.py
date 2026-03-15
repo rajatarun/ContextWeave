@@ -33,6 +33,7 @@ from botocore.exceptions import ClientError
 from extractors import extract
 from graph_builder import build_graph_from_extractions
 from models import DerivedArtifact, get_source_weight
+from routing_analyzer import analyze_document
 
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
@@ -203,6 +204,19 @@ def _process_file(
     except ClientError:
         logger.warning("Failed to write extracted text for %s", key, exc_info=True)
 
+    # Routing analysis – classify document type and recommend chunking strategy
+    routing_analysis = analyze_document(
+        text=extraction["extracted_text"],
+        filename=file_name,
+        signals=extraction["expertise_signals"],
+    )
+    logger.info(
+        "Routing analysis for %s: doc_type=%s chunking=%s",
+        file_name,
+        routing_analysis.doc_type,
+        routing_analysis.chunking_strategy,
+    )
+
     return {
         "source_file": file_name,
         "source_key": key,
@@ -210,6 +224,7 @@ def _process_file(
         "expertise_signals": extraction["expertise_signals"],
         "extracted_text": extraction["extracted_text"],
         "weight": weight,
+        "routing_analysis": routing_analysis,
     }
 
 
@@ -281,10 +296,17 @@ def lambda_handler(event: dict, context: Any) -> dict:
 
     if extractions:
         try:
+            # Collect routing analyses keyed by source_file
+            routing_analyses = {
+                ext["source_file"]: ext["routing_analysis"]
+                for ext in extractions
+                if "routing_analysis" in ext
+            }
             graph_nodes, graph_edges = build_graph_from_extractions(
                 extractions,
                 person_name=os.environ.get("PERSON_NAME", "Developer"),
                 repo_prefix=repo_name,
+                routing_analyses=routing_analyses,
             )
         except Exception as exc:
             logger.error("Graph build failed: %s", exc, exc_info=True)
@@ -316,6 +338,14 @@ def lambda_handler(event: dict, context: Any) -> dict:
     _write_s3_json(bucket, f"{derived_base}/graph_entities.json", graph_nodes)
     _write_s3_json(bucket, f"{derived_base}/graph_edges.json", graph_edges)
     _write_s3_json(bucket, f"{derived_base}/expertise_signals.json", all_signals)
+    # Summarise routing decisions for the manifest
+    routing_summary: dict[str, int] = {}
+    for ext in extractions:
+        ra = ext.get("routing_analysis")
+        if ra:
+            key_label = f"{ra.doc_type}:{ra.chunking_strategy}"
+            routing_summary[key_label] = routing_summary.get(key_label, 0) + 1
+
     _write_s3_json(bucket, f"{derived_base}/processing_manifest.json", {
         "repo_prefix": repo_prefix,
         "files_processed": len(extractions),
@@ -323,6 +353,7 @@ def lambda_handler(event: dict, context: Any) -> dict:
         "graph_node_count": len(graph_nodes),
         "graph_edge_count": len(graph_edges),
         "signal_count": len(all_signals),
+        "routing_summary": routing_summary,
         "errors": errors,
     })
 

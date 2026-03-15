@@ -38,6 +38,7 @@ logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 
 KNOWLEDGE_BASE_ID = os.environ.get("KNOWLEDGE_BASE_ID", "")
 DATA_SOURCE_ID = os.environ.get("DATA_SOURCE_ID", "")
+NEPTUNE_GRAPH_ID = os.environ.get("NEPTUNE_GRAPH_ID", "")
 
 _BEDROCK_AGENT: Any = None
 
@@ -243,12 +244,23 @@ def lambda_handler(event: dict, context: Any) -> dict:
                       data={"Message": "No cleanup required"})
             return {"status": "deleted"}
 
-        # Create or Update: start ingestion and wait
+        # Create or Update: seed routing graph, then start ingestion
         if not kb_id or not ds_id:
             msg = "KnowledgeBaseId and DataSourceId are required"
             logger.error(msg)
             _cfn_send(event, context, "FAILED", physical_id, reason=msg)
             return {"status": "failed", "reason": msg}
+
+        # Seed the adaptive routing graph (idempotent)
+        graph_id = event.get("NeptuneGraphId") or NEPTUNE_GRAPH_ID
+        if graph_id:
+            try:
+                sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "query_api"))
+                from rag_router import seed_routing_graph
+                seed_result = seed_routing_graph(graph_id)
+                logger.info("Routing graph seeded: %s", seed_result)
+            except Exception as exc:
+                logger.warning("Routing graph seed failed (non-fatal): %s", exc)
 
         try:
             job = start_ingestion_job(kb_id, ds_id)
@@ -280,6 +292,20 @@ def lambda_handler(event: dict, context: Any) -> dict:
             logger.error(reason, exc_info=True)
             _cfn_send(event, context, "FAILED", physical_id, reason=reason)
             return {"status": "failed", "reason": reason}
+
+    # ── Seed routing graph (standalone invocation) ────────────────────────────
+    if event.get("action") == "seed_routing":
+        graph_id = event.get("neptune_graph_id") or NEPTUNE_GRAPH_ID
+        if not graph_id:
+            raise ValueError("neptune_graph_id or NEPTUNE_GRAPH_ID env var required")
+        try:
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "query_api"))
+            from rag_router import seed_routing_graph
+            result = seed_routing_graph(graph_id)
+            return {"action": "seed_routing", "status": "success", **result}
+        except Exception as exc:
+            logger.error("Routing graph seed failed: %s", exc, exc_info=True)
+            return {"action": "seed_routing", "status": "failed", "reason": str(exc)}
 
     # ── Step Functions: start ingestion ───────────────────────────────────────
     if event.get("action") == "start":
