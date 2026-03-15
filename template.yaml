@@ -447,7 +447,7 @@ Resources:
                   - bedrock:InvokeModel
                   - bedrock:InvokeModelWithResponseStream
                 Resource:
-                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0
+                  - arn:aws:bedrock:*::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0
                   - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0
         - PolicyName: NeptuneAnalyticsQuery
           PolicyDocument:
