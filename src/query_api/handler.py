@@ -38,9 +38,10 @@ from typing import Any
 import boto3
 
 from graph_expander import expand_graph_context
-from retriever import deduplicate_chunks, retrieve_chunks
+from rag_router import select_strategy, update_feedback
+from retriever import deduplicate_chunks, retrieve_chunks, retrieve_with_strategy
 from synthesizer import classify_question, synthesize_answer
-from models import QueryRequest
+from models import QueryRequest, RAGStrategyLabel
 
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
@@ -101,13 +102,15 @@ def _parse_request(event: dict) -> QueryRequest | None:
 
 def _run_query_pipeline(req: QueryRequest) -> dict:
     """
-    Full reasoning pipeline:
+    Adaptive RAG reasoning pipeline:
       1. Classify the question
-      2. Retrieve from Bedrock Knowledge Base
-      3. Deduplicate chunks
-      4. Expand graph context via Neptune Analytics (optional)
-      5. Synthesize answer
-      6. Return structured response
+      2. Route: consult Neptune routing graph → select best RAG strategy
+      3. Retrieve using chosen strategy (Bedrock KB ± Neptune vectors ± keyword boost)
+      4. Deduplicate chunks
+      5. Expand graph context via Neptune Analytics (controlled by routing config)
+      6. Synthesize answer
+      7. Update routing feedback in Neptune (learning loop)
+      8. Return structured response with routingDecision field
     """
     start_time = time.monotonic()
 
@@ -115,23 +118,40 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
     question_type = req.question_type or classify_question(req.question)
     logger.info("Question type: %s | Question: %s", question_type, req.question[:100])
 
-    # Step 2 – Retrieve from Bedrock KB
     if not KNOWLEDGE_BASE_ID:
         raise ValueError("KNOWLEDGE_BASE_ID environment variable is not set")
 
-    chunks = retrieve_chunks(
-        question=req.question,
-        knowledge_base_id=KNOWLEDGE_BASE_ID,
-        top_k=req.top_k,
-        min_score=req.min_confidence,
+    # Step 2 – Route: pick best retrieval strategy from Neptune routing graph
+    retrieval_config = select_strategy(
+        question_type=question_type,
+        graph_id=NEPTUNE_GRAPH_ID or None,
+    )
+    logger.info(
+        "Routing decision: strategy=%s graph=%s keywords=%s neptune_vecs=%s confidence=%.2f",
+        retrieval_config.strategy,
+        retrieval_config.include_graph,
+        retrieval_config.boost_keywords,
+        retrieval_config.use_neptune_chunks,
+        retrieval_config.strategy_confidence,
     )
 
-    # Step 3 – Dedup
+    # Step 3 – Retrieve with chosen strategy
+    chunks = retrieve_with_strategy(
+        question=req.question,
+        knowledge_base_id=KNOWLEDGE_BASE_ID,
+        config=retrieval_config,
+        top_k=req.top_k,
+        min_score=req.min_confidence,
+        neptune_graph_id=NEPTUNE_GRAPH_ID,
+    )
+
+    # Step 4 – Dedup
     chunks = deduplicate_chunks(chunks)
+    logger.info("Retrieved %d unique chunks via strategy=%s", len(chunks), retrieval_config.strategy)
 
-    logger.info("Retrieved %d unique chunks", len(chunks))
-
-    # Step 4 – Graph expansion
+    # Step 5 – Graph expansion
+    # graph_first and hybrid strategies force graph expansion; others respect the request flag
+    force_graph = retrieval_config.include_graph
     graph_context: dict[str, Any] = {
         "person_summary": {},
         "skill_neighbourhood": [],
@@ -142,7 +162,7 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
         "graph_entities_used": [],
     }
 
-    if req.include_graph_expansion and NEPTUNE_GRAPH_ID:
+    if (req.include_graph_expansion or force_graph) and NEPTUNE_GRAPH_ID:
         try:
             snippet_texts = [c.content for c in chunks]
             graph_context = expand_graph_context(
@@ -157,7 +177,7 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
         except Exception as exc:
             logger.warning("Graph expansion failed (non-fatal): %s", exc)
 
-    # Step 5 – Synthesize
+    # Step 6 – Synthesize
     query_response = synthesize_answer(
         question=req.question,
         chunks=chunks,
@@ -165,13 +185,36 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
         question_type=question_type,
     )
 
+    # Step 7 – Routing feedback (learning loop)
+    if NEPTUNE_GRAPH_ID:
+        try:
+            update_feedback(
+                strategy=retrieval_config.strategy,
+                question_type=question_type,
+                confidence=query_response.confidence,
+                graph_id=NEPTUNE_GRAPH_ID,
+            )
+        except Exception as exc:
+            logger.warning("Routing feedback update failed (non-fatal): %s", exc)
+
     elapsed_ms = int((time.monotonic() - start_time) * 1000)
     logger.info(
-        "Pipeline complete in %dms | confidence=%.2f | model=%s",
+        "Pipeline complete in %dms | confidence=%.2f | strategy=%s | model=%s",
         elapsed_ms,
         query_response.confidence,
+        retrieval_config.strategy,
         query_response.model_id,
     )
+
+    # Attach routing metadata to response
+    query_response.routing_decision = {
+        "strategy": retrieval_config.strategy,
+        "questionType": question_type,
+        "strategyConfidence": retrieval_config.strategy_confidence,
+        "graphExpansionForced": force_graph,
+        "keywordBoostApplied": retrieval_config.boost_keywords,
+        "neptuneVectorsUsed": retrieval_config.use_neptune_chunks,
+    }
 
     result = query_response.to_dict()
     result["latencyMs"] = elapsed_ms
@@ -193,11 +236,21 @@ def lambda_handler(event: dict, context: Any) -> dict:
 
     # ── Health check ──────────────────────────────────────────────────────────
     if method == "GET" and "/health" in path:
+        from graph_expander import get_document_type_distribution
+        doc_type_dist = []
+        if NEPTUNE_GRAPH_ID:
+            try:
+                doc_type_dist = get_document_type_distribution(NEPTUNE_GRAPH_ID)
+            except Exception:
+                pass
         return _response(200, {
             "status": "healthy",
             "knowledgeBaseId": KNOWLEDGE_BASE_ID,
             "neptuneGraphId": NEPTUNE_GRAPH_ID,
             "environment": os.environ.get("ENVIRONMENT", "unknown"),
+            "routingGraph": {
+                "documentTypeDistribution": doc_type_dist,
+            },
         })
 
     # ── POST /query-expertise ─────────────────────────────────────────────────

@@ -217,6 +217,48 @@ def get_person_summary(graph_id: str) -> dict:
 # High-level expansion entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
+def get_routing_strategy(
+    question_type: str,
+    graph_id: str | None = None,
+) -> list[dict]:
+    """
+    Query the routing graph for EFFECTIVE_FOR edge weights associated with
+    the given question_type. Used by the RAGRouter as a data source.
+
+    Returns rows of {strategy, weight, feedback_count}.
+    """
+    gid = graph_id or NEPTUNE_GRAPH_ID
+    if not gid:
+        return []
+
+    query = """
+    MATCH (r:RAGStrategy)-[e:EFFECTIVE_FOR]->(d:DocumentType)
+    WHERE d.question_type = $question_type
+    RETURN r.label AS strategy,
+           e.weight AS weight,
+           coalesce(e.feedback_count, 0) AS feedback_count
+    ORDER BY e.weight DESC
+    """
+    return _run_query(gid, query, {"question_type": question_type})
+
+
+def get_document_type_distribution(graph_id: str | None = None) -> list[dict]:
+    """
+    Summarise how many documents of each type have been ingested.
+    Used to surface routing graph health in the /health endpoint.
+    """
+    gid = graph_id or NEPTUNE_GRAPH_ID
+    if not gid:
+        return []
+
+    query = """
+    MATCH (doc:Document)-[:HAS_TYPE]->(dt:DocumentType)
+    RETURN dt.label AS doc_type, count(doc) AS doc_count
+    ORDER BY doc_count DESC
+    """
+    return _run_query(gid, query)
+
+
 def expand_graph_context(
     retrieved_text_snippets: list[str],
     graph_id: str | None = None,

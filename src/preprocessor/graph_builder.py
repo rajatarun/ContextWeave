@@ -5,10 +5,12 @@ Takes extraction results (expertise signals, metadata) and constructs
 typed graph nodes and edges conforming to the ExpertiseRAG graph schema.
 
 Node types : Person, Repository, Document, Skill, Pattern, Technology,
-             AWSService, ArchitectureStyle, Evidence, Claim
+             AWSService, ArchitectureStyle, Evidence, Claim,
+             DocumentType, ChunkingStrategy, RAGStrategy  (routing)
 Edge types : BUILT, CONTAINS, USES_TECH, USES_AWS_SERVICE,
              DEMONSTRATES_PATTERN, SUPPORTS_CLAIM, INDICATES_SKILL,
-             DEMONSTRATES_SKILL, STRENGTHENS
+             DEMONSTRATES_SKILL, STRENGTHENS,
+             HAS_TYPE, CHUNKED_WITH  (routing)
 """
 from __future__ import annotations
 
@@ -16,7 +18,10 @@ import hashlib
 import re
 from typing import Any
 
-from models import EdgeType, GraphEdge, GraphNode, NodeType
+from models import (
+    EdgeType, GraphEdge, GraphNode, NodeType,
+    DocumentTypeAnalysis,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -224,6 +229,53 @@ class GraphBuilder:
             for aid in aws_ids:
                 self._add_edge(tid, EdgeType.STRENGTHENS, aid, source_file, 0.5)
 
+    # ── Routing metadata ───────────────────────────────────────────────────────
+
+    def add_routing_metadata(
+        self,
+        doc_node_id: str,
+        analysis: DocumentTypeAnalysis,
+    ) -> None:
+        """
+        Attach routing metadata to a document node in the graph.
+
+        Creates:
+          - DocumentType node (upsert)
+          - ChunkingStrategy node (upsert)
+          - Document -[HAS_TYPE]-> DocumentType
+          - Document -[CHUNKED_WITH]-> ChunkingStrategy
+
+        The DocumentType node carries text_stats as properties so the router
+        can refine classifications over time based on observed document shapes.
+        """
+        # DocumentType node
+        dt_id = self._upsert_node(
+            NodeType.DOCUMENT_TYPE,
+            analysis.doc_type,
+            properties={
+                "label": analysis.doc_type,
+                "avg_heading_count": analysis.text_stats.get("heading_count", 0),
+                "avg_code_ratio": analysis.text_stats.get("code_char_ratio", 0.0),
+                "avg_sentence_len": analysis.text_stats.get("avg_sentence_len", 0.0),
+                "doc_count": 1,
+            },
+            confidence=analysis.confidence,
+        )
+
+        # ChunkingStrategy node
+        cs_id = self._upsert_node(
+            NodeType.CHUNKING_STRATEGY,
+            analysis.chunking_strategy,
+            properties={"label": analysis.chunking_strategy},
+            confidence=1.0,
+        )
+
+        # Document → DocumentType
+        self._add_edge(doc_node_id, EdgeType.HAS_TYPE, dt_id, weight=analysis.confidence)
+
+        # Document → ChunkingStrategy
+        self._add_edge(doc_node_id, EdgeType.CHUNKED_WITH, cs_id, weight=1.0)
+
     def build(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Return (nodes_list, edges_list) as plain dicts."""
         nodes = [n.to_dict() for n in self._nodes.values()]
@@ -239,29 +291,45 @@ def build_graph_from_extractions(
     extractions: list[dict[str, Any]],
     person_name: str = "Developer",
     repo_prefix: str = "",
+    routing_analyses: dict[str, "DocumentTypeAnalysis"] | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """
     Build a complete graph from multiple extraction results.
 
     Args:
-        extractions: List of dicts, each with keys:
-                     source_file, file_type, expertise_signals, extracted_text, weight
-        person_name: Owner of the repository/content
-        repo_prefix: S3 key prefix / repo identifier
+        extractions:       List of dicts with keys:
+                           source_file, file_type, expertise_signals, extracted_text, weight
+        person_name:       Owner of the repository/content
+        repo_prefix:       S3 key prefix / repo identifier
+        routing_analyses:  Optional dict mapping source_file → DocumentTypeAnalysis
+                           from routing_analyzer. When provided, routing metadata
+                           (DocumentType, ChunkingStrategy nodes + edges) is added.
 
     Returns:
         (nodes, edges) as lists of plain dicts
     """
+    import re as _re
+
+    def _doc_node_id(source_file: str) -> str:
+        normalised = _re.sub(r"[^a-z0-9]", "_", source_file.lower()).strip("_")
+        return f"document_{normalised}"
+
     repo_id = _stable_id("repository", repo_prefix or "default_repo")
     builder = GraphBuilder(person_name=person_name, repo_id=repo_id)
 
     for ext in extractions:
+        source_file = ext.get("source_file", "")
         builder.add_extraction(
-            source_file=ext.get("source_file", ""),
+            source_file=source_file,
             file_type=ext.get("file_type", "text"),
             expertise_signals=ext.get("expertise_signals", []),
             extracted_text=ext.get("extracted_text", ""),
             weight=float(ext.get("weight", 0.5)),
         )
+
+        # Attach routing metadata if analysis was provided for this file
+        if routing_analyses and source_file in routing_analyses:
+            doc_nid = _doc_node_id(source_file)
+            builder.add_routing_metadata(doc_nid, routing_analyses[source_file])
 
     return builder.build()
