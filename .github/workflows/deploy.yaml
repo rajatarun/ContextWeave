@@ -99,7 +99,6 @@ jobs:
       - name: SAM deploy – prod
         run: |
           sam deploy \
-            --template ${{ env.SAM_TEMPLATE }} \
             --stack-name ${{ env.STACK_NAME_PROD }} \
             --region ${{ env.AWS_REGION }} \
             --config-env prod \
