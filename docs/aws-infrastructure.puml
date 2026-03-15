@@ -5,21 +5,20 @@
 ' Uses AWS PlantUML sprites (stdlib)
 ' ─────────────────────────────────────────────────────────────────────────────
 
-!define AWSPuml https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/v18.0/dist
-!include AWSPuml/AWSCommon.puml
-!include AWSPuml/AWSSimplified.puml
-!include AWSPuml/Compute/Lambda.puml
-!include AWSPuml/Storage/SimpleStorageService.puml
-!include AWSPuml/Database/Neptune.puml
-!include AWSPuml/MachineLearning/Bedrock.puml
-!include AWSPuml/ApplicationIntegration/APIGateway.puml
-!include AWSPuml/ApplicationIntegration/StepFunctions.puml
-!include AWSPuml/ApplicationIntegration/EventBridge.puml
-!include AWSPuml/ManagementGovernance/CloudWatch.puml
-!include AWSPuml/ManagementGovernance/CloudFormation.puml
-!include AWSPuml/SecurityIdentityCompliance/IAMRole.puml
-!include AWSPuml/SecurityIdentityCompliance/KeyManagementService.puml
-!include AWSPuml/SecurityIdentityCompliance/SecurityTokenService.puml
+!include ../assets/plantuml/awslib/AWSCommon.puml
+!include ../assets/plantuml/awslib/AWSSimplified.puml
+!include ../assets/plantuml/awslib/Compute/Lambda.puml
+!include ../assets/plantuml/awslib/Storage/SimpleStorageService.puml
+!include ../assets/plantuml/awslib/Database/Neptune.puml
+!include ../assets/plantuml/awslib/MachineLearning/Bedrock.puml
+!include ../assets/plantuml/awslib/ApplicationIntegration/APIGateway.puml
+!include ../assets/plantuml/awslib/ApplicationIntegration/StepFunctions.puml
+!include ../assets/plantuml/awslib/ApplicationIntegration/EventBridge.puml
+!include ../assets/plantuml/awslib/ManagementGovernance/CloudWatch.puml
+!include ../assets/plantuml/awslib/ManagementGovernance/CloudFormation.puml
+!include ../assets/plantuml/awslib/SecurityIdentityCompliance/IdentityAccessManagementRole.puml
+!include ../assets/plantuml/awslib/SecurityIdentityCompliance/KeyManagementService.puml
+!include ../assets/plantuml/awslib/SecurityIdentityCompliance/IdentityAccessManagementAWSSTS.puml
 
 ' ─────────────────────────────────────────────────────────────────────────────
 title ExpertiseRAG – AWS Infrastructure\n(Account: 239571291755 | Region: us-east-1)
@@ -57,14 +56,14 @@ rectangle "CI/CD – GitHub Actions" #E8F4F8 {
 ' SECURITY LAYER
 ' ─────────────────────────────────────────────────────────────────────────────
 rectangle "Security & Identity" #FFF8E1 {
-    IAMRole(deployRole, "teamweave-github-actions-sam-deployer", "OIDC federated role\nAssumed by GitHub Actions\nfor SAM deploy + S3 upload")
-    SecurityTokenService(sts, "AWS STS", "AssumeRoleWithWebIdentity\nOIDC token → temporary credentials")
+    IdentityAccessManagementRole(deployRole, "teamweave-github-actions-sam-deployer", "OIDC federated role\nAssumed by GitHub Actions\nfor SAM deploy + S3 upload")
+    IdentityAccessManagementAWSSTS(sts, "AWS STS", "AssumeRoleWithWebIdentity\nOIDC token → temporary credentials")
     KeyManagementService(kms, "KMS CMK\nalias/expertise-rag-{env}", "Customer-managed key\nAuto-rotation enabled\nSSE for all S3 objects")
-    IAMRole(preprocessorRole, "expertise-rag-preprocessor-{env}", "S3 GetObject(raw/*)\nS3 PutObject(derived/*)\nKMS Decrypt+GenerateDataKey")
-    IAMRole(queryRole, "expertise-rag-query-api-{env}", "Bedrock Retrieve+InvokeModel\nNeptune ReadDataViaQuery\nS3 GetObject(derived/*)")
-    IAMRole(ingestionRole, "expertise-rag-ingestion-trigger-{env}", "Bedrock StartIngestionJob\nGetIngestionJob\nS3 ListBucket")
-    IAMRole(bedrockKBRole, "expertise-rag-bedrock-kb-{env}", "S3 GetObject+ListBucket\nNeptune Write+Read\nBedrock InvokeModel(Titan)")
-    IAMRole(sfnRole, "expertise-rag-sfn-{env}", "Lambda InvokeFunction\nCloudWatch Logs\nX-Ray Tracing")
+    IdentityAccessManagementRole(preprocessorRole, "expertise-rag-preprocessor-{env}", "S3 GetObject(raw/*)\nS3 PutObject(derived/*)\nKMS Decrypt+GenerateDataKey")
+    IdentityAccessManagementRole(queryRole, "expertise-rag-query-api-{env}", "Bedrock Retrieve+InvokeModel\nNeptune ReadDataViaQuery\nS3 GetObject(derived/*)")
+    IdentityAccessManagementRole(ingestionRole, "expertise-rag-ingestion-trigger-{env}", "Bedrock StartIngestionJob\nGetIngestionJob\nS3 ListBucket")
+    IdentityAccessManagementRole(bedrockKBRole, "expertise-rag-bedrock-kb-{env}", "S3 GetObject+ListBucket\nNeptune Write+Read\nBedrock InvokeModel(Titan)")
+    IdentityAccessManagementRole(sfnRole, "expertise-rag-sfn-{env}", "Lambda InvokeFunction\nCloudWatch Logs\nX-Ray Tracing")
 }
 
 ' ─────────────────────────────────────────────────────────────────────────────
