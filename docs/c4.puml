@@ -5,9 +5,8 @@
 ' Levels: System Context (L1) and Container (L2)
 ' ─────────────────────────────────────────────────────────────────────────────
 
-!define C4Puml https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master
-!include C4Puml/C4_Context.puml
-!include C4Puml/C4_Container.puml
+!include ../assets/plantuml/C4-PlantUML/C4_Context.puml
+!include ../assets/plantuml/C4-PlantUML/C4_Container.puml
 
 ' ─────────────────────────────────────────────────────────────────────────────
 ' LEVEL 1 – System Context
@@ -43,8 +42,7 @@ Rel(github, expertiseRAG, "OIDC token → assume deploy role", "OIDC / STS")
 
 @startuml ExpertiseRAG-C4-Containers
 
-!define C4Puml https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master
-!include C4Puml/C4_Container.puml
+!include ../assets/plantuml/C4-PlantUML/C4_Container.puml
 
 title ExpertiseRAG – Container Diagram (C4 Level 2)
 
