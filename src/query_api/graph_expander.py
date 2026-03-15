@@ -94,13 +94,11 @@ def extract_entity_ids_from_chunks(chunks_text: list[str]) -> list[str]:
     combined = " ".join(chunks_text)
 
     # Find technology / service names using same patterns as extractor
-    from shared.models import SOURCE_WEIGHTS  # reuse signal weights
-    import sys
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from models import SOURCE_WEIGHTS  # reuse signal weights
 
     # Import extractors for pattern matching
     try:
-        from preprocessor.extractors import _find_aws_services, _find_technologies, _find_patterns
+        from extractors import _find_aws_services, _find_technologies, _find_patterns
         entities = (
             [_slug("aws_service_" + s) for s in _find_aws_services(combined)]
             + [_slug("technology_" + t) for t in _find_technologies(combined)]

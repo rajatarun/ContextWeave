@@ -25,9 +25,7 @@ from typing import Any
 import boto3
 from botocore.exceptions import ClientError
 
-import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from shared.models import QueryResponse, RetrievedChunk
+from models import QueryResponse, RetrievedChunk
 
 logger = logging.getLogger(__name__)
 

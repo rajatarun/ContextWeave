@@ -13,9 +13,7 @@ from typing import Any
 import boto3
 from botocore.exceptions import ClientError
 
-import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from shared.models import RetrievedChunk, get_source_weight
+from models import RetrievedChunk, get_source_weight
 
 logger = logging.getLogger(__name__)
 
