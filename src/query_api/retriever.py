@@ -62,7 +62,7 @@ def retrieve_chunks(
             retrievalConfiguration={
                 "vectorSearchConfiguration": {
                     "numberOfResults": top_k,
-                    "overrideSearchType": "HYBRID",  # semantic + keyword
+                    "overrideSearchType": "SEMANTIC",
                 }
             },
         )
