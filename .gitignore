@@ -1,0 +1,36 @@
+# SAM build artifacts – never commit these; stale artifacts break CI/CD
+.aws-sam/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local env overrides
+*.local
