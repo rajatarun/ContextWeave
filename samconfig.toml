@@ -33,7 +33,6 @@ parameter_overrides  = [
     "NeptuneProvisionedMemory=16",
     "LogRetentionDays=30",
     "EnableStepFunctions=true",
-    "EnableNeptune=false",
     # TODO: Uncomment and set after choosing generation model:
     # "GenerationModelId=anthropic.claude-3-5-sonnet-20241022-v2:0",
 ]
@@ -59,7 +58,6 @@ parameter_overrides  = [
     "NeptuneProvisionedMemory=16",
     "LogRetentionDays=60",
     "EnableStepFunctions=true",
-    "EnableNeptune=false",
 ]
 tags = [
     "Project=ExpertiseRAG",
@@ -84,7 +82,6 @@ parameter_overrides  = [
     "NeptuneProvisionedMemory=16",
     "LogRetentionDays=365",
     "EnableStepFunctions=true",
-    "EnableNeptune=true",
 ]
 tags = [
     "Project=ExpertiseRAG",
