@@ -55,7 +55,7 @@ capabilities         = "CAPABILITY_NAMED_IAM"
 parameter_overrides  = [
     "Environment=staging",
     "NeptuneVectorDimension=1024",
-    "NeptuneProvisionedMemory=32",
+    "NeptuneProvisionedMemory=16",
     "LogRetentionDays=60",
     "EnableStepFunctions=true",
 ]
@@ -79,7 +79,7 @@ disable_rollback     = false
 parameter_overrides  = [
     "Environment=prod",
     "NeptuneVectorDimension=1024",
-    "NeptuneProvisionedMemory=64",
+    "NeptuneProvisionedMemory=16",
     "LogRetentionDays=365",
     "EnableStepFunctions=true",
 ]

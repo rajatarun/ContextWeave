@@ -202,7 +202,7 @@ Resources:
       VectorSearchConfiguration:
         VectorSearchDimension: !Ref NeptuneVectorDimension
       DeletionProtection: !If [IsProduction, true, false]
-      ReplicaCount: !If [IsProduction, 1, 0]
+      ReplicaCount: 0
       Tags:
         - Key: Project
           Value: ExpertiseRAG
