@@ -16,7 +16,7 @@ import hashlib
 import re
 from typing import Any
 
-from shared.models import EdgeType, GraphEdge, GraphNode, NodeType
+from models import EdgeType, GraphEdge, GraphNode, NodeType
 
 
 # ─────────────────────────────────────────────────────────────────────────────
