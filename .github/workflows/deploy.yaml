@@ -109,7 +109,7 @@ jobs:
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameter-overrides \
               Environment=prod \
-              NeptuneProvisionedMemory=64 \
+              NeptuneProvisionedMemory=16 \
               LogRetentionDays=365 \
             --tags \
               Project=ExpertiseRAG \
