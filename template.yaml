@@ -564,6 +564,7 @@ Resources:
                 Action:
                   - neptune-graph:WriteDataViaQuery
                   - neptune-graph:ReadDataViaQuery
+                  - neptune-graph:DeleteDataViaQuery
                   - neptune-graph:GetGraph
                 Resource: !GetAtt NeptuneAnalyticsGraph.GraphArn
         - PolicyName: BedrockEmbeddings
