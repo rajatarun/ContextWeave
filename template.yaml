@@ -30,12 +30,12 @@ Parameters:
 
   GenerationModelId:
     Type: String
-    Default: us.anthropic.claude-3-7-sonnet-20250219-v1:0
+    Default: us.amazon.nova-pro-v1:0
     Description: >
       Bedrock inference profile ID used by the Query API for answer synthesis.
       Must use cross-region inference profile (us. prefix) for on-demand throughput.
-      Examples: us.anthropic.claude-3-7-sonnet-20250219-v1:0 (best quality),
-                us.anthropic.claude-3-5-haiku-20241022-v1:0 (low latency / cost)
+      Examples: us.amazon.nova-pro-v1:0 (AWS-native, no Marketplace required),
+                us.anthropic.claude-3-7-sonnet-20250219-v1:0 (requires Marketplace subscription)
 
   LogRetentionDays:
     Type: Number
@@ -447,8 +447,8 @@ Resources:
                   - bedrock:InvokeModel
                   - bedrock:InvokeModelWithResponseStream
                 Resource:
-                  - arn:aws:bedrock:*::foundation-model/anthropic.claude-3-7-sonnet-20250219-v1:0
-                  - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.anthropic.claude-3-7-sonnet-20250219-v1:0
+                  - arn:aws:bedrock:*::foundation-model/amazon.nova-pro-v1:0
+                  - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.amazon.nova-pro-v1:0
         - PolicyName: NeptuneAnalyticsQuery
           PolicyDocument:
             Version: '2012-10-17'
