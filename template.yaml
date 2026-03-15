@@ -40,12 +40,22 @@ Parameters:
     AllowedValues: ['true', 'false']
     Description: Deploy Step Functions ingestion orchestration state machine
 
+  EnableNeptune:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >
+      Deploy Neptune Analytics graph and Bedrock Knowledge Base.
+      Set to 'false' for dev/staging to avoid the ~$329/month minimum cost.
+      When false, query-api falls back to keyword search only (no GraphRAG).
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Conditions
 # ─────────────────────────────────────────────────────────────────────────────
 Conditions:
   IsProduction: !Equals [!Ref Environment, prod]
   DeployStepFunctions: !Equals [!Ref EnableStepFunctions, 'true']
+  DeployNeptune: !Equals [!Ref EnableNeptune, 'true']
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Globals
@@ -62,9 +72,9 @@ Globals:
         LOG_LEVEL: INFO
         ENVIRONMENT: !Ref Environment
         ARTIFACTS_BUCKET: !Sub expertise-rag-artifacts-${AWS::AccountId}-${Environment}
-        NEPTUNE_GRAPH_ID: !GetAtt NeptuneAnalyticsGraph.GraphId
-        KNOWLEDGE_BASE_ID: !Ref BedrockKnowledgeBase
-        DATA_SOURCE_ID: !GetAtt BedrockDataSource.DataSourceId
+        NEPTUNE_GRAPH_ID: !If [DeployNeptune, !GetAtt NeptuneAnalyticsGraph.GraphId, ""]
+        KNOWLEDGE_BASE_ID: !If [DeployNeptune, !Ref BedrockKnowledgeBase, ""]
+        DATA_SOURCE_ID: !If [DeployNeptune, !GetAtt BedrockDataSource.DataSourceId, ""]
     Tags:
       Project: ExpertiseRAG
       Environment: !Ref Environment
@@ -196,6 +206,7 @@ Resources:
   # ───────────────────────────────────────────
   NeptuneAnalyticsGraph:
     Type: AWS::NeptuneGraph::Graph
+    Condition: DeployNeptune
     Properties:
       GraphName: !Sub expertise-rag-${Environment}
       ProvisionedMemory: !Ref NeptuneProvisionedMemory
@@ -214,6 +225,7 @@ Resources:
   # ───────────────────────────────────────────
   BedrockKnowledgeBase:
     Type: AWS::Bedrock::KnowledgeBase
+    Condition: DeployNeptune
     Properties:
       Name: !Sub expertise-rag-kb-${Environment}
       Description: >
@@ -244,6 +256,7 @@ Resources:
   # ───────────────────────────────────────────
   BedrockDataSource:
     Type: AWS::Bedrock::DataSource
+    Condition: DeployNeptune
     Properties:
       KnowledgeBaseId: !Ref BedrockKnowledgeBase
       Name: !Sub expertise-rag-s3-source-${Environment}
@@ -431,7 +444,10 @@ Resources:
                 Action:
                   - bedrock:Retrieve
                   - bedrock:RetrieveAndGenerate
-                Resource: !GetAtt BedrockKnowledgeBase.KnowledgeBaseArn
+                Resource: !If
+                  - DeployNeptune
+                  - !GetAtt BedrockKnowledgeBase.KnowledgeBaseArn
+                  - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/placeholder
               - Sid: BedrockInvokeModel
                 Effect: Allow
                 Action:
@@ -448,7 +464,10 @@ Resources:
                 Action:
                   - neptune-graph:ReadDataViaQuery
                   - neptune-graph:GetGraph
-                Resource: !GetAtt NeptuneAnalyticsGraph.GraphArn
+                Resource: !If
+                  - DeployNeptune
+                  - !GetAtt NeptuneAnalyticsGraph.GraphArn
+                  - !Sub arn:aws:neptune-graph:${AWS::Region}:${AWS::AccountId}:graph/placeholder
         - PolicyName: S3ReadDerived
           PolicyDocument:
             Version: '2012-10-17'
@@ -498,7 +517,10 @@ Resources:
                   - bedrock:StartIngestionJob
                   - bedrock:GetIngestionJob
                   - bedrock:ListIngestionJobs
-                Resource: !GetAtt BedrockKnowledgeBase.KnowledgeBaseArn
+                Resource: !If
+                  - DeployNeptune
+                  - !GetAtt BedrockKnowledgeBase.KnowledgeBaseArn
+                  - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/placeholder
         - PolicyName: S3ListRead
           PolicyDocument:
             Version: '2012-10-17'
@@ -558,7 +580,10 @@ Resources:
                   - neptune-graph:WriteDataViaQuery
                   - neptune-graph:ReadDataViaQuery
                   - neptune-graph:GetGraph
-                Resource: !GetAtt NeptuneAnalyticsGraph.GraphArn
+                Resource: !If
+                  - DeployNeptune
+                  - !GetAtt NeptuneAnalyticsGraph.GraphArn
+                  - !Sub arn:aws:neptune-graph:${AWS::Region}:${AWS::AccountId}:graph/placeholder
         - PolicyName: BedrockEmbeddings
           PolicyDocument:
             Version: '2012-10-17'
@@ -724,6 +749,7 @@ Resources:
   # ───────────────────────────────────────────
   PostDeploymentIngestionJob:
     Type: AWS::CloudFormation::CustomResource
+    Condition: DeployNeptune
     Properties:
       ServiceToken: !GetAtt IngestionTriggerFunction.Arn
       KnowledgeBaseId: !Ref BedrockKnowledgeBase
@@ -770,6 +796,7 @@ Resources:
   IngestionStateMachine:
     Type: AWS::Serverless::StateMachine
     Condition: DeployStepFunctions
+    # Note: Step Functions are only useful when Neptune/KB are deployed
     Properties:
       Name: !Sub expertise-rag-ingestion-${Environment}
       Type: STANDARD
@@ -891,23 +918,27 @@ Outputs:
     Value: !Sub https://${ExpertiseAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/query-expertise
 
   NeptuneGraphIdentifier:
-    Description: Neptune Analytics graph identifier
+    Description: Neptune Analytics graph identifier (empty when EnableNeptune=false)
+    Condition: DeployNeptune
     Value: !GetAtt NeptuneAnalyticsGraph.GraphId
     Export:
       Name: !Sub ${AWS::StackName}-NeptuneGraphId
 
   NeptuneGraphArn:
-    Description: Neptune Analytics graph ARN
+    Description: Neptune Analytics graph ARN (empty when EnableNeptune=false)
+    Condition: DeployNeptune
     Value: !GetAtt NeptuneAnalyticsGraph.GraphArn
 
   KnowledgeBaseId:
-    Description: Bedrock Knowledge Base ID
+    Description: Bedrock Knowledge Base ID (empty when EnableNeptune=false)
+    Condition: DeployNeptune
     Value: !Ref BedrockKnowledgeBase
     Export:
       Name: !Sub ${AWS::StackName}-KnowledgeBaseId
 
   DataSourceId:
-    Description: Bedrock Data Source ID
+    Description: Bedrock Data Source ID (empty when EnableNeptune=false)
+    Condition: DeployNeptune
     Value: !GetAtt BedrockDataSource.DataSourceId
     Export:
       Name: !Sub ${AWS::StackName}-DataSourceId
