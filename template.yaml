@@ -653,8 +653,8 @@ Resources:
         Reads raw repo uploads from S3, extracts text from Markdown/YAML,
         transforms PlantUML to architecture summaries, and emits derived
         JSON (expertise signals, graph entities, graph edges) back to S3.
-      CodeUri: src/
-      Handler: preprocessor.handler.lambda_handler
+      CodeUri: src/preprocessor/
+      Handler: handler.lambda_handler
       Role: !GetAtt PreprocessorRole.Arn
       Timeout: 600
       MemorySize: 1024

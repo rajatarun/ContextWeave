@@ -30,12 +30,9 @@ from urllib.parse import unquote_plus
 import boto3
 from botocore.exceptions import ClientError
 
-# Allow imports from sibling 'shared' package when deployed in a flat Lambda zip
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from preprocessor.extractors import extract
-from preprocessor.graph_builder import build_graph_from_extractions
-from shared.models import DerivedArtifact, get_source_weight
+from extractors import extract
+from graph_builder import build_graph_from_extractions
+from models import DerivedArtifact, get_source_weight
 
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
