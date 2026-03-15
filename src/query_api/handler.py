@@ -31,20 +31,16 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sys
 import time
 import traceback
 from typing import Any
 
 import boto3
 
-# Allow imports from sibling packages in flat Lambda zip layout
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from query_api.graph_expander import expand_graph_context
-from query_api.retriever import deduplicate_chunks, retrieve_chunks
-from query_api.synthesizer import classify_question, synthesize_answer
-from shared.models import QueryRequest
+from graph_expander import expand_graph_context
+from retriever import deduplicate_chunks, retrieve_chunks
+from synthesizer import classify_question, synthesize_answer
+from models import QueryRequest
 
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
