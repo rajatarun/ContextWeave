@@ -702,6 +702,10 @@ Resources:
       Environment:
         Variables:
           GENERATION_MODEL_ID: !Ref GenerationModelId
+          KNOWLEDGE_BASE_ID: !Ref BedrockKnowledgeBase
+          NEPTUNE_GRAPH_ID: !GetAtt NeptuneAnalyticsGraph.GraphId
+          ENVIRONMENT: !Ref Environment
+          LOG_LEVEL: INFO
       Events:
         QueryExpertise:
           Type: HttpApi
