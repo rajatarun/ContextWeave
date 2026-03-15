@@ -10,16 +10,6 @@ on:
       - main
       - master
   workflow_dispatch:
-    inputs:
-      environment:
-        description: Target environment
-        required: true
-        default: dev
-        type: choice
-        options:
-          - dev
-          - staging
-          - prod
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Permissions required for OIDC token exchange with AWS
@@ -36,8 +26,6 @@ env:
   AWS_ACCOUNT_ID: "239571291755"
   DEPLOY_ROLE_ARN: arn:aws:iam::239571291755:role/teamweave-github-actions-sam-deployer
   SAM_TEMPLATE: template.yaml
-  STACK_NAME_DEV: expertise-rag-dev
-  STACK_NAME_STAGING: expertise-rag-staging
   STACK_NAME_PROD: expertise-rag-prod
 
 jobs:
@@ -77,207 +65,13 @@ jobs:
         run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel --cached
 
   # ───────────────────────────────────────────────────────────────────────────
-  # Job 3: deploy-dev – deploy to dev on push to main/master
-  # ───────────────────────────────────────────────────────────────────────────
-  deploy-dev:
-    name: Deploy – dev
-    runs-on: ubuntu-latest
-    needs: build
-    if: |
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev')
-    environment:
-      name: dev
-
-    outputs:
-      artifacts_bucket: ${{ steps.stack-outputs.outputs.artifacts_bucket }}
-      api_endpoint: ${{ steps.stack-outputs.outputs.api_endpoint }}
-
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-
-      - name: Configure AWS (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Setup SAM
-        uses: aws-actions/setup-sam@v2
-
-      - name: SAM build
-        run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel --cached
-
-      - name: SAM deploy – dev
-        run: |
-          sam deploy \
-            --template ${{ env.SAM_TEMPLATE }} \
-            --stack-name ${{ env.STACK_NAME_DEV }} \
-            --region ${{ env.AWS_REGION }} \
-            --config-env default \
-            --no-confirm-changeset \
-            --no-fail-on-empty-changeset \
-            --resolve-s3 \
-            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-            --parameter-overrides \
-              Environment=dev \
-              NeptuneProvisionedMemory=16 \
-              LogRetentionDays=30 \
-            --tags \
-              Project=ExpertiseRAG \
-              Environment=dev \
-              ManagedBy=GitHubActions \
-              GitSha=${{ github.sha }}
-
-      - name: Capture stack outputs
-        id: stack-outputs
-        run: |
-          BUCKET=$(aws cloudformation describe-stacks \
-            --stack-name ${{ env.STACK_NAME_DEV }} \
-            --region ${{ env.AWS_REGION }} \
-            --query "Stacks[0].Outputs[?OutputKey=='ArtifactsBucketName'].OutputValue" \
-            --output text)
-          API=$(aws cloudformation describe-stacks \
-            --stack-name ${{ env.STACK_NAME_DEV }} \
-            --region ${{ env.AWS_REGION }} \
-            --query "Stacks[0].Outputs[?OutputKey=='APIEndpoint'].OutputValue" \
-            --output text)
-          echo "artifacts_bucket=$BUCKET" >> "$GITHUB_OUTPUT"
-          echo "api_endpoint=$API" >> "$GITHUB_OUTPUT"
-          echo "### Deploy Outputs (dev)" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Artifacts bucket**: \`$BUCKET\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **API endpoint**: $API" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Push repo signals and docs to S3
-        run: |
-          BUCKET="${{ steps.stack-outputs.outputs.artifacts_bucket }}"
-          REPO="contextweave"
-          PREFIX="raw/${REPO}"
-
-          echo "Uploading repo signals and documentation to s3://${BUCKET}/${PREFIX}/"
-
-          # repo-signals.yaml – structured expertise signals (highest authority)
-          aws s3 cp repo-signals.yaml \
-            "s3://${BUCKET}/${PREFIX}/repo-signals.yaml" \
-            --region ${{ env.AWS_REGION }} \
-            --metadata "source=github-actions,sha=${{ github.sha }},env=dev"
-
-          # CLAUDE.md – authoritative project context
-          aws s3 cp CLAUDE.md \
-            "s3://${BUCKET}/${PREFIX}/CLAUDE.md" \
-            --region ${{ env.AWS_REGION }} \
-            --metadata "source=github-actions,sha=${{ github.sha }},env=dev"
-
-          # Architecture docs
-          aws s3 cp docs/architecture.md \
-            "s3://${BUCKET}/${PREFIX}/architecture.md" \
-            --region ${{ env.AWS_REGION }} \
-            --metadata "source=github-actions,sha=${{ github.sha }},env=dev"
-
-          # PlantUML diagrams
-          for puml in docs/*.puml; do
-            [ -f "$puml" ] || continue
-            filename=$(basename "$puml")
-            aws s3 cp "$puml" \
-              "s3://${BUCKET}/${PREFIX}/${filename}" \
-              --region ${{ env.AWS_REGION }} \
-              --metadata "source=github-actions,sha=${{ github.sha }},env=dev"
-          done
-
-          echo "Upload complete."
-
-  # ───────────────────────────────────────────────────────────────────────────
-  # Job 4: deploy-staging – manual trigger only
-  # ───────────────────────────────────────────────────────────────────────────
-  deploy-staging:
-    name: Deploy – staging
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging'
-    environment:
-      name: staging
-
-    outputs:
-      artifacts_bucket: ${{ steps.stack-outputs.outputs.artifacts_bucket }}
-      api_endpoint: ${{ steps.stack-outputs.outputs.api_endpoint }}
-
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-
-      - name: Configure AWS (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          role-session-name: GitHubActions-Deploy-staging-${{ github.run_id }}
-
-      - name: Setup SAM
-        uses: aws-actions/setup-sam@v2
-
-      - name: SAM build
-        run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel --cached
-
-      - name: SAM deploy – staging
-        run: |
-          sam deploy \
-            --template ${{ env.SAM_TEMPLATE }} \
-            --stack-name ${{ env.STACK_NAME_STAGING }} \
-            --region ${{ env.AWS_REGION }} \
-            --config-env staging \
-            --no-confirm-changeset \
-            --no-fail-on-empty-changeset \
-            --resolve-s3 \
-            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-            --parameter-overrides \
-              Environment=staging \
-              NeptuneProvisionedMemory=32 \
-              LogRetentionDays=60 \
-            --tags \
-              Project=ExpertiseRAG \
-              Environment=staging \
-              ManagedBy=GitHubActions \
-              GitSha=${{ github.sha }}
-
-      - name: Capture stack outputs
-        id: stack-outputs
-        run: |
-          BUCKET=$(aws cloudformation describe-stacks \
-            --stack-name ${{ env.STACK_NAME_STAGING }} \
-            --region ${{ env.AWS_REGION }} \
-            --query "Stacks[0].Outputs[?OutputKey=='ArtifactsBucketName'].OutputValue" \
-            --output text)
-          API=$(aws cloudformation describe-stacks \
-            --stack-name ${{ env.STACK_NAME_STAGING }} \
-            --region ${{ env.AWS_REGION }} \
-            --query "Stacks[0].Outputs[?OutputKey=='APIEndpoint'].OutputValue" \
-            --output text)
-          echo "artifacts_bucket=$BUCKET" >> "$GITHUB_OUTPUT"
-          echo "api_endpoint=$API" >> "$GITHUB_OUTPUT"
-
-      - name: Push repo signals and docs to S3
-        run: |
-          BUCKET="${{ steps.stack-outputs.outputs.artifacts_bucket }}"
-          REPO="contextweave"
-          PREFIX="raw/${REPO}"
-
-          aws s3 cp repo-signals.yaml "s3://${BUCKET}/${PREFIX}/repo-signals.yaml" --region ${{ env.AWS_REGION }}
-          aws s3 cp CLAUDE.md "s3://${BUCKET}/${PREFIX}/CLAUDE.md" --region ${{ env.AWS_REGION }}
-          aws s3 cp docs/architecture.md "s3://${BUCKET}/${PREFIX}/architecture.md" --region ${{ env.AWS_REGION }}
-          for puml in docs/*.puml; do
-            [ -f "$puml" ] || continue
-            aws s3 cp "$puml" "s3://${BUCKET}/${PREFIX}/$(basename $puml)" --region ${{ env.AWS_REGION }}
-          done
-
-  # ───────────────────────────────────────────────────────────────────────────
-  # Job 5: deploy-prod – manual trigger only, requires environment approval
+  # Job 3: deploy-prod – runs on push to main/master and workflow_dispatch
   # ───────────────────────────────────────────────────────────────────────────
   deploy-prod:
     name: Deploy – prod
     runs-on: ubuntu-latest
     needs: build
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     environment:
       name: prod   # Requires manual approval configured in GitHub repo settings
 
@@ -339,6 +133,9 @@ jobs:
             --output text)
           echo "artifacts_bucket=$BUCKET" >> "$GITHUB_OUTPUT"
           echo "api_endpoint=$API" >> "$GITHUB_OUTPUT"
+          echo "### Deploy Outputs (prod)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Artifacts bucket**: \`$BUCKET\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **API endpoint**: $API" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Push repo signals and docs to S3
         run: |
@@ -346,10 +143,34 @@ jobs:
           REPO="contextweave"
           PREFIX="raw/${REPO}"
 
-          aws s3 cp repo-signals.yaml "s3://${BUCKET}/${PREFIX}/repo-signals.yaml" --region ${{ env.AWS_REGION }}
-          aws s3 cp CLAUDE.md "s3://${BUCKET}/${PREFIX}/CLAUDE.md" --region ${{ env.AWS_REGION }}
-          aws s3 cp docs/architecture.md "s3://${BUCKET}/${PREFIX}/architecture.md" --region ${{ env.AWS_REGION }}
+          echo "Uploading repo signals and documentation to s3://${BUCKET}/${PREFIX}/"
+
+          # repo-signals.yaml – structured expertise signals (highest authority)
+          aws s3 cp repo-signals.yaml \
+            "s3://${BUCKET}/${PREFIX}/repo-signals.yaml" \
+            --region ${{ env.AWS_REGION }} \
+            --metadata "source=github-actions,sha=${{ github.sha }},env=prod"
+
+          # CLAUDE.md – authoritative project context
+          aws s3 cp CLAUDE.md \
+            "s3://${BUCKET}/${PREFIX}/CLAUDE.md" \
+            --region ${{ env.AWS_REGION }} \
+            --metadata "source=github-actions,sha=${{ github.sha }},env=prod"
+
+          # Architecture docs
+          aws s3 cp docs/architecture.md \
+            "s3://${BUCKET}/${PREFIX}/architecture.md" \
+            --region ${{ env.AWS_REGION }} \
+            --metadata "source=github-actions,sha=${{ github.sha }},env=prod"
+
+          # PlantUML diagrams
           for puml in docs/*.puml; do
             [ -f "$puml" ] || continue
-            aws s3 cp "$puml" "s3://${BUCKET}/${PREFIX}/$(basename $puml)" --region ${{ env.AWS_REGION }}
+            filename=$(basename "$puml")
+            aws s3 cp "$puml" \
+              "s3://${BUCKET}/${PREFIX}/${filename}" \
+              --region ${{ env.AWS_REGION }} \
+              --metadata "source=github-actions,sha=${{ github.sha }},env=prod"
           done
+
+          echo "Upload complete."
