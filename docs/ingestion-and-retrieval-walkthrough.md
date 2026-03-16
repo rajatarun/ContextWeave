@@ -52,11 +52,12 @@ carry weight 1.0; resume carries weight 0.3.
 
 ## Part 1 – Ingestion
 
-Ingestion transforms the raw file into three things:
+Ingestion transforms the raw file into four things:
 
 1. **Extracted text** — clean prose ingested into Bedrock Knowledge Base
 2. **Graph entities and edges** — nodes and relationships written to Neptune Analytics
-3. **Expertise signals** — structured skill/service/pattern observations
+3. **Routing metadata** — DocumentType and ChunkingStrategy nodes written to Neptune
+4. **Expertise signals** — structured skill/service/pattern observations
 
 ### Step 1 — Upload to S3
 
@@ -146,20 +147,86 @@ becomes an `ExpertiseSignal` with category `aws_service`.
 
 ---
 
+### Step 3.5 — Routing analyzer classifies the document ★ NEW
+
+**Before** the graph is built, `routing_analyzer.analyze_document()` runs
+text-structural analysis on the extracted content to classify the document
+type and recommend the best chunking strategy.
+
+```python
+# src/preprocessor/handler.py (called after extract_markdown)
+analysis = analyze_document(
+    text=extracted_text,
+    filename="architecture.md",
+    signals=expertise_signals
+)
+```
+
+#### Text statistics computed
+
+| Statistic          | Value   | How computed                                        |
+|--------------------|---------|-----------------------------------------------------|
+| `heading_count`    | 6       | Lines starting with `#`                             |
+| `code_char_ratio`  | 0.04    | Characters inside code fences ÷ total characters    |
+| `avg_sentence_len` | 12.3    | Words ÷ sentence count                              |
+| `has_yaml_keys`    | false   | No `key: value` density threshold reached           |
+| `has_plantuml`     | false   | No `@startuml` marker                               |
+| `aws_service_count`| 6       | AWS service signals already extracted               |
+
+#### Classification decision
+
+```
+Priority order: diagram_derived → code → structured_data → technical_spec → narrative
+
+has_plantuml = false  → not diagram_derived
+code_char_ratio < 0.35 → not code
+has_yaml_keys = false → not structured_data
+heading_count (6) ≥ 3 AND aws_service_count (6) ≥ 2 → ✓ technical_spec
+```
+
+**Result**: `doc_type = "technical_spec"`
+
+#### Chunking strategy recommendation
+
+| DocumentType     | ChunkingStrategy | Rationale                         |
+|------------------|------------------|-----------------------------------|
+| `technical_spec` | `hierarchical`   | Section headings define context   |
+
+**Result**: `chunking_strategy = "hierarchical"` (1500/300 tokens)
+
+The `DocumentTypeAnalysis` is returned:
+
+```python
+DocumentTypeAnalysis(
+    doc_type="technical_spec",
+    chunking_strategy="hierarchical",
+    text_stats={
+        "heading_count": 6,
+        "code_char_ratio": 0.04,
+        "avg_sentence_len": 12.3,
+        "has_yaml_keys": False,
+        "has_plantuml": False
+    },
+    confidence=0.90
+)
+```
+
+---
+
 ### Step 4 — Graph Builder constructs nodes and edges
 
 `GraphBuilder` in `src/preprocessor/graph_builder.py` converts the signals into
 graph primitives.  Node IDs are deterministic slugs, so the same entity seen in
 multiple files always merges into one node.
 
-#### Nodes created
+#### Expertise nodes created
 
 ```json
 [
   { "node_id": "person_rajat_arun",       "node_type": "Person",      "label": "Rajat Arun" },
   { "node_id": "repository_contextweave", "node_type": "Repository",  "label": "contextweave" },
   { "node_id": "document_architecture_md","node_type": "Document",    "label": "architecture.md",
-    "properties": { "file_type": "markdown", "weight": 1.0 } },
+    "properties": { "file_type": "markdown", "weight": 1.0, "doc_type": "technical_spec" } },
 
   { "node_id": "awsservice_aws_lambda",        "node_type": "AWSService", "label": "AWS Lambda" },
   { "node_id": "awsservice_amazon_s3",         "node_type": "AWSService", "label": "Amazon S3" },
@@ -174,7 +241,30 @@ multiple files always merges into one node.
 ]
 ```
 
-#### Edges created
+#### Routing nodes created (via `add_routing_metadata`) ★ NEW
+
+```json
+[
+  {
+    "node_id": "documenttype_technical_spec",
+    "node_type": "DocumentType",
+    "properties": {
+      "label": "technical_spec",
+      "question_type": "architecture",
+      "avg_heading_count": 6,
+      "avg_code_ratio": 0.04,
+      "avg_sentence_len": 12.3
+    }
+  },
+  {
+    "node_id": "chunkingstrategy_hierarchical",
+    "node_type": "ChunkingStrategy",
+    "properties": { "label": "hierarchical" }
+  }
+]
+```
+
+#### Expertise edges created
 
 ```json
 [
@@ -192,6 +282,28 @@ multiple files always merges into one node.
 ]
 ```
 
+#### Routing edges created ★ NEW
+
+```json
+[
+  {
+    "from": "document_architecture_md",
+    "rel":  "HAS_TYPE",
+    "to":   "documenttype_technical_spec",
+    "weight": 1.0
+  },
+  {
+    "from": "document_architecture_md",
+    "rel":  "CHUNKED_WITH",
+    "to":   "chunkingstrategy_hierarchical",
+    "weight": 1.0
+  }
+]
+```
+
+The `EFFECTIVE_FOR` edges (`RAGStrategy → DocumentType`) were already seeded at
+deploy time by `seed_routing_graph()` and are not recreated per document.
+
 ---
 
 ### Step 5 — Derived artifacts written to S3
@@ -205,9 +317,19 @@ S3 Bucket
         ├── architecture.extracted.txt    ← clean text for Bedrock KB
         ├── architecture.derived.json     ← full extraction envelope
         ├── graph_entities.json           ← all nodes (merged across files)
-        ├── graph_edges.json              ← all edges
+        ├── graph_edges.json              ← all edges (incl. routing edges)
         ├── expertise_signals.json        ← deduplicated signals
-        └── processing_manifest.json      ← stats and error log
+        └── processing_manifest.json      ← stats, routing_summary, error log
+```
+
+The `processing_manifest.json` now includes a `routing_summary` section:
+
+```json
+{
+  "routing_summary": {
+    "technical_spec:hierarchical": 1
+  }
+}
 ```
 
 ---
@@ -231,7 +353,7 @@ PreprocessRawFiles
 ### Step 7 — Bedrock Knowledge Base ingests extracted text
 
 During `StartIngestionJob`, Bedrock reads `derived/contextweave/architecture.extracted.txt`
-and applies **hierarchical chunking**:
+and applies **hierarchical chunking** (recommended by the routing analyzer):
 
 ```
 Parent chunk (≤ 1500 tokens) — preserves full section context
@@ -266,8 +388,8 @@ Neptune Analytics Graph
 │
 ├── (repository_contextweave) ──CONTAINS──► (document_architecture_md)
 │                                              │
-│                              ┌──────────────┼──────────────────────────┐
-│                              ▼              ▼                          ▼
+│                              ┌──────────────┼──────────────────────────────────┐
+│                              ▼              ▼                                  ▼
 │                  USES_AWS_SERVICE    DEMONSTRATES_PATTERN        (vector embeddings
 │                  ──► Amazon Bedrock  ──► serverless               for each child chunk
 │                  ──► AWS Lambda      ──► event-driven             stored alongside
@@ -275,6 +397,14 @@ Neptune Analytics Graph
 │                  ──► Amazon S3
 │                  ──► AWS Step Functions
 │                  ──► AWS KMS
+│
+├── Routing sub-graph (seeded at deploy + updated per document): ★ NEW
+│   ├── (document_architecture_md) ──HAS_TYPE──► (documenttype_technical_spec)
+│   ├── (document_architecture_md) ──CHUNKED_WITH──► (chunkingstrategy_hierarchical)
+│   └── EFFECTIVE_FOR edges (RAGStrategy ──► DocumentType, weights from ROUTING_PRIORS):
+│       ├── (ragstrategy_graph_first) ──[weight:0.80]──► (documenttype_technical_spec)
+│       ├── (ragstrategy_hybrid)      ──[weight:0.70]──► (documenttype_technical_spec)
+│       └── ...
 ```
 
 ---
@@ -296,16 +426,55 @@ POST /query-expertise
 
 `src/query_api/synthesizer.py` applies regex patterns to categorise the question.
 
-| Pattern matched            | Question type    |
-|----------------------------|------------------|
-| `"AWS services"` + `"built"` + `"production"` | `skill_depth` |
+| Pattern matched                                   | Question type  |
+|---------------------------------------------------|----------------|
+| `"AWS services"` + `"built"` + `"production"` | `skill_depth`  |
 
-Question type `skill_depth` tells the synthesizer to focus on concrete,
+Question type `skill_depth` tells the system to focus on concrete,
 evidence-backed service usage rather than generic overviews.
 
 ---
 
-### Step 2 — Retrieve from Bedrock Knowledge Base (`retrieve_chunks`)
+### Step 1.5 — RAGRouter selects retrieval strategy ★ NEW
+
+`src/query_api/rag_router.py` reads `EFFECTIVE_FOR` edge weights from Neptune
+to pick the optimal retrieval strategy for `skill_depth` questions.
+
+#### Neptune query executed
+
+```cypher
+MATCH (r:RAGStrategy)-[e:EFFECTIVE_FOR]->(d:DocumentType)
+WHERE d.question_type = 'skill_depth'
+RETURN r.label AS strategy, e.weight AS weight,
+       coalesce(e.feedback_count, 0) AS feedback_count
+ORDER BY e.weight DESC
+```
+
+#### Routing decision
+
+| Strategy         | Weight | Feedback count |
+|------------------|--------|----------------|
+| `graph_first`    | 0.80   | 0 (prior)      |
+| `semantic_search`| 0.60   | 0 (prior)      |
+
+**Winner**: `graph_first` (highest weight = 0.80)
+
+```python
+RetrievalConfig(
+    strategy="graph_first",
+    include_graph=True,       # always forced for graph_first
+    boost_keywords=False,
+    use_neptune_chunks=False,
+    strategy_confidence=0.80
+)
+```
+
+The `include_graph=True` flag will force graph expansion in Step 4 regardless
+of the `includeGraphExpansion` request parameter.
+
+---
+
+### Step 2 — Retrieve from Bedrock Knowledge Base (`retrieve_with_strategy`)
 
 `src/query_api/retriever.py` calls `bedrock-agent-runtime.retrieve()` with
 `HYBRID` search mode (semantic + keyword):
@@ -351,8 +520,9 @@ In this case all three chunks are distinct and all are retained.
 
 ### Step 4 — Graph expansion (`expand_graph_context`)
 
-`src/query_api/graph_expander.py` runs openCypher queries against Neptune
-Analytics, seeded by the text from the retrieved chunks.
+Because `retrieval_config.include_graph = True` (forced by `graph_first`
+strategy), `src/query_api/graph_expander.py` runs openCypher queries against
+Neptune Analytics, seeded by the text from the retrieved chunks.
 
 #### Query A — AWS service context
 
@@ -439,11 +609,43 @@ System prompt (abbreviated):
   Repeated patterns: serverless (3 repos), event-driven (3 repos)
 ```
 
-The model produces a structured JSON response.
+The model produces a structured JSON response with `confidence = 0.94`.
 
 ---
 
-### Step 6 — API response returned
+### Step 6 — Feedback written back to Neptune ★ NEW
+
+After synthesis, `rag_router.update_feedback()` is called:
+
+```python
+update_feedback(
+    strategy="graph_first",
+    question_type="skill_depth",
+    confidence=0.94,        # ≥ 0.70 → reinforce
+    graph_id=NEPTUNE_GRAPH_ID
+)
+```
+
+Because `confidence (0.94) ≥ 0.70`, the `EFFECTIVE_FOR` edge weight is
+incremented:
+
+```cypher
+MATCH (r:RAGStrategy)-[e:EFFECTIVE_FOR]->(d:DocumentType)
+WHERE r.label = 'graph_first' AND d.question_type = 'skill_depth'
+SET e.weight = min(1.0, e.weight + 0.05),
+    e.feedback_count = coalesce(e.feedback_count, 0) + 1
+```
+
+**Before**: `graph_first → skill_depth` weight = 0.80, feedback_count = 0
+**After**:  `graph_first → skill_depth` weight = 0.85, feedback_count = 1
+
+The next `skill_depth` question will see `graph_first` at weight 0.85, making
+it even more likely to be selected. Over dozens of queries, weights converge
+to reflect which strategies actually produce high-confidence answers.
+
+---
+
+### Step 7 — API response returned
 
 ```json
 {
@@ -482,7 +684,16 @@ The model produces a structured JSON response.
 
   "retrievalCount": 3,
   "modelId": "anthropic.claude-3-5-sonnet-20241022-v2:0",
-  "latencyMs": 2340
+  "latencyMs": 2340,
+
+  "routingDecision": {
+    "strategy": "graph_first",
+    "questionType": "skill_depth",
+    "strategyConfidence": 0.80,
+    "graphExpansionForced": true,
+    "keywordBoostApplied": false,
+    "neptuneVectorsUsed": false
+  }
 }
 ```
 
@@ -491,21 +702,27 @@ The model produces a structured JSON response.
 ## End-to-End Summary
 
 ```
-Upload                  Preprocess              Ingest                  Query
-──────                  ──────────              ──────                  ─────
-aws s3 cp               extract_markdown()      Bedrock KB              classify_question()
-  architecture.md   ──► _AWS_SERVICE_PATTERNS ──► Titan V2 embed    ──► retrieve_chunks()
-  → raw/contextweave    _PATTERN_KEYWORDS          1024-dim vectors       HYBRID search
-                        GraphBuilder()             hierarchical chunks    deduplicate_chunks()
-                          nodes + edges        ──► Neptune Analytics  ──► expand_graph_context()
-                        → derived/contextweave      graph + vectors        openCypher queries
-                          .extracted.txt                               ──► synthesize_answer()
-                          graph_entities.json                               Bedrock Converse
-                          graph_edges.json                             ──► JSON response
-                          expertise_signals.json                            answer + sources
-                                                                            inferredSkills
-                                                                            repeatedPatterns
-                                                                            confidence
+Upload                  Preprocess                    Ingest                  Query
+──────                  ──────────                    ──────                  ─────
+aws s3 cp               extract_markdown()            Bedrock KB              classify_question()
+  architecture.md   ──► _AWS_SERVICE_PATTERNS     ──► Titan V2 embed      ──► RAGRouter             ★ NEW
+  → raw/contextweave    _PATTERN_KEYWORDS              1024-dim vectors        select_strategy()
+                        routing_analyzer()  ★ NEW      hierarchical chunks     → graph_first
+                          classify doc_type          ──► Neptune Analytics  ──► retrieve_with_strategy()
+                          → technical_spec               graph + vectors        HYBRID search
+                          → hierarchical             ──► seed EFFECTIVE_FOR  ──► deduplicate_chunks()
+                        GraphBuilder()                   edges at deploy     ──► expand_graph_context()
+                          expertise nodes/edges                                  openCypher queries
+                          DocumentType node  ★ NEW                          ──► synthesize_answer()
+                          HAS_TYPE edge      ★ NEW                               Bedrock Converse
+                          CHUNKED_WITH edge  ★ NEW                          ──► update_feedback()    ★ NEW
+                        → derived/contextweave                                   confidence → Neptune
+                          .extracted.txt                                     ──► JSON response
+                          graph_entities.json                                     answer + sources
+                          graph_edges.json                                        inferredSkills
+                          expertise_signals.json                                  repeatedPatterns
+                          processing_manifest.json                               confidence
+                                                                                 routingDecision ★ NEW
 ```
 
 ### Why GraphRAG is better than plain vector search
@@ -516,6 +733,17 @@ goes further: after retrieval it walks the graph to find that `serverless` and
 frequency is impossible to express in a flat vector index, but it is exactly
 what distinguishes a developer who has applied a pattern repeatedly from one who
 mentioned it once.
+
+### Why adaptive routing improves answer quality
+
+Without routing, every question uses the same strategy. With routing:
+- `skill_depth` questions get `graph_first` (high Neptune traversal depth)
+- `comparison` questions get `hybrid` (Neptune vectors + keyword boost)
+- `credential` questions get `keyword_boosted` (exact-match term reranking)
+
+After 30+ queries, the `EFFECTIVE_FOR` weights shift to reflect which strategies
+actually produce high-confidence answers for each question type. The system
+self-improves without any retraining or manual tuning.
 
 ### Why source weighting matters
 

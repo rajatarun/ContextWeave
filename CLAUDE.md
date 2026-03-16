@@ -23,16 +23,50 @@ ExpertiseRAG is a **serverless, event-driven GraphRAG system** built entirely on
 | Layer | Service | Role |
 |-------|---------|------|
 | Storage | Amazon S3 | Raw uploads (`raw/`) and derived artifacts (`derived/`) |
-| Preprocessing | AWS Lambda (Python 3.12) | Extracts text, builds knowledge graph entities from Markdown, YAML, PlantUML |
-| Knowledge Graph | Amazon Neptune Analytics | Vector + graph hybrid store (openCypher, 1024-dim vectors) |
+| Preprocessing | AWS Lambda (Python 3.12) | Extracts text, classifies document type, builds knowledge graph entities |
+| Routing Analyzer | `src/preprocessor/routing_analyzer.py` | Classifies DocumentType + recommends ChunkingStrategy per document |
+| Knowledge Graph | Amazon Neptune Analytics | Vector + graph hybrid store + routing intelligence graph |
 | Embeddings | Amazon Titan Text Embeddings V2 | 1024-dimensional semantic embeddings |
 | Knowledge Base | Amazon Bedrock Knowledge Base | Hierarchical chunking, hybrid search |
-| Query API | AWS Lambda + API Gateway HTTP v2 | POST /query-expertise – classify → retrieve → graph-expand → synthesize |
+| Query API | AWS Lambda + API Gateway HTTP v2 | POST /query-expertise – classify → route → retrieve → graph-expand → synthesize → feedback |
+| RAG Router | `src/query_api/rag_router.py` | Selects optimal retrieval strategy from Neptune EFFECTIVE_FOR weights; updates weights after each query |
 | Orchestration | AWS Step Functions | Preprocess → StartIngestionJob → Poll loop |
 | Encryption | AWS KMS | SSE-KMS on S3; key rotates annually |
 | Observability | AWS X-Ray + CloudWatch | All Lambdas and Step Functions traced |
 | IaC | AWS SAM (template.yaml) | Full infrastructure as code |
 | CI/CD | GitHub Actions | OIDC → SAM validate → build → deploy → S3 upload |
+
+### Adaptive RAG Routing
+
+ContextWeave includes an **agentic routing layer** that automatically selects the best retrieval strategy for each question type and improves continuously through a feedback loop.
+
+**At ingestion time**, every document is classified into a `DocumentType` and assigned a `ChunkingStrategy`:
+
+| DocumentType | Detection heuristics | ChunkingStrategy |
+|---|---|---|
+| `technical_spec` | ≥3 headings + ≥2 AWS service signals | `hierarchical` (1500/300 tokens) |
+| `narrative` | Long sentences, few headings, low code ratio | `sentence` |
+| `structured_data` | `.yaml`/`.json` / key-value density | `fixed_256` |
+| `code` | Source file extension / code ratio > 35% | `fixed_512` |
+| `diagram_derived` | `.puml` extension / `@startuml` marker | `fixed_256` |
+
+DocumentType and ChunkingStrategy nodes — and their relationships to each Document node — are written to Neptune Analytics alongside expertise nodes.
+
+**At query time**, the `RAGRouter` reads `EFFECTIVE_FOR` edge weights from Neptune to select the optimal strategy:
+
+| Strategy | When chosen | Behaviour |
+|---|---|---|
+| `graph_first` | skill_depth, architecture | Bedrock KB + forced graph expansion |
+| `hybrid` | comparison | Bedrock KB + Neptune vector search + keyword boost |
+| `keyword_boosted` | project, credential | Bedrock KB + keyword-overlap reranking (25/75 blend) |
+| `semantic_search` | general | Bedrock KB semantic search only |
+
+**After every query**, the winning strategy's `EFFECTIVE_FOR` edge weight is updated:
+- `confidence ≥ 0.70` → `weight += 0.05` (cap 1.00)
+- `confidence < 0.40` → `weight -= 0.02` (floor 0.10)
+- `0.40 ≤ confidence < 0.70` → no change
+
+The graph learns from every answered question. No retraining. No manual tuning.
 
 ---
 
@@ -65,18 +99,20 @@ No long-lived AWS credentials are stored in GitHub secrets. The workflow assumes
 ### `expertise-rag-preprocessor-{env}`
 - **Trigger**: S3 ObjectCreated on `raw/` prefix + EventBridge (Step Functions)
 - **Input**: Raw files (`.md`, `.yaml`, `.puml`, `.txt`)
-- **Output**: `derived/<repo>/*.derived.json`, `*.extracted.txt`, `graph_entities.json`, `graph_edges.json`, `expertise_signals.json`
+- **Output**: `derived/<repo>/*.derived.json`, `*.extracted.txt`, `graph_entities.json`, `graph_edges.json`, `expertise_signals.json`, `processing_manifest.json`
+- **Routing**: Calls `routing_analyzer.analyze_document()` → writes `DocumentType`, `ChunkingStrategy`, `HAS_TYPE`, `CHUNKED_WITH` nodes/edges to Neptune
 - **Code**: `src/preprocessor/handler.py`
 
 ### `expertise-rag-query-api-{env}`
 - **Trigger**: API Gateway POST `/query-expertise`, GET `/health`
-- **Pipeline**: classify_question → retrieve_chunks (Bedrock) → expand_graph_context (Neptune) → synthesize_answer (Bedrock Converse)
-- **Response shape**: `{ answer, sources, inferredSkills, repeatedPatterns, confidence, questionType, graphEntitiesUsed }`
+- **Pipeline**: classify_question → **RAGRouter.select_strategy** → retrieve_with_strategy (Bedrock ± Neptune) → expand_graph_context (Neptune) → synthesize_answer (Bedrock Converse) → **RAGRouter.update_feedback**
+- **Response shape**: `{ answer, sources, inferredSkills, repeatedPatterns, confidence, questionType, graphEntitiesUsed, routingDecision }`
 - **Code**: `src/query_api/handler.py`
 
 ### `expertise-rag-ingestion-trigger-{env}`
 - **Trigger**: CloudFormation custom resource (post-deploy) + Step Functions + manual
-- **Actions**: `start` (StartIngestionJob), `status` (GetIngestionJob)
+- **Actions**: `start` (StartIngestionJob), `status` (GetIngestionJob), `seed_routing` (seed Neptune routing graph)
+- **On Deploy**: Seeds Neptune with initial `EFFECTIVE_FOR` prior weights for all strategy/question-type pairs
 - **Code**: `src/ingestion_trigger/handler.py`
 
 ---
@@ -129,14 +165,16 @@ These files are uploaded to `s3://<bucket>/raw/contextweave/` by the GitHub Acti
 
 - **AWS SAM** – Infrastructure as code for serverless applications
 - **Amazon Bedrock** – Knowledge Bases, embeddings (Titan V2), LLM inference (Claude)
-- **Amazon Neptune Analytics** – Graph + vector hybrid store, openCypher
+- **Amazon Neptune Analytics** – Graph + vector hybrid store, openCypher, routing intelligence graph
 - **AWS Step Functions** – Long-running workflow orchestration with polling
 - **AWS Lambda** – Python 3.12, AWS Lambda Powertools
 - **Amazon API Gateway v2** – HTTP API with throttling and CORS
 - **AWS KMS** – Customer-managed key with automatic rotation
 - **GitHub Actions OIDC** – Keyless AWS authentication from CI/CD
 - **GraphRAG** – Graph-augmented retrieval augmented generation pattern
+- **Adaptive RAG Routing** – Self-improving routing graph that learns which strategy works best per question type
 - **Hierarchical RAG chunking** – Parent/child chunk strategy for precision + context
+- **Multi-strategy retrieval** – graph_first, hybrid, keyword_boosted, semantic_search
 
 ---
 
