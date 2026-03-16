@@ -210,7 +210,7 @@ Resources:
       ProvisionedMemory: !Ref NeptuneProvisionedMemory
       VectorSearchConfiguration:
         VectorSearchDimension: !Ref NeptuneVectorDimension
-      DeletionProtection: !If [IsProduction, true, false]
+      DeletionProtection: false
       ReplicaCount: 0
       Tags:
         - Key: Project
