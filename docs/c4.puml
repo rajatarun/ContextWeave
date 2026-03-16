@@ -57,22 +57,22 @@ System_Boundary(expertiseRAG, "ExpertiseRAG (AWS Account: 239571291755)") {
     ' ── Ingestion path ──────────────────────────────────────────────────────
     ContainerDb(s3Raw, "S3 – Raw Artifacts", "Amazon S3\nSSE-KMS encrypted", "Stores original uploads:\nraw/<repo>/architecture.md\nraw/<repo>/CLAUDE.md\nraw/<repo>/repo-signals.yaml\nraw/<repo>/*.puml")
 
-    Container(preprocessor, "Preprocessor Lambda", "AWS Lambda\nPython 3.12", "Extracts text from Markdown,\nYAML, PlantUML files.\nBuilds graph entities and edges.\nEmits derived JSON + extracted text.")
+    Container(preprocessor, "Preprocessor Lambda", "AWS Lambda\nPython 3.12", "Extracts text from Markdown,\nYAML, PlantUML files.\nClassifies DocumentType + ChunkingStrategy\nvia routing_analyzer.\nBuilds expertise + routing graph entities.\nEmits derived JSON + extracted text.")
 
-    ContainerDb(s3Derived, "S3 – Derived Artifacts", "Amazon S3\nSSE-KMS encrypted", "Stores preprocessor output:\nderived/<repo>/*.extracted.txt\nderived/<repo>/graph_entities.json\nderived/<repo>/expertise_signals.json")
+    ContainerDb(s3Derived, "S3 – Derived Artifacts", "Amazon S3\nSSE-KMS encrypted", "Stores preprocessor output:\nderived/<repo>/*.extracted.txt\nderived/<repo>/graph_entities.json\nderived/<repo>/expertise_signals.json\nderived/<repo>/processing_manifest.json")
 
     Container(sfn, "Ingestion State Machine", "AWS Step Functions\nSTANDARD type", "Orchestrates:\n1. Preprocess raw files\n2. Start Bedrock ingestion job\n3. Poll until COMPLETE/FAILED")
 
-    Container(ingestionTrigger, "Ingestion Trigger Lambda", "AWS Lambda\nPython 3.12", "Starts and polls\nBedrock KB ingestion jobs.\nAlso runs as CF custom resource\npost-deployment.")
+    Container(ingestionTrigger, "Ingestion Trigger Lambda", "AWS Lambda\nPython 3.12", "Starts and polls\nBedrock KB ingestion jobs.\nSeeds Neptune routing graph\nwith ROUTING_PRIORS on deploy.\nAlso runs as CF custom resource\npost-deployment.")
 
     ContainerDb(bedrockKB, "Bedrock Knowledge Base", "Amazon Bedrock KB\nNeptune Analytics vector store", "Ingests derived/* artifacts.\nHierarchical chunking (1500/300 tokens).\nHybrid semantic + keyword search.\nStores 1024-dim Titan embeddings.")
 
-    ContainerDb(neptune, "Neptune Analytics Graph", "Amazon Neptune Analytics\nopenCypher + vector", "Nodes: Person, Repository, Document,\nSkill, Technology, AWSService, Pattern.\nEdges: BUILT, CONTAINS, USES_TECH,\nDEMONSTRATES_PATTERN, STRENGTHENS.\n16GB provisioned memory (dev).")
+    ContainerDb(neptune, "Neptune Analytics Graph", "Amazon Neptune Analytics\nopenCypher + vector", "Expertise graph:\nPerson, Repository, Document,\nAWSService, Pattern, Skill.\n\nRouting sub-graph:\nRAGStrategy, DocumentType,\nChunkingStrategy nodes.\nEFFECTIVE_FOR edges with\nself-improving weights.\n16GB provisioned memory (dev).")
 
     ' ── Query path ──────────────────────────────────────────────────────────
     Container(apiGateway, "HTTP API", "Amazon API Gateway v2\nThrottle: 5 RPS / 10 burst", "Routes:\nPOST /query-expertise\nGET /health")
 
-    Container(queryAPI, "Query API Lambda", "AWS Lambda\nPython 3.12", "1. classify_question()\n2. retrieve_chunks() → Bedrock\n3. expand_graph_context() → Neptune\n4. synthesize_answer() → Bedrock Converse\nReturns: answer + sources + graph entities")
+    Container(queryAPI, "Query API Lambda", "AWS Lambda\nPython 3.12", "1. classify_question()\n2. RAGRouter.select_strategy() ★\n3. retrieve_with_strategy() → Bedrock ± Neptune\n4. deduplicate_chunks()\n5. expand_graph_context() → Neptune\n6. synthesize_answer() → Bedrock Converse\n7. RAGRouter.update_feedback() ★\nReturns: answer + sources + routingDecision")
 
     ' ── Security ────────────────────────────────────────────────────────────
     ContainerDb(kms, "KMS Key", "AWS KMS\nCustomer-managed, auto-rotate", "Encrypts all S3 objects.\nUsed by Bedrock KB and all Lambdas.")

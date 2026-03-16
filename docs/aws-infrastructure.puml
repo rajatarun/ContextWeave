@@ -82,9 +82,9 @@ rectangle "Storage" #E8F5E9 {
 ' COMPUTE LAYER
 ' ─────────────────────────────────────────────────────────────────────────────
 rectangle "Compute – Lambda Functions" #F3E5F5 {
-    Lambda(preprocessor, "expertise-rag-preprocessor-{env}", "Python 3.12 | 1024 MB | 600s\nExtractors: Markdown, YAML, PlantUML\nGraphBuilder: entities + edges\nOutput: derived/ artifacts")
-    Lambda(queryAPI, "expertise-rag-query-api-{env}", "Python 3.12 | 512 MB | 60s\n1. classify_question()\n2. retrieve_chunks() – Bedrock\n3. expand_graph_context() – Neptune\n4. synthesize_answer() – Bedrock")
-    Lambda(ingestionTrigger, "expertise-rag-ingestion-trigger-{env}", "Python 3.12 | 512 MB | 900s\nActions: start | status\nCF custom resource post-deploy")
+    Lambda(preprocessor, "expertise-rag-preprocessor-{env}", "Python 3.12 | 1024 MB | 600s\nExtractors: Markdown, YAML, PlantUML\nrouting_analyzer: DocumentType + ChunkingStrategy\nGraphBuilder: expertise + routing nodes/edges\nOutput: derived/ artifacts + routing metadata")
+    Lambda(queryAPI, "expertise-rag-query-api-{env}", "Python 3.12 | 512 MB | 60s\n1. classify_question()\n2. RAGRouter.select_strategy() ★\n3. retrieve_with_strategy() – Bedrock ± Neptune\n4. expand_graph_context() – Neptune\n5. synthesize_answer() – Bedrock Converse\n6. RAGRouter.update_feedback() ★")
+    Lambda(ingestionTrigger, "expertise-rag-ingestion-trigger-{env}", "Python 3.12 | 512 MB | 900s\nActions: start | status | seed_routing ★\nSeeds Neptune EFFECTIVE_FOR priors on deploy\nCF custom resource post-deploy")
 }
 
 ' ─────────────────────────────────────────────────────────────────────────────
@@ -109,7 +109,7 @@ rectangle "API Layer" #E0F7FA {
 rectangle "AI / ML Services" #FFF3E0 {
     Bedrock(bedrockKB, "Bedrock Knowledge Base\nexpertise-rag-kb-{env}", "Type: VECTOR\nVector store: Neptune Analytics\nEmbedding: Titan Text Embeddings V2 (1024-dim)\nChunking: HIERARCHICAL (1500/300 tokens, 60 overlap)\nParsing: Claude 3 Haiku (domain-specific prompt)")
     Bedrock(bedrockInference, "Bedrock Inference\n(Converse API)", "Model: Claude 3.x (configurable)\nAnswer synthesis with\ngrounded system prompt\nStreaming optional")
-    Neptune(neptuneGraph, "Neptune Analytics Graph\nexpertise-rag-{env}", "Memory: 16 GB (dev) / 32 (staging) / 64 (prod)\nVector dim: 1024\nQuery: openCypher\nDeletion protection: prod only\nReplica: prod only (1)\nNode types: Person, Repository,\nDocument, Skill, Technology,\nAWSService, Pattern, Evidence, Claim\nEdge types: BUILT, CONTAINS,\nUSES_TECH, USES_AWS_SERVICE,\nDEMONSTRATES_PATTERN, SUPPORTS_CLAIM,\nINDICATES_SKILL, STRENGTHENS")
+    Neptune(neptuneGraph, "Neptune Analytics Graph\nexpertise-rag-{env}", "Memory: 16 GB (dev) / 32 (staging) / 64 (prod)\nVector dim: 1024\nQuery: openCypher\nDeletion protection: prod only\nReplica: prod only (1)\nExpertise nodes: Person, Repository,\nDocument, AWSService, Pattern, Skill\nRouting nodes ★: RAGStrategy,\nDocumentType, ChunkingStrategy\nEdges: BUILT, CONTAINS, USES_AWS_SERVICE,\nDEMONSTRATES_PATTERN, HAS_TYPE,\nCHUNKED_WITH, EFFECTIVE_FOR ★")
 }
 
 ' ─────────────────────────────────────────────────────────────────────────────
@@ -140,6 +140,7 @@ sfn -[#E65100]-> preprocessor : "PreprocessRawFiles step"
 sfn -[#E65100]-> ingestionTrigger : "StartIngestionJob step\nCheckIngestionStatus step"
 sfn -[#E65100]-> cwSFN : "Execution logs"
 cfnCustom -[#6A1B9A]-> ingestionTrigger : "CF custom resource\npost-deploy trigger"
+ingestionTrigger -[#6A1B9A]-> neptuneGraph : "seed_routing: MERGE\nEFFECTIVE_FOR priors ★"
 eventBridge -[#0277BD,dashed]-> preprocessor : "EventBridgeRule\nPreprocessorRequest"
 ingestionTrigger -[#6A1B9A]-> bedrockKB : "StartIngestionJob\nGetIngestionJob"
 bedrockKB -[#FF6F00]-> s3Artifacts : "Read derived/\n*.extracted.txt"
@@ -151,7 +152,7 @@ bedrockKB -[#FF6F00]-> bedrockInference : "Titan Embeddings V2\nClaude Haiku (pa
 ' ─────────────────────────────────────────────────────────────────────────────
 apigw -[#0D47A1]-> queryAPI : "POST /query-expertise\nGET /health"
 queryAPI -[#0D47A1]-> bedrockKB : "bedrock-agent-runtime\n.retrieve() HYBRID"
-queryAPI -[#0D47A1]-> neptuneGraph : "openCypher:\nSKILL_NEIGHBOURHOOD\nPATTERN_EVIDENCE\nAWS_SERVICE_CONTEXT"
+queryAPI -[#0D47A1]-> neptuneGraph : "openCypher:\nselect_strategy (EFFECTIVE_FOR) ★\nSKILL_NEIGHBOURHOOD\nPATTERN_EVIDENCE\nAWS_SERVICE_CONTEXT\nupdate_feedback (weight) ★"
 queryAPI -[#0D47A1]-> bedrockInference : "Converse API\ngrounded answer synthesis"
 queryAPI -[#0D47A1]-> cwQueryAPI : "Structured logs\n+ X-Ray traces"
 
