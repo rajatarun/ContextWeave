@@ -1,0 +1,47 @@
+{
+  "model": "claude-sonnet-4-6",
+  "permissions": {
+    "allow": [
+      "Bash(git status)",
+      "Bash(git log*)",
+      "Bash(git diff*)",
+      "Bash(git add*)",
+      "Bash(git commit*)",
+      "Bash(git push*)",
+      "Bash(git fetch*)",
+      "Bash(git pull*)",
+      "Bash(git branch*)",
+      "Bash(git checkout*)",
+      "Bash(sam validate*)",
+      "Bash(sam build*)",
+      "Bash(sam deploy*)",
+      "Bash(sam local*)",
+      "Bash(python -m pytest*)",
+      "Bash(python scripts/*.py*)",
+      "Bash(pip install*)",
+      "Bash(pip list*)",
+      "Bash(aws cloudformation describe-stacks*)",
+      "Bash(aws cloudformation describe-stack-events*)",
+      "Bash(aws lambda list-functions*)",
+      "Bash(aws lambda get-function*)",
+      "Bash(aws logs tail*)",
+      "Bash(aws logs describe-log-groups*)",
+      "Bash(aws s3 ls*)",
+      "Bash(aws bedrock list-knowledge-bases*)",
+      "Bash(aws bedrock-agent get-knowledge-base*)",
+      "Bash(aws neptune-graph list-graphs*)",
+      "Bash(aws stepfunctions list-state-machines*)",
+      "Bash(ruff check*)",
+      "Bash(ruff format*)",
+      "Bash(black*)",
+      "Bash(mypy*)"
+    ],
+    "deny": [
+      "Bash(aws iam delete*)",
+      "Bash(aws s3 rb*)",
+      "Bash(aws cloudformation delete-stack*)",
+      "Bash(aws neptune-graph delete-graph*)",
+      "Bash(aws bedrock delete-knowledge-base*)"
+    ]
+  }
+}
