@@ -933,8 +933,8 @@ Resources:
       Description: >
         Reads raw repo uploads from S3, extracts text, chunks and embeds content,
         writes to pgvector and Memgraph, then emits derived JSON artifacts to S3.
-      CodeUri: src/preprocessor/
-      Handler: handler.lambda_handler
+      CodeUri: src/
+      Handler: preprocessor/handler.lambda_handler
       Role: !GetAtt PreprocessorRole.Arn
       Timeout: 600
       MemorySize: 1024
@@ -968,8 +968,8 @@ Resources:
         Reasoning API: classifies questions, retrieves from pgvector, expands
         graph-linked evidence via Memgraph, synthesizes answers, and returns
         structured expertise responses.
-      CodeUri: src/query_api/
-      Handler: handler.lambda_handler
+      CodeUri: src/
+      Handler: query_api/handler.lambda_handler
       Role: !GetAtt QueryAPIRole.Arn
       Timeout: 60
       MemorySize: 512
@@ -1010,8 +1010,8 @@ Resources:
         Creates pgvector schema in PostgreSQL and seeds the Memgraph routing graph
         with initial EFFECTIVE_FOR edge weights. Invoked as a CloudFormation custom
         resource after deployment and callable manually for re-seeding.
-      CodeUri: src/ingestion_trigger/
-      Handler: handler.lambda_handler
+      CodeUri: src/
+      Handler: ingestion_trigger/handler.lambda_handler
       Role: !GetAtt DBInitRole.Arn
       Timeout: 300
       VpcConfig:
