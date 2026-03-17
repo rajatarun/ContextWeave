@@ -301,7 +301,7 @@ Resources:
   LambdaSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: ExpertiseRAG Lambda functions – egress only
+      GroupDescription: ExpertiseRAG Lambda functions - egress only
       VpcId: !Ref VPC
       SecurityGroupEgress:
         - IpProtocol: '-1'
@@ -522,7 +522,7 @@ Resources:
       DBInstanceIdentifier: !Sub expertise-rag-postgres-${Environment}
       DBInstanceClass: !Ref PostgresInstanceClass
       Engine: postgres
-      EngineVersion: '15.8'
+      EngineVersion: '16.6'
       DBName: !Ref PostgresDbName
       MasterUsername: !Ref PostgresUsername
       MasterUserPassword: !Sub '{{resolve:secretsmanager:${PostgresSecret}:SecretString:password}}'
