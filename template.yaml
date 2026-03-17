@@ -1022,12 +1022,22 @@ Resources:
           - !Ref PrivateSubnet2
 
   # ───────────────────────────────────────────
+  # Attach RDS instance to secret so AWS injects host/port/engine
+  # ───────────────────────────────────────────
+  PostgresSecretAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref PostgresSecret
+      TargetId: !Ref PostgresRDS
+      TargetType: AWS::RDS::DBInstance
+
+  # ───────────────────────────────────────────
   # CloudFormation Custom Resource: post-deployment DB init
   # ───────────────────────────────────────────
   PostDeploymentDBInit:
     Type: AWS::CloudFormation::CustomResource
     DependsOn:
-      - PostgresRDS
+      - PostgresSecretAttachment
       - MemgraphEC2
       - MemgraphEBSAttachment
     Properties:
