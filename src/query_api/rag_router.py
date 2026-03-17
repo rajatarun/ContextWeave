@@ -39,6 +39,11 @@ _PENALISE_DELTA = -0.02
 _WEIGHT_FLOOR = 0.10
 _WEIGHT_CEIL = 1.00
 
+# Adversarial guardrails for the penalty path
+_WARMUP_MIN_FEEDBACK       = 5   # edges protected until this many feedback events
+_CONSECUTIVE_LOW_THRESHOLD = 3   # consecutive low-confidence queries before penalising
+_MIN_PENALTY_INTERVAL      = 3   # min feedback_count gap between consecutive penalties
+
 # Fallback priority when Neptune is unavailable (or graph has no data yet)
 _STRATEGY_PRIORITY: list[str] = [
     RAGStrategyLabel.GRAPH_FIRST,
@@ -160,6 +165,51 @@ def select_strategy(
 # Feedback / learning
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _read_edge_props(graph_id: str, strategy: str, question_type: str) -> dict:
+    """Read guardrail-relevant properties from the EFFECTIVE_FOR edge."""
+    query = """
+    MATCH (r:RAGStrategy {label: $strategy})-[e:EFFECTIVE_FOR]->(d:DocumentType {question_type: $question_type})
+    RETURN e.feedback_count        AS feedback_count,
+           e.consecutive_low_count AS consecutive_low_count,
+           e.last_penalty_at_count AS last_penalty_at_count
+    """
+    rows = _run_query(graph_id, query, {"strategy": strategy, "question_type": question_type})
+    if rows:
+        r = rows[0]
+        return {
+            "feedback_count":        int(r.get("feedback_count") or 0),
+            "consecutive_low_count": int(r.get("consecutive_low_count") or 0),
+            "last_penalty_at_count": int(r.get("last_penalty_at_count") or 0),
+        }
+    return {"feedback_count": 0, "consecutive_low_count": 0, "last_penalty_at_count": 0}
+
+
+def _check_penalty_guardrails(edge_props: dict, new_consecutive: int) -> tuple[bool, str]:
+    """
+    Return (should_apply_penalty, reason_if_blocked).
+
+    All three guardrails must pass for a penalty to be applied:
+      1. Warmup  – edge must have ≥ _WARMUP_MIN_FEEDBACK total feedback events.
+      2. Consecutive – must be ≥ _CONSECUTIVE_LOW_THRESHOLD consecutive low-confidence queries.
+      3. Rate limit – at least _MIN_PENALTY_INTERVAL feedback events must have elapsed
+                      since the last applied penalty.
+    """
+    feedback_count = edge_props["feedback_count"]
+    last_penalty   = edge_props["last_penalty_at_count"]
+
+    if feedback_count < _WARMUP_MIN_FEEDBACK:
+        return False, f"warmup (feedback_count={feedback_count} < {_WARMUP_MIN_FEEDBACK})"
+
+    if new_consecutive < _CONSECUTIVE_LOW_THRESHOLD:
+        return False, f"consecutive_low={new_consecutive} < {_CONSECUTIVE_LOW_THRESHOLD}"
+
+    gap = feedback_count - last_penalty
+    if gap < _MIN_PENALTY_INTERVAL:
+        return False, f"rate_limit (gap={gap} < {_MIN_PENALTY_INTERVAL})"
+
+    return True, ""
+
+
 def update_feedback(
     strategy: str,
     question_type: str,
@@ -169,10 +219,20 @@ def update_feedback(
     """
     Adjust the EFFECTIVE_FOR edge weight in Neptune based on synthesis confidence.
 
-    This is the core learning loop:
-      confidence ≥ 0.70 → reinforce (+0.05, capped at 1.0)
-      confidence < 0.40 → penalise  (-0.02, floored at 0.1)
+    Core learning loop with adversarial guardrails:
+
+      confidence ≥ 0.70 → reinforce (+0.05, capped at 1.0); resets consecutive_low_count
+      confidence < 0.40 → penalty path (guarded – see below)
       otherwise         → no change
+
+    Penalty guardrails (all must pass before -0.02 is applied):
+      1. Warmup:      edge must have ≥ _WARMUP_MIN_FEEDBACK total feedback events
+      2. Consecutive: ≥ _CONSECUTIVE_LOW_THRESHOLD consecutive low-confidence queries
+      3. Rate limit:  ≥ _MIN_PENALTY_INTERVAL feedback events since last penalty
+
+    When guardrails block a penalty, consecutive_low_count is still incremented so
+    the streak is tracked. When a penalty is applied, consecutive_low_count resets
+    to 0 and last_penalty_at_count is updated.
 
     Args:
         strategy:      RAGStrategyLabel value of the strategy that was used.
@@ -184,36 +244,86 @@ def update_feedback(
     if not gid:
         return
 
+    # ── Reinforce path ──────────────────────────────────────────────────────
     if confidence >= _REINFORCE_THRESHOLD:
-        delta = _REINFORCE_DELTA
-    elif confidence < _PENALISE_THRESHOLD:
-        delta = _PENALISE_DELTA
-    else:
-        return  # neutral zone – no update
+        query = """
+        MATCH (r:RAGStrategy {label: $strategy})-[e:EFFECTIVE_FOR]->(d:DocumentType {question_type: $question_type})
+        SET e.weight = toFloat(
+                CASE WHEN e.weight + $delta > $ceil THEN $ceil ELSE e.weight + $delta END
+            ),
+            e.consecutive_low_count = 0,
+            e.feedback_count = coalesce(e.feedback_count, 0) + 1
+        RETURN e.weight AS new_weight
+        """
+        rows = _run_query(gid, query, {
+            "strategy":      strategy,
+            "question_type": question_type,
+            "delta":         _REINFORCE_DELTA,
+            "ceil":          _WEIGHT_CEIL,
+        })
+        if rows:
+            logger.info(
+                "Routing feedback applied: strategy=%s qt=%s confidence=%.2f delta=%+.2f new_weight=%.3f",
+                strategy, question_type, confidence, _REINFORCE_DELTA, rows[0].get("new_weight", 0),
+            )
+        else:
+            logger.debug(
+                "Routing feedback skipped (no EFFECTIVE_FOR edge found): strategy=%s qt=%s",
+                strategy, question_type,
+            )
+        return
 
-    query = """
+    # ── Neutral zone ─────────────────────────────────────────────────────────
+    if confidence >= _PENALISE_THRESHOLD:
+        return  # 0.40 ≤ confidence < 0.70 – no weight change
+
+    # ── Penalty path (with guardrails) ───────────────────────────────────────
+    edge_props   = _read_edge_props(gid, strategy, question_type)
+    new_consec   = edge_props["consecutive_low_count"] + 1
+    new_fc       = edge_props["feedback_count"] + 1
+
+    apply, reason = _check_penalty_guardrails(edge_props, new_consec)
+
+    if not apply:
+        # Guardrail blocked: track streak but do not change weight
+        logger.info(
+            "Routing penalty blocked by guardrail [%s]: strategy=%s qt=%s confidence=%.2f consecutive=%d",
+            reason, strategy, question_type, confidence, new_consec,
+        )
+        _run_query(gid, """
+        MATCH (r:RAGStrategy {label: $strategy})-[e:EFFECTIVE_FOR]->(d:DocumentType {question_type: $question_type})
+        SET e.consecutive_low_count = $new_consec,
+            e.feedback_count        = $new_fc
+        RETURN e.weight AS new_weight
+        """, {
+            "strategy":      strategy,
+            "question_type": question_type,
+            "new_consec":    new_consec,
+            "new_fc":        new_fc,
+        })
+        return
+
+    # All guardrails passed – apply penalty and reset tracking state
+    rows = _run_query(gid, """
     MATCH (r:RAGStrategy {label: $strategy})-[e:EFFECTIVE_FOR]->(d:DocumentType {question_type: $question_type})
     SET e.weight = toFloat(
-        CASE
-            WHEN e.weight + $delta > $ceil  THEN $ceil
-            WHEN e.weight + $delta < $floor THEN $floor
-            ELSE e.weight + $delta
-        END
-    ),
-    e.feedback_count = coalesce(e.feedback_count, 0) + 1
+            CASE WHEN e.weight + $delta < $floor THEN $floor ELSE e.weight + $delta END
+        ),
+        e.consecutive_low_count = 0,
+        e.last_penalty_at_count = $new_fc,
+        e.feedback_count        = $new_fc
     RETURN e.weight AS new_weight
-    """
-    rows = _run_query(gid, query, {
+    """, {
         "strategy":      strategy,
         "question_type": question_type,
-        "delta":         delta,
-        "ceil":          _WEIGHT_CEIL,
+        "delta":         _PENALISE_DELTA,
         "floor":         _WEIGHT_FLOOR,
+        "new_fc":        new_fc,
     })
     if rows:
         logger.info(
             "Routing feedback applied: strategy=%s qt=%s confidence=%.2f delta=%+.2f new_weight=%.3f",
-            strategy, question_type, confidence, delta, rows[0].get("new_weight", 0),
+            strategy, question_type, confidence, _PENALISE_DELTA, rows[0].get("new_weight", 0),
         )
     else:
         logger.debug(
