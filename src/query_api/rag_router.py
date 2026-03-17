@@ -384,7 +384,8 @@ def seed_routing_graph(graph_id: str) -> dict[str, int]:
         MATCH (r:RAGStrategy {label: $strategy})
         MATCH (d:DocumentType {question_type: $question_type})
         MERGE (r)-[e:EFFECTIVE_FOR]->(d)
-        ON CREATE SET e.weight = $weight, e.feedback_count = 0, e.seeded = true
+        ON CREATE SET e.weight = $weight, e.feedback_count = 0, e.seeded = true,
+                      e.consecutive_low_count = 0, e.last_penalty_at_count = 0
         RETURN e.weight AS w
         """
         rows = _run_query(graph_id, q, {
