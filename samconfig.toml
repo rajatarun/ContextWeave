@@ -7,6 +7,13 @@ version = 0.1
 #   sam build && sam deploy           # uses [default.deploy.parameters]
 #   sam deploy --config-env staging   # uses [staging.deploy.parameters]
 #   sam deploy --config-env prod      # uses [prod.deploy.parameters]
+#
+# Graph backend: Memgraph Community on EC2 (replaces Neptune Analytics)
+# Vector store:  OpenSearch Serverless (replaces Neptune Analytics KB backend)
+#
+# Required before first deploy:
+#   1. Create an EC2 Key Pair in us-east-1 (or leave KeyPairName="" to use SSM only)
+#   2. Set AllowedCidr to your IP range to restrict Bolt/SSH access
 # ─────────────────────────────────────────────────────────────────────────────
 
 [default]
@@ -29,11 +36,15 @@ disable_rollback     = false
 # s3_bucket          = "your-sam-deployment-bucket"
 parameter_overrides  = [
     "Environment=dev",
-    "NeptuneVectorDimension=1024",
-    "NeptuneProvisionedMemory=16",
+    "EmbeddingDimension=1024",
     "LogRetentionDays=30",
     "EnableStepFunctions=true",
     "GenerationModelId=us.amazon.nova-pro-v1:0",
+    "KeyPairName=",
+    "AllowedCidr=0.0.0.0/0",
+    "VpcCidr=10.10.0.0/16",
+    "SubnetCidr=10.10.1.0/24",
+    "MemgraphDockerImage=memgraph/memgraph-platform:latest",
 ]
 tags = [
     "Project=ExpertiseRAG",
@@ -53,10 +64,14 @@ confirm_changeset    = true
 capabilities         = "CAPABILITY_NAMED_IAM"
 parameter_overrides  = [
     "Environment=staging",
-    "NeptuneVectorDimension=1024",
-    "NeptuneProvisionedMemory=16",
+    "EmbeddingDimension=1024",
     "LogRetentionDays=60",
     "EnableStepFunctions=true",
+    "KeyPairName=",
+    "AllowedCidr=0.0.0.0/0",
+    "VpcCidr=10.10.0.0/16",
+    "SubnetCidr=10.10.1.0/24",
+    "MemgraphDockerImage=memgraph/memgraph-platform:latest",
 ]
 tags = [
     "Project=ExpertiseRAG",
@@ -77,10 +92,14 @@ capabilities         = "CAPABILITY_NAMED_IAM"
 disable_rollback     = false
 parameter_overrides  = [
     "Environment=prod",
-    "NeptuneVectorDimension=1024",
-    "NeptuneProvisionedMemory=16",
+    "EmbeddingDimension=1024",
     "LogRetentionDays=365",
     "EnableStepFunctions=true",
+    "KeyPairName=",
+    "AllowedCidr=0.0.0.0/0",
+    "VpcCidr=10.10.0.0/16",
+    "SubnetCidr=10.10.1.0/24",
+    "MemgraphDockerImage=memgraph/memgraph-platform:latest",
 ]
 tags = [
     "Project=ExpertiseRAG",

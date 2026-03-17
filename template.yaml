@@ -2,8 +2,8 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
   ExpertiseRAG - AWS-native GraphRAG platform using Amazon Bedrock Knowledge Bases
-  with Neptune Analytics for deep expertise queries about a developer's background,
-  skills, architecture patterns, and professional accomplishments.
+  with OpenSearch Serverless for vector search and Memgraph Community (EC2/Docker)
+  for graph traversal and adaptive routing intelligence.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Parameters
@@ -15,18 +15,12 @@ Parameters:
     AllowedValues: [dev, staging, prod]
     Description: Deployment environment
 
-  NeptuneVectorDimension:
+  EmbeddingDimension:
     Type: Number
     Default: 1024
     Description: >
       Vector dimension – MUST match Amazon Titan Text Embeddings V2 (1024).
-      Changing this after deployment requires recreating the Neptune graph.
-
-  NeptuneProvisionedMemory:
-    Type: Number
-    Default: 16
-    AllowedValues: [16, 32, 64, 128, 256, 512, 1024]
-    Description: Neptune Analytics provisioned memory in GB (16 is minimum)
+      Must equal the dimension of the OpenSearch Serverless vector index.
 
   GenerationModelId:
     Type: String
@@ -49,11 +43,42 @@ Parameters:
     AllowedValues: ['true', 'false']
     Description: Deploy Step Functions ingestion orchestration state machine
 
+  # ── Memgraph EC2 parameters ──────────────────────────────────────────────────
+  KeyPairName:
+    Type: String
+    Default: ""
+    Description: >
+      EC2 Key Pair name for SSH access to the Memgraph instance.
+      Leave empty to use SSM Session Manager only (AmazonSSMManagedInstanceCore).
+
+  AllowedCidr:
+    Type: String
+    Default: "0.0.0.0/0"
+    Description: >
+      CIDR allowed for SSH (22), Bolt (7687), and Memgraph Lab UI (7444).
+      Restrict to your IP range in production (e.g. 203.0.113.0/24).
+
+  VpcCidr:
+    Type: String
+    Default: "10.10.0.0/16"
+    Description: CIDR block for the Memgraph VPC
+
+  SubnetCidr:
+    Type: String
+    Default: "10.10.1.0/24"
+    Description: CIDR block for the Memgraph public subnet
+
+  MemgraphDockerImage:
+    Type: String
+    Default: "memgraph/memgraph-platform:latest"
+    Description: Docker image for Memgraph (platform edition includes Lab UI on port 7444)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Conditions
 # ─────────────────────────────────────────────────────────────────────────────
 Conditions:
   DeployStepFunctions: !Equals [!Ref EnableStepFunctions, 'true']
+  HasKeyPair: !Not [!Equals [!Ref KeyPairName, ""]]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Globals
@@ -70,7 +95,7 @@ Globals:
         LOG_LEVEL: INFO
         ENVIRONMENT: !Ref Environment
         ARTIFACTS_BUCKET: !Sub expertise-rag-artifacts-${AWS::AccountId}-${Environment}
-        NEPTUNE_GRAPH_ID: !GetAtt NeptuneAnalyticsGraph.GraphId
+        MEMGRAPH_BOLT_URL: !Sub "bolt://${MemgraphEIP}:7687"
         KNOWLEDGE_BASE_ID: !Ref BedrockKnowledgeBase
         DATA_SOURCE_ID: !GetAtt BedrockDataSource.DataSourceId
     Tags:
@@ -200,17 +225,47 @@ Resources:
       SourceAccount: !Ref AWS::AccountId
 
   # ───────────────────────────────────────────
-  # Neptune Analytics Graph
+  # OpenSearch Serverless – vector store for Bedrock Knowledge Base
+  # Replaces Neptune Analytics as the KB storage backend.
+  # Memgraph (EC2/Docker) handles graph traversal and routing intelligence.
   # ───────────────────────────────────────────
-  NeptuneAnalyticsGraph:
-    Type: AWS::NeptuneGraph::Graph
+
+  OpenSearchEncryptionPolicy:
+    Type: AWS::OpenSearchServerless::SecurityPolicy
     Properties:
-      GraphName: !Sub expertise-rag-${Environment}
-      ProvisionedMemory: !Ref NeptuneProvisionedMemory
-      VectorSearchConfiguration:
-        VectorSearchDimension: !Ref NeptuneVectorDimension
-      DeletionProtection: false
-      ReplicaCount: 0
+      Name: !Sub expertise-rag-enc-${Environment}
+      Type: encryption
+      Description: SSE with AWS-owned key for ExpertiseRAG OpenSearch collection
+      Policy: !Sub >-
+        {"Rules":[{"ResourceType":"collection","Resource":["collection/expertise-rag-${Environment}"]}],"AWSOwnedKey":true}
+
+  OpenSearchNetworkPolicy:
+    Type: AWS::OpenSearchServerless::SecurityPolicy
+    Properties:
+      Name: !Sub expertise-rag-net-${Environment}
+      Type: network
+      Description: Public access for ExpertiseRAG OpenSearch collection (Bedrock KB ingestion)
+      Policy: !Sub >-
+        [{"Rules":[{"ResourceType":"collection","Resource":["collection/expertise-rag-${Environment}"]},{"ResourceType":"dashboard","Resource":["collection/expertise-rag-${Environment}"]}],"AllowFromPublic":true}]
+
+  OpenSearchAccessPolicy:
+    Type: AWS::OpenSearchServerless::AccessPolicy
+    Properties:
+      Name: !Sub expertise-rag-access-${Environment}
+      Type: data
+      Description: Grants Bedrock KB role full index + document access for ingestion and retrieval
+      Policy: !Sub >-
+        [{"Description":"BedrockKB index and document access","Rules":[{"ResourceType":"index","Resource":["index/expertise-rag-${Environment}/*"],"Permission":["aoss:CreateIndex","aoss:DeleteIndex","aoss:UpdateIndex","aoss:DescribeIndex","aoss:ReadDocument","aoss:WriteDocument"]},{"ResourceType":"collection","Resource":["collection/expertise-rag-${Environment}"],"Permission":["aoss:CreateCollectionItems","aoss:DeleteCollectionItems","aoss:UpdateCollectionItems","aoss:DescribeCollectionItems"]}],"Principal":["${BedrockKnowledgeBaseRole.Arn}"]}]
+
+  OpenSearchCollection:
+    Type: AWS::OpenSearchServerless::Collection
+    DependsOn:
+      - OpenSearchEncryptionPolicy
+      - OpenSearchNetworkPolicy
+    Properties:
+      Name: !Sub expertise-rag-${Environment}
+      Type: VECTORSEARCH
+      Description: ExpertiseRAG vector search collection for Bedrock Knowledge Base
       Tags:
         - Key: Project
           Value: ExpertiseRAG
@@ -218,15 +273,17 @@ Resources:
           Value: !Ref Environment
 
   # ───────────────────────────────────────────
-  # Bedrock Knowledge Base (Neptune Analytics vector store)
+  # Bedrock Knowledge Base (OpenSearch Serverless vector store)
   # ───────────────────────────────────────────
   BedrockKnowledgeBase:
     Type: AWS::Bedrock::KnowledgeBase
+    DependsOn: OpenSearchAccessPolicy
     Properties:
       Name: !Sub expertise-rag-kb-${Environment}
       Description: >
         ExpertiseRAG knowledge base – ingests developer expertise artifacts (repos,
-        architecture docs, resume) and enables GraphRAG queries via Neptune Analytics.
+        architecture docs, resume) and enables GraphRAG queries via OpenSearch Serverless
+        vector search and Memgraph graph traversal.
       RoleArn: !GetAtt BedrockKnowledgeBaseRole.Arn
       KnowledgeBaseConfiguration:
         Type: VECTOR
@@ -234,15 +291,17 @@ Resources:
           EmbeddingModelArn: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0
           EmbeddingModelConfiguration:
             BedrockEmbeddingModelConfiguration:
-              # Must match NeptuneVectorDimension parameter
-              Dimensions: !Ref NeptuneVectorDimension
+              # Must match EmbeddingDimension parameter
+              Dimensions: !Ref EmbeddingDimension
       StorageConfiguration:
-        Type: NEPTUNE_ANALYTICS
-        NeptuneAnalyticsConfiguration:
-          GraphArn: !GetAtt NeptuneAnalyticsGraph.GraphArn
+        Type: OPENSEARCH_SERVERLESS
+        OpensearchServerlessConfiguration:
+          CollectionArn: !GetAtt OpenSearchCollection.Arn
+          VectorIndexName: bedrock-knowledge-base-default-index
           FieldMapping:
             MetadataField: AMAZON_BEDROCK_METADATA
             TextField: AMAZON_BEDROCK_TEXT_CHUNK
+            VectorField: bedrock-knowledge-base-default-vector
       Tags:
         Project: ExpertiseRAG
         Environment: !Ref Environment
@@ -274,7 +333,6 @@ Resources:
         ParsingConfiguration:
           ParsingStrategy: BEDROCK_FOUNDATION_MODEL
           BedrockFoundationModelConfiguration:
-            # TODO: Replace with preferred parsing model (Claude 3 Haiku is cost-effective)
             ModelArn: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0
             ParsingPrompt:
               ParsingPromptText: |
@@ -292,6 +350,311 @@ Resources:
             ModelArn: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0
             EnrichmentStrategyConfiguration:
               Method: CHUNK_ENTITY_EXTRACTION
+
+  # ───────────────────────────────────────────
+  # Memgraph – VPC and Networking
+  # ───────────────────────────────────────────
+  MemgraphVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub expertise-rag-memgraph-vpc-${Environment}
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
+  MemgraphSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MemgraphVPC
+      CidrBlock: !Ref SubnetCidr
+      MapPublicIpOnLaunch: false
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub expertise-rag-memgraph-subnet-${Environment}
+        - Key: Project
+          Value: ExpertiseRAG
+
+  MemgraphIGW:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub expertise-rag-memgraph-igw-${Environment}
+        - Key: Project
+          Value: ExpertiseRAG
+
+  MemgraphVPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MemgraphVPC
+      InternetGatewayId: !Ref MemgraphIGW
+
+  MemgraphRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MemgraphVPC
+      Tags:
+        - Key: Name
+          Value: !Sub expertise-rag-memgraph-rt-${Environment}
+        - Key: Project
+          Value: ExpertiseRAG
+
+  MemgraphDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: MemgraphVPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref MemgraphRouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref MemgraphIGW
+
+  MemgraphSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref MemgraphSubnet
+      RouteTableId: !Ref MemgraphRouteTable
+
+  # ───────────────────────────────────────────
+  # Memgraph – Security Group
+  # Memgraph Community has no auth; the Security Group is the sole access control.
+  # ───────────────────────────────────────────
+  MemgraphSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Memgraph EC2 – SSH (22), Bolt (7687), Lab UI (7444)"
+      VpcId: !Ref MemgraphVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedCidr
+          Description: SSH access
+        - IpProtocol: tcp
+          FromPort: 7687
+          ToPort: 7687
+          CidrIp: !Ref AllowedCidr
+          Description: Memgraph Bolt protocol
+        - IpProtocol: tcp
+          FromPort: 7444
+          ToPort: 7444
+          CidrIp: !Ref AllowedCidr
+          Description: Memgraph Lab UI
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: "0.0.0.0/0"
+          Description: All outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub expertise-rag-memgraph-sg-${Environment}
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ───────────────────────────────────────────
+  # Memgraph – IAM Role + Instance Profile
+  # ───────────────────────────────────────────
+  MemgraphInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub expertise-rag-memgraph-instance-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: MemgraphSSMAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:PutParameter
+                  - ssm:GetParameter
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/memgraph/*"
+      Tags:
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
+  MemgraphInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub expertise-rag-memgraph-profile-${Environment}
+      Roles:
+        - !Ref MemgraphInstanceRole
+
+  # ───────────────────────────────────────────
+  # Memgraph – EC2 Instance (t4g.micro, ARM64, Ubuntu 24.04)
+  # Docker Compose runs memgraph/memgraph-platform with WAL + snapshots.
+  # mem_limit=700m is intentional for t4g.micro (1 GB RAM).
+  # ───────────────────────────────────────────
+  MemgraphEC2Instance:
+    Type: AWS::EC2::Instance
+    DependsOn: MemgraphVPCGatewayAttachment
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT10M
+    Properties:
+      # Latest Ubuntu 24.04 ARM64 – resolved from SSM public parameter at deploy time
+      ImageId: "{{resolve:ssm:/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp2/ami-id}}"
+      InstanceType: t4g.micro
+      KeyName: !If [HasKeyPair, !Ref KeyPairName, !Ref AWS::NoValue]
+      IamInstanceProfile: !Ref MemgraphInstanceProfile
+      SubnetId: !Ref MemgraphSubnet
+      SecurityGroupIds:
+        - !Ref MemgraphSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp3
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64:
+          Fn::Sub: |
+            #!/bin/bash
+            set -euxo pipefail
+
+            # 1. System update
+            apt-get update -y && apt-get upgrade -y
+
+            # 2. Install Docker (official repo, ARM64-safe)
+            apt-get install -y ca-certificates curl gnupg lsb-release
+            install -m 0755 -d /etc/apt/keyrings
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+              | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+            chmod a+r /etc/apt/keyrings/docker.gpg
+            echo \
+              "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+              https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
+              > /etc/apt/sources.list.d/docker.list
+            apt-get update -y
+            apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+            systemctl enable docker && systemctl start docker
+            usermod -aG docker ubuntu
+
+            # 3. Write docker-compose.yml
+            # ${MemgraphDockerImage} is substituted by CloudFormation Fn::Sub before
+            # bash executes; the quoted heredoc delimiter prevents a second expansion.
+            mkdir -p /opt/memgraph
+            cat > /opt/memgraph/docker-compose.yml <<'COMPOSE'
+            version: "3.8"
+            services:
+              memgraph:
+                image: ${MemgraphDockerImage}
+                container_name: memgraph
+                restart: always
+                ports:
+                  - "7687:7687"
+                  - "7444:7444"
+                volumes:
+                  - mg_data:/var/lib/memgraph
+                  - mg_log:/var/log/memgraph
+                  - mg_etc:/etc/memgraph
+                environment:
+                  - MEMGRAPH_TELEMETRY_ENABLED=false
+                command: >
+                  --log-level=WARNING
+                  --storage-snapshot-interval-sec=300
+                  --storage-wal-enabled=true
+                  --storage-snapshot-on-exit=true
+                  --storage-recover-on-startup=true
+                mem_limit: 700m
+                memswap_limit: 700m
+            volumes:
+              mg_data:
+              mg_log:
+              mg_etc:
+            COMPOSE
+
+            # 4. Start Memgraph
+            cd /opt/memgraph && docker compose up -d
+
+            # 5. Wait for Bolt to be ready (up to 30 × 5 s = 150 s)
+            for i in $(seq 1 30); do
+              if docker exec memgraph mgconsole --no-history \
+                   --execute "RETURN 1;" > /dev/null 2>&1; then
+                echo "Memgraph ready after ${!i} attempts."
+                break
+              fi
+              sleep 5
+            done
+
+            # 6. Signal CloudFormation
+            pip3 install \
+              https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz \
+              --break-system-packages
+            /usr/local/bin/cfn-signal \
+              --exit-code $? \
+              --stack "${AWS::StackName}" \
+              --resource MemgraphEC2Instance \
+              --region "${AWS::Region}"
+      Tags:
+        - Key: Name
+          Value: !Sub expertise-rag-memgraph-${Environment}
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ───────────────────────────────────────────
+  # Memgraph – Elastic IP + SSM Parameters
+  # ───────────────────────────────────────────
+  MemgraphEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub expertise-rag-memgraph-eip-${Environment}
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
+  MemgraphEIPAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      InstanceId: !Ref MemgraphEC2Instance
+      EIP: !Ref MemgraphEIP
+
+  SSMParamMemgraphHost:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /memgraph/host
+      Type: String
+      Value: !Ref MemgraphEIP
+      Description: Memgraph public IP address (Elastic IP)
+
+  SSMParamMemgraphPort:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /memgraph/port
+      Type: String
+      Value: "7687"
+      Description: Memgraph Bolt port
+
+  SSMParamMemgraphBoltURL:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /memgraph/bolt_url
+      Type: String
+      Value: !Sub "bolt://${MemgraphEIP}:7687"
+      Description: Memgraph Bolt connection URL
 
   # ───────────────────────────────────────────
   # CloudWatch Log Groups
@@ -407,6 +770,14 @@ Resources:
                   - kms:Decrypt
                   - kms:GenerateDataKey
                 Resource: !GetAtt ArtifactsKMSKey.Arn
+        - PolicyName: MemgraphSSMRead
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/memgraph/*"
       Tags:
         - Key: Project
           Value: ExpertiseRAG
@@ -418,7 +789,7 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub expertise-rag-query-api-${Environment}
-      Description: Allows Query API Lambda to call Bedrock Retrieve, Neptune Analytics, and read S3
+      Description: Allows Query API Lambda to call Bedrock Retrieve, OpenSearch Serverless, and Memgraph
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -448,16 +819,6 @@ Resources:
                 Resource:
                   - arn:aws:bedrock:*::foundation-model/amazon.nova-pro-v1:0
                   - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.amazon.nova-pro-v1:0
-        - PolicyName: NeptuneAnalyticsQuery
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Sid: NeptuneQuery
-                Effect: Allow
-                Action:
-                  - neptune-graph:ReadDataViaQuery
-                  - neptune-graph:GetGraph
-                Resource: !GetAtt NeptuneAnalyticsGraph.GraphArn
         - PolicyName: S3ReadDerived
           PolicyDocument:
             Version: '2012-10-17'
@@ -474,6 +835,14 @@ Resources:
                 Action:
                   - kms:Decrypt
                 Resource: !GetAtt ArtifactsKMSKey.Arn
+        - PolicyName: MemgraphSSMRead
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/memgraph/*"
       Tags:
         - Key: Project
           Value: ExpertiseRAG
@@ -485,7 +854,7 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub expertise-rag-ingestion-trigger-${Environment}
-      Description: Allows ingestion trigger Lambda to start Bedrock ingestion jobs
+      Description: Allows ingestion trigger Lambda to start Bedrock ingestion jobs and seed Memgraph routing graph
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -519,6 +888,14 @@ Resources:
                 Resource:
                   - !GetAtt ArtifactsBucket.Arn
                   - !Sub ${ArtifactsBucket.Arn}/*
+        - PolicyName: MemgraphSSMRead
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/memgraph/*"
       Tags:
         - Key: Project
           Value: ExpertiseRAG
@@ -530,7 +907,7 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub expertise-rag-bedrock-kb-${Environment}
-      Description: Allows Amazon Bedrock Knowledge Base to access S3 and Neptune Analytics
+      Description: Allows Amazon Bedrock Knowledge Base to access S3 and OpenSearch Serverless
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -558,17 +935,14 @@ Resources:
                   - s3:GetObject
                   - s3:HeadObject
                 Resource: !Sub arn:aws:s3:::expertise-rag-artifacts-${AWS::AccountId}-${Environment}/*
-        - PolicyName: NeptuneAnalyticsWrite
+        - PolicyName: OpenSearchServerlessAccess
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
-                  - neptune-graph:WriteDataViaQuery
-                  - neptune-graph:ReadDataViaQuery
-                  - neptune-graph:DeleteDataViaQuery
-                  - neptune-graph:GetGraph
-                Resource: !GetAtt NeptuneAnalyticsGraph.GraphArn
+                  - aoss:APIAccessAll
+                Resource: !GetAtt OpenSearchCollection.Arn
         - PolicyName: BedrockEmbeddings
           PolicyDocument:
             Version: '2012-10-17'
@@ -663,6 +1037,7 @@ Resources:
         Reads raw repo uploads from S3, extracts text from Markdown/YAML,
         transforms PlantUML to architecture summaries, and emits derived
         JSON (expertise signals, graph entities, graph edges) back to S3.
+        Graph entities are written to Memgraph via Bolt (MEMGRAPH_BOLT_URL).
       CodeUri: src/preprocessor/
       Handler: handler.lambda_handler
       Role: !GetAtt PreprocessorRole.Arn
@@ -690,8 +1065,8 @@ Resources:
     Properties:
       FunctionName: !Sub expertise-rag-query-api-${Environment}
       Description: >
-        Reasoning API: classifies questions, calls Bedrock Retrieve, expands
-        graph-linked evidence via Neptune Analytics, synthesizes answers with
+        Reasoning API: classifies questions, calls Bedrock Retrieve (OpenSearch Serverless),
+        expands graph-linked evidence via Memgraph Bolt, synthesizes answers with
         evidence weighting, and returns structured expertise responses.
       CodeUri: src/query_api/
       Handler: handler.lambda_handler
@@ -702,7 +1077,7 @@ Resources:
         Variables:
           GENERATION_MODEL_ID: !Ref GenerationModelId
           KNOWLEDGE_BASE_ID: !Ref BedrockKnowledgeBase
-          NEPTUNE_GRAPH_ID: !GetAtt NeptuneAnalyticsGraph.GraphId
+          MEMGRAPH_BOLT_URL: !Sub "bolt://${MemgraphEIP}:7687"
           ENVIRONMENT: !Ref Environment
           LOG_LEVEL: INFO
       Events:
@@ -728,9 +1103,9 @@ Resources:
     Properties:
       FunctionName: !Sub expertise-rag-ingestion-trigger-${Environment}
       Description: >
-        Starts a Bedrock Knowledge Base ingestion job. Invoked as a CloudFormation
-        custom resource after deployment and callable manually / via Step Functions
-        after new uploads.
+        Starts a Bedrock Knowledge Base ingestion job and seeds the Memgraph routing graph
+        with initial EFFECTIVE_FOR prior weights. Invoked as a CloudFormation custom resource
+        after deployment and callable manually / via Step Functions after new uploads.
       CodeUri: src/ingestion_trigger/
       Handler: handler.lambda_handler
       Role: !GetAtt IngestionTriggerRole.Arn
@@ -907,15 +1282,31 @@ Outputs:
     Description: Full URL for the POST /query-expertise endpoint
     Value: !Sub https://${ExpertiseAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/query-expertise
 
-  NeptuneGraphIdentifier:
-    Description: Neptune Analytics graph identifier
-    Value: !GetAtt NeptuneAnalyticsGraph.GraphId
+  MemgraphPublicIP:
+    Description: Memgraph EC2 public IP (Elastic IP)
+    Value: !Ref MemgraphEIP
     Export:
-      Name: !Sub ${AWS::StackName}-NeptuneGraphId
+      Name: !Sub ${AWS::StackName}-MemgraphPublicIP
 
-  NeptuneGraphArn:
-    Description: Neptune Analytics graph ARN
-    Value: !GetAtt NeptuneAnalyticsGraph.GraphArn
+  MemgraphBoltURL:
+    Description: Memgraph Bolt connection URL (used by all Lambda functions via MEMGRAPH_BOLT_URL env var)
+    Value: !Sub "bolt://${MemgraphEIP}:7687"
+    Export:
+      Name: !Sub ${AWS::StackName}-MemgraphBoltURL
+
+  MemgraphLabURL:
+    Description: Memgraph Lab UI URL
+    Value: !Sub "http://${MemgraphEIP}:7444"
+
+  MemgraphSSMSessionCommand:
+    Description: SSM Session Manager connect command (no SSH key required)
+    Value: !Sub "aws ssm start-session --target ${MemgraphEC2Instance}"
+
+  OpenSearchCollectionArn:
+    Description: OpenSearch Serverless collection ARN (Bedrock KB vector store)
+    Value: !GetAtt OpenSearchCollection.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-OpenSearchCollectionArn
 
   KnowledgeBaseId:
     Description: Bedrock Knowledge Base ID
