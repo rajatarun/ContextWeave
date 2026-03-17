@@ -10,8 +10,10 @@ For each invocation the handler:
   1. Lists all files under the raw/<repo>/ prefix (or processes the single key from S3 event)
   2. Downloads each file
   3. Dispatches to the appropriate extractor (Markdown, YAML, PlantUML, text)
-  4. Builds graph entities + edges via GraphBuilder
-  5. Writes derived artifacts to S3 under derived/<repo>/
+  4. Chunks extracted text and generates Bedrock Titan V2 embeddings
+  5. Writes chunks + embeddings to PostgreSQL pgvector
+  6. Builds graph entities + edges via GraphBuilder and writes to Memgraph
+  7. Writes derived artifacts to S3 under derived/<repo>/
      - <filename>.derived.json  : full extraction output
      - graph_entities.json      : all nodes for this repo pass
      - graph_edges.json         : all edges for this repo pass
@@ -31,9 +33,18 @@ import boto3
 from botocore.exceptions import ClientError
 
 from extractors import extract
-from graph_builder import build_graph_from_extractions
+from graph_builder import build_graph_from_extractions, GraphBuilder
 from models import DerivedArtifact, get_source_weight
 from routing_analyzer import analyze_document
+
+# Shared utilities – imported lazily so the module loads even without
+# the DB drivers installed (unit-test environments)
+def _get_shared_module(name: str):
+    import importlib, sys, os
+    shared_dir = os.path.join(os.path.dirname(__file__), "..", "shared")
+    if shared_dir not in sys.path:
+        sys.path.insert(0, shared_dir)
+    return importlib.import_module(name)
 
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
@@ -229,6 +240,163 @@ def _process_file(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Chunk + embed + write to pgvector
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _write_chunks_to_pgvector(
+    extractions: list[dict],
+    repo_name: str,
+) -> int:
+    """
+    Chunk each extracted document, generate Titan V2 embeddings, and insert
+    into the pgvector chunks table.
+
+    Returns the total number of chunks written (0 on failure).
+    """
+    try:
+        chunker = _get_shared_module("chunker")
+        embedder = _get_shared_module("embedder")
+        db_clients = _get_shared_module("db_clients")
+    except Exception as exc:
+        logger.warning("Shared modules unavailable – skipping pgvector write: %s", exc)
+        return 0
+
+    conn = db_clients.get_pg_connection()
+    total_written = 0
+
+    for ext in extractions:
+        source_file = ext.get("source_file", "")
+        extracted_text = ext.get("extracted_text", "")
+        routing_analysis = ext.get("routing_analysis")
+        strategy = routing_analysis.chunking_strategy if routing_analysis else "fixed_512"
+        doc_type = routing_analysis.doc_type if routing_analysis else "narrative"
+        doc_id = f"{repo_name}/{source_file}"
+
+        if not extracted_text.strip():
+            continue
+
+        chunks = chunker.chunk_text(extracted_text, strategy)
+        if not chunks:
+            continue
+
+        # Generate embeddings for all chunk contents
+        contents = [c.content for c in chunks]
+        embeddings = embedder.embed_texts(contents)
+
+        rows = []
+        for chunk, embedding in zip(chunks, embeddings):
+            if embedding is None:
+                continue
+            rows.append((
+                doc_id,
+                source_file,
+                doc_type,
+                strategy,
+                chunk.content,
+                embedding,
+                chunk.parent_content,
+                chunk.is_child,
+                {},
+            ))
+
+        if not rows:
+            continue
+
+        try:
+            with conn.cursor() as cur:
+                # Delete existing chunks for this source_file to allow re-processing
+                cur.execute(
+                    "DELETE FROM chunks WHERE source_file = %s AND doc_id = %s",
+                    (source_file, doc_id),
+                )
+                from psycopg2.extras import execute_values
+                execute_values(
+                    cur,
+                    """
+                    INSERT INTO chunks
+                        (doc_id, source_file, doc_type, strategy, content,
+                         embedding, parent_content, is_child, metadata)
+                    VALUES %s
+                    """,
+                    [
+                        (r[0], r[1], r[2], r[3], r[4],
+                         r[5], r[6], r[7], r[8])
+                        for r in rows
+                    ],
+                    template="(%s, %s, %s, %s, %s, %s::vector, %s, %s, %s)",
+                )
+            conn.commit()
+            total_written += len(rows)
+            logger.info(
+                "pgvector: wrote %d chunks for %s (strategy=%s)",
+                len(rows), source_file, strategy,
+            )
+        except Exception as exc:
+            conn.rollback()
+            logger.error("pgvector write failed for %s: %s", source_file, exc)
+
+    return total_written
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Write graph to Memgraph
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _write_graph_to_memgraph(
+    extractions: list[dict],
+    repo_name: str,
+) -> dict[str, int]:
+    """
+    Build the knowledge graph from extractions and write it directly to Memgraph.
+
+    Returns {"nodes_written": int, "edges_written": int}.
+    """
+    try:
+        db_clients = _get_shared_module("db_clients")
+    except Exception as exc:
+        logger.warning("db_clients unavailable – skipping Memgraph write: %s", exc)
+        return {"nodes_written": 0, "edges_written": 0}
+
+    from graph_builder import GraphBuilder
+    import re as _re
+
+    repo_id_label = f"repository_{_re.sub(r'[^a-z0-9]', '_', repo_name.lower()).strip('_')}"
+    builder = GraphBuilder(
+        person_name=os.environ.get("PERSON_NAME", "Developer"),
+        repo_id=repo_id_label,
+    )
+
+    routing_analyses = {
+        ext["source_file"]: ext["routing_analysis"]
+        for ext in extractions
+        if "routing_analysis" in ext
+    }
+
+    for ext in extractions:
+        source_file = ext.get("source_file", "")
+        builder.add_extraction(
+            source_file=source_file,
+            file_type=ext.get("file_type", "text"),
+            expertise_signals=ext.get("expertise_signals", []),
+            extracted_text=ext.get("extracted_text", ""),
+            weight=float(ext.get("weight", 0.5)),
+        )
+        if source_file in routing_analyses:
+            import re as _re2
+            doc_nid = f"document_{_re2.sub(r'[^a-z0-9]', '_', source_file.lower()).strip('_')}"
+            builder.add_routing_metadata(doc_nid, routing_analyses[source_file])
+
+    try:
+        driver = db_clients.get_memgraph_driver()
+        result = builder.write_to_memgraph(driver)
+        logger.info("Memgraph write result: %s", result)
+        return result
+    except Exception as exc:
+        logger.error("Memgraph write failed: %s", exc, exc_info=True)
+        return {"nodes_written": 0, "edges_written": 0}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main Lambda handler
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -331,6 +499,27 @@ def lambda_handler(event: dict, context: Any) -> dict:
         reverse=True,
     )
 
+    # ── Write chunks + embeddings to pgvector ─────────────────────────────────
+    chunks_written = 0
+    if extractions:
+        try:
+            chunks_written = _write_chunks_to_pgvector(extractions, repo_name)
+            logger.info("pgvector: total %d chunks written", chunks_written)
+        except Exception as exc:
+            err_msg = f"pgvector write failed: {exc}"
+            logger.error(err_msg, exc_info=True)
+            errors.append(err_msg)
+
+    # ── Write graph to Memgraph ────────────────────────────────────────────────
+    memgraph_result: dict = {"nodes_written": 0, "edges_written": 0}
+    if extractions:
+        try:
+            memgraph_result = _write_graph_to_memgraph(extractions, repo_name)
+        except Exception as exc:
+            err_msg = f"Memgraph write failed: {exc}"
+            logger.error(err_msg, exc_info=True)
+            errors.append(err_msg)
+
     # ── Write aggregate derived artifacts ─────────────────────────────────────
     derived_repo = repo_prefix.replace(f"{RAW_PREFIX}/", "", 1).rstrip("/")
     derived_base = f"{DERIVED_PREFIX}/{derived_repo}"
@@ -353,16 +542,20 @@ def lambda_handler(event: dict, context: Any) -> dict:
         "graph_node_count": len(graph_nodes),
         "graph_edge_count": len(graph_edges),
         "signal_count": len(all_signals),
+        "chunks_written": chunks_written,
+        "memgraph_nodes_written": memgraph_result.get("nodes_written", 0),
+        "memgraph_edges_written": memgraph_result.get("edges_written", 0),
         "routing_summary": routing_summary,
         "errors": errors,
     })
 
     logger.info(
-        "Preprocessing complete: %d files, %d nodes, %d edges, %d signals",
+        "Preprocessing complete: %d files, %d nodes, %d edges, %d signals, %d chunks",
         len(extractions),
         len(graph_nodes),
         len(graph_edges),
         len(all_signals),
+        chunks_written,
     )
 
     return {
@@ -373,5 +566,8 @@ def lambda_handler(event: dict, context: Any) -> dict:
         "graph_node_count": len(graph_nodes),
         "graph_edge_count": len(graph_edges),
         "signal_count": len(all_signals),
+        "chunks_written": chunks_written,
+        "memgraph_nodes_written": memgraph_result.get("nodes_written", 0),
+        "memgraph_edges_written": memgraph_result.get("edges_written", 0),
         "errors": errors,
     }

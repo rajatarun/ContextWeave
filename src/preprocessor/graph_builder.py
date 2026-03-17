@@ -282,6 +282,82 @@ class GraphBuilder:
         edges = [e.to_dict() for e in self._edges.values()]
         return nodes, edges
 
+    def write_to_memgraph(self, driver: Any) -> dict[str, int]:
+        """
+        Write all accumulated nodes and edges directly to Memgraph via bolt.
+
+        Uses MERGE so repeated calls are idempotent (safe to re-run on the
+        same document set without creating duplicate nodes or edges).
+
+        Args:
+            driver: neo4j.GraphDatabase.driver instance from db_clients.
+
+        Returns:
+            {"nodes_written": int, "edges_written": int}
+        """
+        import logging as _logging
+        _log = _logging.getLogger(__name__)
+
+        nodes_written = 0
+        edges_written = 0
+
+        with driver.session() as session:
+            # ── Nodes ──────────────────────────────────────────────────────
+            for node in self._nodes.values():
+                node_type = node.node_type.value if hasattr(node.node_type, "value") else node.node_type
+                props = {
+                    "node_id": node.node_id,
+                    "label": node.label,
+                    "confidence": node.confidence,
+                    "source_file": node.source_file or "",
+                    **{k: v for k, v in node.properties.items()
+                       if isinstance(v, (str, int, float, bool)) or v is None},
+                }
+                # Memgraph MERGE on node_id; SET all scalar properties
+                query = (
+                    f"MERGE (n:{node_type} {{node_id: $node_id}}) "
+                    "SET n += $props"
+                )
+                try:
+                    session.run(query, node_id=node.node_id, props=props)
+                    nodes_written += 1
+                except Exception as exc:
+                    _log.warning("Memgraph node write failed (%s): %s", node.node_id, exc)
+
+            # ── Edges ──────────────────────────────────────────────────────
+            for edge in self._edges.values():
+                rel = edge.relationship.upper() if hasattr(edge.relationship, "upper") else edge.relationship
+                edge_props = {
+                    "edge_id": edge.edge_id,
+                    "weight": edge.weight,
+                    "source_file": edge.source_file or "",
+                    **{k: v for k, v in edge.properties.items()
+                       if isinstance(v, (str, int, float, bool)) or v is None},
+                }
+                query = (
+                    "MATCH (a {node_id: $from_id}), (b {node_id: $to_id}) "
+                    f"MERGE (a)-[r:{rel} {{edge_id: $edge_id}}]->(b) "
+                    "SET r += $props"
+                )
+                try:
+                    session.run(
+                        query,
+                        from_id=edge.from_id,
+                        to_id=edge.to_id,
+                        edge_id=edge.edge_id,
+                        props=edge_props,
+                    )
+                    edges_written += 1
+                except Exception as exc:
+                    _log.warning("Memgraph edge write failed (%s): %s", edge.edge_id, exc)
+
+        _log.info(
+            "Memgraph write complete: %d nodes, %d edges",
+            nodes_written,
+            edges_written,
+        )
+        return {"nodes_written": nodes_written, "edges_written": edges_written}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Convenience wrapper

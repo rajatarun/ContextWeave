@@ -1,9 +1,8 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  ExpertiseRAG - AWS-native GraphRAG platform using Amazon Bedrock Knowledge Bases
-  with Neptune Analytics for deep expertise queries about a developer's background,
-  skills, architecture patterns, and professional accomplishments.
+  ExpertiseRAG - GraphRAG platform using Memgraph (EC2/EBS) for the knowledge
+  graph and PostgreSQL pgvector (RDS) for chunk vector storage.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Parameters
@@ -15,27 +14,12 @@ Parameters:
     AllowedValues: [dev, staging, prod]
     Description: Deployment environment
 
-  NeptuneVectorDimension:
-    Type: Number
-    Default: 1024
-    Description: >
-      Vector dimension – MUST match Amazon Titan Text Embeddings V2 (1024).
-      Changing this after deployment requires recreating the Neptune graph.
-
-  NeptuneProvisionedMemory:
-    Type: Number
-    Default: 16
-    AllowedValues: [16, 32, 64, 128, 256, 512, 1024]
-    Description: Neptune Analytics provisioned memory in GB (16 is minimum)
-
   GenerationModelId:
     Type: String
     Default: us.amazon.nova-pro-v1:0
     Description: >
       Bedrock inference profile ID used by the Query API for answer synthesis.
       Must use cross-region inference profile (us. prefix) for on-demand throughput.
-      Examples: us.amazon.nova-pro-v1:0 (AWS-native, no Marketplace required),
-                us.anthropic.claude-3-7-sonnet-20250219-v1:0 (requires Marketplace subscription)
 
   LogRetentionDays:
     Type: Number
@@ -49,11 +33,59 @@ Parameters:
     AllowedValues: ['true', 'false']
     Description: Deploy Step Functions ingestion orchestration state machine
 
+  # ── Networking ─────────────────────────────────────────────────────────────
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: CIDR block for the VPC
+
+  AdminCidr:
+    Type: String
+    Default: 10.0.0.0/8
+    Description: CIDR allowed SSH access to the Memgraph EC2 instance
+
+  EC2KeyPairName:
+    Type: String
+    Default: ''
+    Description: EC2 key pair name for SSH access to Memgraph instance (optional)
+
+  # ── Memgraph EC2 ──────────────────────────────────────────────────────────
+  MemgraphInstanceType:
+    Type: String
+    Default: t3.medium
+    AllowedValues: [t3.medium, t3.large, t3.xlarge, m6i.large, m6i.xlarge]
+    Description: EC2 instance type for Memgraph
+
+  MemgraphEBSSizeGB:
+    Type: Number
+    Default: 100
+    MinValue: 20
+    MaxValue: 1000
+    Description: EBS volume size (GB) for Memgraph data persistence
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────────
+  PostgresInstanceClass:
+    Type: String
+    Default: db.t3.medium
+    AllowedValues: [db.t3.micro, db.t3.medium, db.t3.large, db.r6g.large]
+    Description: RDS instance class for PostgreSQL
+
+  PostgresDbName:
+    Type: String
+    Default: expertiserag
+    Description: PostgreSQL database name
+
+  PostgresUsername:
+    Type: String
+    Default: expertiserag
+    Description: PostgreSQL master username
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Conditions
 # ─────────────────────────────────────────────────────────────────────────────
 Conditions:
   DeployStepFunctions: !Equals [!Ref EnableStepFunctions, 'true']
+  HasEC2KeyPair: !Not [!Equals [!Ref EC2KeyPairName, '']]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Globals
@@ -70,9 +102,8 @@ Globals:
         LOG_LEVEL: INFO
         ENVIRONMENT: !Ref Environment
         ARTIFACTS_BUCKET: !Sub expertise-rag-artifacts-${AWS::AccountId}-${Environment}
-        NEPTUNE_GRAPH_ID: !GetAtt NeptuneAnalyticsGraph.GraphId
-        KNOWLEDGE_BASE_ID: !Ref BedrockKnowledgeBase
-        DATA_SOURCE_ID: !GetAtt BedrockDataSource.DataSourceId
+        MEMGRAPH_SECRET_ARN: !Ref MemgraphSecret
+        POSTGRES_SECRET_ARN: !Ref PostgresSecret
     Tags:
       Project: ExpertiseRAG
       Environment: !Ref Environment
@@ -111,6 +142,408 @@ Resources:
     Properties:
       AliasName: !Sub alias/expertise-rag-${Environment}
       TargetKeyId: !Ref ArtifactsKMSKey
+
+  # ───────────────────────────────────────────
+  # VPC – private networking for EC2, RDS, Lambda
+  # ───────────────────────────────────────────
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub expertise-rag-vpc-${Environment}
+        - Key: Project
+          Value: ExpertiseRAG
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub expertise-rag-igw-${Environment}
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Public subnets (for NAT Gateway)
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [0, !Cidr [!Ref VpcCidr, 8, 8]]
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub expertise-rag-public-1-${Environment}
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [1, !Cidr [!Ref VpcCidr, 8, 8]]
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub expertise-rag-public-2-${Environment}
+
+  # Private subnets (for Lambda, EC2 Memgraph, RDS)
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [2, !Cidr [!Ref VpcCidr, 8, 8]]
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub expertise-rag-private-1-${Environment}
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [3, !Cidr [!Ref VpcCidr, 8, 8]]
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub expertise-rag-private-2-${Environment}
+
+  # NAT Gateway (in public subnet, for Lambda/EC2 outbound internet)
+  NatEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub expertise-rag-nat-${Environment}
+
+  # Route tables
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  # S3 VPC Gateway Endpoint (Lambda → S3 without NAT)
+  S3VPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+
+  # ───────────────────────────────────────────
+  # Security Groups
+  # ───────────────────────────────────────────
+
+  # Lambda functions SG – outbound only
+  LambdaSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ExpertiseRAG Lambda functions – egress only
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub expertise-rag-lambda-sg-${Environment}
+
+  # Memgraph EC2 SG – bolt (7687) from Lambda, SSH from admin CIDR
+  MemgraphSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ExpertiseRAG Memgraph EC2 instance
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 7687
+          ToPort: 7687
+          SourceSecurityGroupId: !Ref LambdaSG
+          Description: Bolt protocol from Lambda
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AdminCidr
+          Description: SSH from admin CIDR
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub expertise-rag-memgraph-sg-${Environment}
+
+  # RDS PostgreSQL SG – port 5432 from Lambda
+  PostgresSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ExpertiseRAG RDS PostgreSQL
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref LambdaSG
+          Description: PostgreSQL from Lambda
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref MemgraphSG
+          Description: PostgreSQL from Memgraph EC2 (for admin access)
+      Tags:
+        - Key: Name
+          Value: !Sub expertise-rag-postgres-sg-${Environment}
+
+  # ───────────────────────────────────────────
+  # Secrets Manager – Memgraph connection info
+  # ───────────────────────────────────────────
+  MemgraphSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub expertise-rag-memgraph-${Environment}
+      Description: Memgraph EC2 connection info for ExpertiseRAG
+      # Host is set via SSM/manual update after EC2 launches
+      # Username/password are empty (Memgraph CE has no auth by default)
+      SecretString: !Sub |
+        {
+          "host": "REPLACE_WITH_MEMGRAPH_PRIVATE_IP",
+          "port": 7687,
+          "username": "",
+          "password": ""
+        }
+      Tags:
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ───────────────────────────────────────────
+  # Secrets Manager – PostgreSQL credentials
+  # ───────────────────────────────────────────
+  PostgresSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub expertise-rag-postgres-${Environment}
+      Description: PostgreSQL credentials for ExpertiseRAG pgvector
+      GenerateSecretString:
+        SecretStringTemplate: !Sub |
+          {
+            "username": "${PostgresUsername}",
+            "dbname": "${PostgresDbName}",
+            "port": 5432
+          }
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\'
+      Tags:
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ───────────────────────────────────────────
+  # Memgraph EC2 instance + EBS volume
+  # ───────────────────────────────────────────
+  MemgraphInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub expertise-rag-memgraph-ec2-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - Key: Project
+          Value: ExpertiseRAG
+
+  MemgraphInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref MemgraphInstanceRole
+
+  MemgraphEC2:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref MemgraphInstanceType
+      ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+      SubnetId: !Ref PrivateSubnet1
+      SecurityGroupIds:
+        - !Ref MemgraphSG
+      IamInstanceProfile: !Ref MemgraphInstanceProfile
+      KeyName: !If [HasEC2KeyPair, !Ref EC2KeyPairName, !Ref AWS::NoValue]
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+          # Format and mount EBS volume for Memgraph data
+          while [ ! -b /dev/xvdf ]; do sleep 2; done
+          if ! blkid /dev/xvdf; then
+            mkfs.xfs /dev/xvdf
+          fi
+          mkdir -p /var/lib/memgraph
+          mount /dev/xvdf /var/lib/memgraph
+          echo '/dev/xvdf /var/lib/memgraph xfs defaults,nofail 0 2' >> /etc/fstab
+          mkdir -p /var/log/memgraph /var/lib/memgraph/data
+          # Install Docker
+          dnf install -y docker
+          systemctl enable docker
+          systemctl start docker
+          # Pull and run Memgraph CE with WAL + snapshot persistence
+          docker run -d \
+            --name memgraph \
+            --restart=always \
+            -p 7687:7687 \
+            -v /var/lib/memgraph:/var/lib/memgraph \
+            -v /var/log/memgraph:/var/log/memgraph \
+            memgraph/memgraph:2.14 \
+            --storage-properties-on-edges=true \
+            --storage-snapshot-interval-sec=300 \
+            --storage-wal-enabled=true \
+            --storage-recover-on-startup=true \
+            --log-level=WARNING
+          echo "Memgraph started" >> /var/log/memgraph/init.log
+      Tags:
+        - Key: Name
+          Value: !Sub expertise-rag-memgraph-${Environment}
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
+  MemgraphEBSVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Size: !Ref MemgraphEBSSizeGB
+      VolumeType: gp3
+      Encrypted: true
+      KmsKeyId: !Ref ArtifactsKMSKey
+      Tags:
+        - Key: Name
+          Value: !Sub expertise-rag-memgraph-data-${Environment}
+        - Key: Project
+          Value: ExpertiseRAG
+
+  MemgraphEBSAttachment:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref MemgraphEC2
+      VolumeId: !Ref MemgraphEBSVolume
+      Device: /dev/xvdf
+
+  # ───────────────────────────────────────────
+  # RDS PostgreSQL with pgvector
+  # ───────────────────────────────────────────
+  PostgresSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: ExpertiseRAG PostgreSQL subnet group
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Tags:
+        - Key: Project
+          Value: ExpertiseRAG
+
+  PostgresRDS:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      DBInstanceIdentifier: !Sub expertise-rag-postgres-${Environment}
+      DBInstanceClass: !Ref PostgresInstanceClass
+      Engine: postgres
+      EngineVersion: '15.8'
+      DBName: !Ref PostgresDbName
+      MasterUsername: !Ref PostgresUsername
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${PostgresSecret}:SecretString:password}}'
+      AllocatedStorage: '50'
+      StorageType: gp3
+      StorageEncrypted: true
+      KmsKeyId: !Ref ArtifactsKMSKey
+      MultiAZ: false
+      PubliclyAccessible: false
+      DBSubnetGroupName: !Ref PostgresSubnetGroup
+      VPCSecurityGroups:
+        - !Ref PostgresSG
+      BackupRetentionPeriod: 7
+      EnablePerformanceInsights: false
+      EnableCloudwatchLogsExports:
+        - postgresql
+      Tags:
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
 
   # ───────────────────────────────────────────
   # S3 Bucket – raw uploads and derived artifacts
@@ -178,16 +611,6 @@ Resources:
             Condition:
               Bool:
                 aws:SecureTransport: 'false'
-          - Sid: AllowBedrockKnowledgeBaseRead
-            Effect: Allow
-            Principal:
-              AWS: !GetAtt BedrockKnowledgeBaseRole.Arn
-            Action:
-              - s3:GetObject
-              - s3:ListBucket
-            Resource:
-              - !GetAtt ArtifactsBucket.Arn
-              - !Sub ${ArtifactsBucket.Arn}/*
 
   # Trigger permission: S3 → PreprocessorFunction
   PreprocessorS3InvokePermission:
@@ -198,100 +621,6 @@ Resources:
       Principal: s3.amazonaws.com
       SourceArn: !Sub arn:aws:s3:::expertise-rag-artifacts-${AWS::AccountId}-${Environment}
       SourceAccount: !Ref AWS::AccountId
-
-  # ───────────────────────────────────────────
-  # Neptune Analytics Graph
-  # ───────────────────────────────────────────
-  NeptuneAnalyticsGraph:
-    Type: AWS::NeptuneGraph::Graph
-    Properties:
-      GraphName: !Sub expertise-rag-${Environment}
-      ProvisionedMemory: !Ref NeptuneProvisionedMemory
-      VectorSearchConfiguration:
-        VectorSearchDimension: !Ref NeptuneVectorDimension
-      DeletionProtection: false
-      ReplicaCount: 0
-      Tags:
-        - Key: Project
-          Value: ExpertiseRAG
-        - Key: Environment
-          Value: !Ref Environment
-
-  # ───────────────────────────────────────────
-  # Bedrock Knowledge Base (Neptune Analytics vector store)
-  # ───────────────────────────────────────────
-  BedrockKnowledgeBase:
-    Type: AWS::Bedrock::KnowledgeBase
-    Properties:
-      Name: !Sub expertise-rag-kb-${Environment}
-      Description: >
-        ExpertiseRAG knowledge base – ingests developer expertise artifacts (repos,
-        architecture docs, resume) and enables GraphRAG queries via Neptune Analytics.
-      RoleArn: !GetAtt BedrockKnowledgeBaseRole.Arn
-      KnowledgeBaseConfiguration:
-        Type: VECTOR
-        VectorKnowledgeBaseConfiguration:
-          EmbeddingModelArn: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0
-          EmbeddingModelConfiguration:
-            BedrockEmbeddingModelConfiguration:
-              # Must match NeptuneVectorDimension parameter
-              Dimensions: !Ref NeptuneVectorDimension
-      StorageConfiguration:
-        Type: NEPTUNE_ANALYTICS
-        NeptuneAnalyticsConfiguration:
-          GraphArn: !GetAtt NeptuneAnalyticsGraph.GraphArn
-          FieldMapping:
-            MetadataField: AMAZON_BEDROCK_METADATA
-            TextField: AMAZON_BEDROCK_TEXT_CHUNK
-      Tags:
-        Project: ExpertiseRAG
-        Environment: !Ref Environment
-
-  # ───────────────────────────────────────────
-  # Bedrock Data Source – S3 (raw/ + derived/)
-  # ───────────────────────────────────────────
-  BedrockDataSource:
-    Type: AWS::Bedrock::DataSource
-    Properties:
-      KnowledgeBaseId: !Ref BedrockKnowledgeBase
-      Name: !Sub expertise-rag-s3-source-${Environment}
-      Description: >
-        S3 data source covering raw/ (original uploads) and derived/ (preprocessor output).
-      DataSourceConfiguration:
-        Type: S3
-        S3Configuration:
-          BucketArn: !Sub arn:aws:s3:::expertise-rag-artifacts-${AWS::AccountId}-${Environment}
-          InclusionPrefixes:
-            - raw/
-      VectorIngestionConfiguration:
-        ChunkingConfiguration:
-          ChunkingStrategy: HIERARCHICAL
-          HierarchicalChunkingConfiguration:
-            LevelConfigurations:
-              - MaxTokens: 1500  # Parent chunks – full section context
-              - MaxTokens: 300   # Child chunks – precise retrieval units
-            OverlapTokens: 60
-        ParsingConfiguration:
-          ParsingStrategy: BEDROCK_FOUNDATION_MODEL
-          BedrockFoundationModelConfiguration:
-            # TODO: Replace with preferred parsing model (Claude 3 Haiku is cost-effective)
-            ModelArn: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0
-            ParsingPrompt:
-              ParsingPromptText: |
-                Extract all technical content from this document. Focus on:
-                - Programming languages, frameworks, and libraries
-                - AWS services and cloud architecture patterns
-                - Design patterns and engineering decisions
-                - Measurable outcomes and accomplishments
-                - Architecture component relationships (from PlantUML diagrams, describe as text)
-                - Expertise signals, skill depth indicators, and technology preferences
-                Preserve technical terminology exactly. Output clean structured text.
-        ContextEnrichmentConfiguration:
-          Type: BEDROCK_FOUNDATION_MODEL
-          BedrockFoundationModelConfiguration:
-            ModelArn: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0
-            EnrichmentStrategyConfiguration:
-              Method: CHUNK_ENTITY_EXTRACTION
 
   # ───────────────────────────────────────────
   # CloudWatch Log Groups
@@ -318,10 +647,10 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  IngestionTriggerLogGroup:
+  DBInitLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/expertise-rag-ingestion-trigger-${Environment}
+      LogGroupName: !Sub /aws/lambda/expertise-rag-db-init-${Environment}
       RetentionInDays: !Ref LogRetentionDays
       Tags:
         - Key: Project
@@ -356,12 +685,47 @@ Resources:
   # IAM Roles
   # ───────────────────────────────────────────
 
+  # Shared inline policy for Lambda VPC networking
+  LambdaVPCPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub expertise-rag-lambda-vpc-${Environment}
+      Description: Allows Lambda to create/delete VPC ENIs
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - ec2:CreateNetworkInterface
+              - ec2:DescribeNetworkInterfaces
+              - ec2:DeleteNetworkInterface
+              - ec2:AssignPrivateIpAddresses
+              - ec2:UnassignPrivateIpAddresses
+            Resource: '*'
+
+  # Shared inline policy for Secrets Manager reads
+  SecretsReadPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub expertise-rag-secrets-read-${Environment}
+      Description: Allows ExpertiseRAG Lambdas to read DB secrets
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+              - secretsmanager:DescribeSecret
+            Resource:
+              - !Ref MemgraphSecret
+              - !Ref PostgresSecret
+
   # Role: Preprocessor Lambda
   PreprocessorRole:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub expertise-rag-preprocessor-${Environment}
-      Description: Allows preprocessor Lambda to read/write S3 and log to CloudWatch
+      Description: Allows preprocessor Lambda to read/write S3, embed via Bedrock, write to Memgraph and pgvector
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -372,6 +736,8 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+        - !Ref LambdaVPCPolicy
+        - !Ref SecretsReadPolicy
       Policies:
         - PolicyName: S3ReadWriteDerived
           PolicyDocument:
@@ -398,6 +764,15 @@ Resources:
                     s3:prefix:
                       - raw/*
                       - derived/*
+        - PolicyName: BedrockEmbeddings
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource:
+                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0
         - PolicyName: KMSDecryptEncrypt
           PolicyDocument:
             Version: '2012-10-17'
@@ -418,7 +793,7 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub expertise-rag-query-api-${Environment}
-      Description: Allows Query API Lambda to call Bedrock Retrieve, Neptune Analytics, and read S3
+      Description: Allows Query API Lambda to embed via Bedrock, query Memgraph, and query pgvector
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -429,17 +804,13 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+        - !Ref LambdaVPCPolicy
+        - !Ref SecretsReadPolicy
       Policies:
-        - PolicyName: BedrockRetrieveAndGenerate
+        - PolicyName: BedrockInvokeModel
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Sid: BedrockRetrieve
-                Effect: Allow
-                Action:
-                  - bedrock:Retrieve
-                  - bedrock:RetrieveAndGenerate
-                Resource: !GetAtt BedrockKnowledgeBase.KnowledgeBaseArn
               - Sid: BedrockInvokeModel
                 Effect: Allow
                 Action:
@@ -448,16 +819,7 @@ Resources:
                 Resource:
                   - arn:aws:bedrock:*::foundation-model/amazon.nova-pro-v1:0
                   - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.amazon.nova-pro-v1:0
-        - PolicyName: NeptuneAnalyticsQuery
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Sid: NeptuneQuery
-                Effect: Allow
-                Action:
-                  - neptune-graph:ReadDataViaQuery
-                  - neptune-graph:GetGraph
-                Resource: !GetAtt NeptuneAnalyticsGraph.GraphArn
+                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0
         - PolicyName: S3ReadDerived
           PolicyDocument:
             Version: '2012-10-17'
@@ -480,12 +842,12 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  # Role: Ingestion Trigger Lambda (custom resource + post-upload)
-  IngestionTriggerRole:
+  # Role: DB Init Lambda
+  DBInitRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub expertise-rag-ingestion-trigger-${Environment}
-      Description: Allows ingestion trigger Lambda to start Bedrock ingestion jobs
+      RoleName: !Sub expertise-rag-db-init-${Environment}
+      Description: Allows DB init Lambda to create pgvector schema and seed Memgraph routing graph
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -496,98 +858,8 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
-      Policies:
-        - PolicyName: BedrockIngestion
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Sid: StartAndQueryIngestionJob
-                Effect: Allow
-                Action:
-                  - bedrock:StartIngestionJob
-                  - bedrock:GetIngestionJob
-                  - bedrock:ListIngestionJobs
-                Resource: !GetAtt BedrockKnowledgeBase.KnowledgeBaseArn
-        - PolicyName: S3ListRead
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:ListBucket
-                  - s3:GetObject
-                Resource:
-                  - !GetAtt ArtifactsBucket.Arn
-                  - !Sub ${ArtifactsBucket.Arn}/*
-      Tags:
-        - Key: Project
-          Value: ExpertiseRAG
-        - Key: Environment
-          Value: !Ref Environment
-
-  # Role: Bedrock Knowledge Base Service Role
-  BedrockKnowledgeBaseRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub expertise-rag-bedrock-kb-${Environment}
-      Description: Allows Amazon Bedrock Knowledge Base to access S3 and Neptune Analytics
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: bedrock.amazonaws.com
-            Action: sts:AssumeRole
-            Condition:
-              StringEquals:
-                aws:SourceAccount: !Ref AWS::AccountId
-              ArnLike:
-                aws:SourceArn: !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/*
-      Policies:
-        - PolicyName: S3ReadForIngestion
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Sid: ListBucket
-                Effect: Allow
-                Action: s3:ListBucket
-                Resource: !Sub arn:aws:s3:::expertise-rag-artifacts-${AWS::AccountId}-${Environment}
-              - Sid: GetObjects
-                Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:HeadObject
-                Resource: !Sub arn:aws:s3:::expertise-rag-artifacts-${AWS::AccountId}-${Environment}/*
-        - PolicyName: NeptuneAnalyticsWrite
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - neptune-graph:WriteDataViaQuery
-                  - neptune-graph:ReadDataViaQuery
-                  - neptune-graph:DeleteDataViaQuery
-                  - neptune-graph:GetGraph
-                Resource: !GetAtt NeptuneAnalyticsGraph.GraphArn
-        - PolicyName: BedrockEmbeddings
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - bedrock:InvokeModel
-                Resource:
-                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0
-                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0
-        - PolicyName: KMSForS3
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - kms:Decrypt
-                  - kms:GenerateDataKey
-                Resource: !GetAtt ArtifactsKMSKey.Arn
+        - !Ref LambdaVPCPolicy
+        - !Ref SecretsReadPolicy
       Tags:
         - Key: Project
           Value: ExpertiseRAG
@@ -617,7 +889,6 @@ Resources:
                 Action: lambda:InvokeFunction
                 Resource:
                   - !GetAtt PreprocessorFunction.Arn
-                  - !GetAtt IngestionTriggerFunction.Arn
         - PolicyName: CloudWatchLogs
           PolicyDocument:
             Version: '2012-10-17'
@@ -660,20 +931,24 @@ Resources:
     Properties:
       FunctionName: !Sub expertise-rag-preprocessor-${Environment}
       Description: >
-        Reads raw repo uploads from S3, extracts text from Markdown/YAML,
-        transforms PlantUML to architecture summaries, and emits derived
-        JSON (expertise signals, graph entities, graph edges) back to S3.
+        Reads raw repo uploads from S3, extracts text, chunks and embeds content,
+        writes to pgvector and Memgraph, then emits derived JSON artifacts to S3.
       CodeUri: src/preprocessor/
       Handler: handler.lambda_handler
       Role: !GetAtt PreprocessorRole.Arn
       Timeout: 600
       MemorySize: 1024
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSG
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
       Environment:
         Variables:
           DERIVED_PREFIX: derived
           RAW_PREFIX: raw
       Events:
-        # Also triggered directly by S3 via bucket notification (see ArtifactsBucket)
         StepFunctionsTrigger:
           Type: EventBridgeRule
           Properties:
@@ -690,19 +965,23 @@ Resources:
     Properties:
       FunctionName: !Sub expertise-rag-query-api-${Environment}
       Description: >
-        Reasoning API: classifies questions, calls Bedrock Retrieve, expands
-        graph-linked evidence via Neptune Analytics, synthesizes answers with
-        evidence weighting, and returns structured expertise responses.
+        Reasoning API: classifies questions, retrieves from pgvector, expands
+        graph-linked evidence via Memgraph, synthesizes answers, and returns
+        structured expertise responses.
       CodeUri: src/query_api/
       Handler: handler.lambda_handler
       Role: !GetAtt QueryAPIRole.Arn
       Timeout: 60
       MemorySize: 512
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSG
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
       Environment:
         Variables:
           GENERATION_MODEL_ID: !Ref GenerationModelId
-          KNOWLEDGE_BASE_ID: !Ref BedrockKnowledgeBase
-          NEPTUNE_GRAPH_ID: !GetAtt NeptuneAnalyticsGraph.GraphId
           ENVIRONMENT: !Ref Environment
           LOG_LEVEL: INFO
       Events:
@@ -720,31 +999,39 @@ Resources:
             Method: GET
 
   # ───────────────────────────────────────────
-  # Lambda: Ingestion Trigger (custom resource + post-deployment)
+  # Lambda: DB Initializer (replaces ingestion trigger)
   # ───────────────────────────────────────────
-  IngestionTriggerFunction:
+  DBInitFunction:
     Type: AWS::Serverless::Function
-    DependsOn: IngestionTriggerLogGroup
+    DependsOn: DBInitLogGroup
     Properties:
-      FunctionName: !Sub expertise-rag-ingestion-trigger-${Environment}
+      FunctionName: !Sub expertise-rag-db-init-${Environment}
       Description: >
-        Starts a Bedrock Knowledge Base ingestion job. Invoked as a CloudFormation
-        custom resource after deployment and callable manually / via Step Functions
-        after new uploads.
+        Creates pgvector schema in PostgreSQL and seeds the Memgraph routing graph
+        with initial EFFECTIVE_FOR edge weights. Invoked as a CloudFormation custom
+        resource after deployment and callable manually for re-seeding.
       CodeUri: src/ingestion_trigger/
       Handler: handler.lambda_handler
-      Role: !GetAtt IngestionTriggerRole.Arn
-      Timeout: 900  # 15 min – ingestion can take a while
+      Role: !GetAtt DBInitRole.Arn
+      Timeout: 300
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSG
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
 
   # ───────────────────────────────────────────
-  # CloudFormation Custom Resource: post-deployment ingestion
+  # CloudFormation Custom Resource: post-deployment DB init
   # ───────────────────────────────────────────
-  PostDeploymentIngestionJob:
+  PostDeploymentDBInit:
     Type: AWS::CloudFormation::CustomResource
+    DependsOn:
+      - PostgresRDS
+      - MemgraphEC2
+      - MemgraphEBSAttachment
     Properties:
-      ServiceToken: !GetAtt IngestionTriggerFunction.Arn
-      KnowledgeBaseId: !Ref BedrockKnowledgeBase
-      DataSourceId: !GetAtt BedrockDataSource.DataSourceId
+      ServiceToken: !GetAtt DBInitFunction.Arn
       TriggerReason: post-deployment
 
   # ───────────────────────────────────────────
@@ -782,7 +1069,7 @@ Resources:
         Environment: !Ref Environment
 
   # ───────────────────────────────────────────
-  # Step Functions: Ingestion Orchestration
+  # Step Functions: Ingestion Orchestration (simplified – no Bedrock polling)
   # ───────────────────────────────────────────
   IngestionStateMachine:
     Type: AWS::Serverless::StateMachine
@@ -802,7 +1089,8 @@ Resources:
       Definition:
         Comment: >
           ExpertiseRAG ingestion orchestration – preprocesses raw S3 uploads,
-          triggers Bedrock KB ingestion, and polls until complete.
+          chunks text, generates embeddings, and writes to Memgraph and pgvector.
+          No external polling required (all operations are synchronous).
         StartAt: PreprocessRawFiles
         States:
           PreprocessRawFiles:
@@ -822,66 +1110,15 @@ Resources:
               - ErrorEquals: [States.ALL]
                 Next: IngestionFailed
                 ResultPath: $.error
-            Next: StartIngestionJob
-
-          StartIngestionJob:
-            Type: Task
-            Resource: !GetAtt IngestionTriggerFunction.Arn
-            Parameters:
-              action: start
-              knowledge_base_id.$: $.knowledge_base_id
-              data_source_id.$: $.data_source_id
-            ResultPath: $.ingestion_job
-            Retry:
-              - ErrorEquals: [States.TaskFailed]
-                IntervalSeconds: 5
-                MaxAttempts: 3
-                BackoffRate: 2.0
-            Catch:
-              - ErrorEquals: [States.ALL]
-                Next: IngestionFailed
-                ResultPath: $.error
-            Next: WaitForIngestion
-
-          WaitForIngestion:
-            Type: Wait
-            Seconds: 30
-            Next: CheckIngestionStatus
-
-          CheckIngestionStatus:
-            Type: Task
-            Resource: !GetAtt IngestionTriggerFunction.Arn
-            Parameters:
-              action: status
-              knowledge_base_id.$: $.knowledge_base_id
-              data_source_id.$: $.data_source_id
-              ingestion_job_id.$: $.ingestion_job.ingestion_job_id
-            ResultPath: $.ingestion_status
-            Retry:
-              - ErrorEquals: [States.TaskFailed]
-                IntervalSeconds: 5
-                MaxAttempts: 3
-                BackoffRate: 2.0
-            Next: IsIngestionComplete
-
-          IsIngestionComplete:
-            Type: Choice
-            Choices:
-              - Variable: $.ingestion_status.status
-                StringEquals: COMPLETE
-                Next: IngestionSuccess
-              - Variable: $.ingestion_status.status
-                StringEquals: FAILED
-                Next: IngestionFailed
-            Default: WaitForIngestion
+            Next: IngestionSuccess
 
           IngestionSuccess:
             Type: Succeed
 
           IngestionFailed:
             Type: Fail
-            Error: IngestionJobFailed
-            Cause: Bedrock Knowledge Base ingestion job did not complete successfully
+            Error: PreprocessingFailed
+            Cause: ExpertiseRAG preprocessing did not complete successfully
 
       Tags:
         Project: ExpertiseRAG
@@ -907,27 +1144,41 @@ Outputs:
     Description: Full URL for the POST /query-expertise endpoint
     Value: !Sub https://${ExpertiseAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/query-expertise
 
-  NeptuneGraphIdentifier:
-    Description: Neptune Analytics graph identifier
-    Value: !GetAtt NeptuneAnalyticsGraph.GraphId
+  MemgraphInstanceId:
+    Description: Memgraph EC2 instance ID
+    Value: !Ref MemgraphEC2
     Export:
-      Name: !Sub ${AWS::StackName}-NeptuneGraphId
+      Name: !Sub ${AWS::StackName}-MemgraphInstanceId
 
-  NeptuneGraphArn:
-    Description: Neptune Analytics graph ARN
-    Value: !GetAtt NeptuneAnalyticsGraph.GraphArn
-
-  KnowledgeBaseId:
-    Description: Bedrock Knowledge Base ID
-    Value: !Ref BedrockKnowledgeBase
+  MemgraphPrivateIP:
+    Description: Memgraph EC2 private IP (update MemgraphSecret host after deploy)
+    Value: !GetAtt MemgraphEC2.PrivateIp
     Export:
-      Name: !Sub ${AWS::StackName}-KnowledgeBaseId
+      Name: !Sub ${AWS::StackName}-MemgraphPrivateIP
 
-  DataSourceId:
-    Description: Bedrock Data Source ID
-    Value: !GetAtt BedrockDataSource.DataSourceId
+  MemgraphSecretArn:
+    Description: Secrets Manager ARN for Memgraph connection details
+    Value: !Ref MemgraphSecret
     Export:
-      Name: !Sub ${AWS::StackName}-DataSourceId
+      Name: !Sub ${AWS::StackName}-MemgraphSecretArn
+
+  PostgresEndpoint:
+    Description: RDS PostgreSQL endpoint
+    Value: !GetAtt PostgresRDS.Endpoint.Address
+    Export:
+      Name: !Sub ${AWS::StackName}-PostgresEndpoint
+
+  PostgresSecretArn:
+    Description: Secrets Manager ARN for PostgreSQL credentials
+    Value: !Ref PostgresSecret
+    Export:
+      Name: !Sub ${AWS::StackName}-PostgresSecretArn
+
+  VpcId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub ${AWS::StackName}-VpcId
 
   IngestionStateMachineArn:
     Description: Step Functions ingestion state machine ARN
