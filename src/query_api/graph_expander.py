@@ -1,8 +1,8 @@
 """
-Neptune Analytics graph expansion for ExpertiseRAG.
+Memgraph graph expansion for ExpertiseRAG.
 
-When Bedrock Retrieve returns evidence chunks, this module uses the
-Neptune Analytics openCypher query API to expand the graph neighbourhood
+When pgvector returns evidence chunks, this module uses the
+Memgraph openCypher query API (bolt) to expand the graph neighbourhood
 around referenced entities, surfacing:
   - Co-occurring skills / technologies
   - Repeated implementation patterns
@@ -11,66 +11,39 @@ around referenced entities, surfacing:
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
+import sys
 from typing import Any
 
-import boto3
-from botocore.exceptions import ClientError
-
 logger = logging.getLogger(__name__)
-
-_NEPTUNE_CLIENT: Any = None
-
-
-def _get_neptune_client() -> Any:
-    global _NEPTUNE_CLIENT
-    if _NEPTUNE_CLIENT is None:
-        _NEPTUNE_CLIENT = boto3.client(
-            "neptune-graph",
-            region_name=os.environ.get("AWS_REGION", "us-east-1"),
-        )
-    return _NEPTUNE_CLIENT
-
-
-NEPTUNE_GRAPH_ID = os.environ.get("NEPTUNE_GRAPH_ID", "")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Query helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _run_query(graph_id: str, query: str, parameters: dict | None = None) -> list[dict]:
-    """Execute an openCypher query against Neptune Analytics and return rows."""
-    client = _get_neptune_client()
-    kwargs: dict[str, Any] = {
-        "graphIdentifier": graph_id,
-        "queryString": query,
-        "language": "OPEN_CYPHER",
-    }
-    if parameters:
-        kwargs["parameters"] = json.dumps(parameters)
+def _get_db_clients():
+    """Lazily import db_clients from the shared module."""
+    shared_dir = os.path.join(os.path.dirname(__file__), "..", "shared")
+    if shared_dir not in sys.path:
+        sys.path.insert(0, shared_dir)
+    import importlib
+    return importlib.import_module("db_clients")
 
+
+def _run_query(graph_id: str, query: str, parameters: dict | None = None) -> list[dict]:
+    """Execute an openCypher query against Memgraph and return rows.
+
+    graph_id is accepted for backward compatibility but is not used;
+    the Memgraph connection is resolved via environment / Secrets Manager.
+    """
     try:
-        response = client.execute_query(**kwargs)
-        payload = response.get("payload")
-        if hasattr(payload, "read"):
-            raw = payload.read()
-        else:
-            raw = payload or b"{}"
-        data = json.loads(raw)
-        return data.get("results", [])
-    except ClientError as exc:
-        code = exc.response["Error"]["Code"]
-        if code in ("ResourceNotFoundException", "ThrottlingException"):
-            logger.warning("Neptune query skipped (%s): %s", code, exc)
-            return []
-        logger.error("Neptune query failed: %s\nQuery: %s", exc, query)
-        return []
+        db = _get_db_clients()
+        return db.run_graph_query(query, parameters)
     except Exception as exc:
-        logger.error("Neptune query error: %s", exc, exc_info=True)
+        logger.warning("Memgraph graph expansion query error: %s", exc)
         return []
 
 
@@ -219,7 +192,7 @@ def get_person_summary(graph_id: str) -> dict:
 
 def get_routing_strategy(
     question_type: str,
-    graph_id: str | None = None,
+    graph_id: str | None = None,  # kept for API compatibility; unused
 ) -> list[dict]:
     """
     Query the routing graph for EFFECTIVE_FOR edge weights associated with
@@ -227,10 +200,6 @@ def get_routing_strategy(
 
     Returns rows of {strategy, weight, feedback_count}.
     """
-    gid = graph_id or NEPTUNE_GRAPH_ID
-    if not gid:
-        return []
-
     query = """
     MATCH (r:RAGStrategy)-[e:EFFECTIVE_FOR]->(d:DocumentType)
     WHERE d.question_type = $question_type
@@ -239,7 +208,7 @@ def get_routing_strategy(
            coalesce(e.feedback_count, 0) AS feedback_count
     ORDER BY e.weight DESC
     """
-    return _run_query(gid, query, {"question_type": question_type})
+    return _run_query("", query, {"question_type": question_type})
 
 
 def get_document_type_distribution(graph_id: str | None = None) -> list[dict]:
@@ -247,25 +216,21 @@ def get_document_type_distribution(graph_id: str | None = None) -> list[dict]:
     Summarise how many documents of each type have been ingested.
     Used to surface routing graph health in the /health endpoint.
     """
-    gid = graph_id or NEPTUNE_GRAPH_ID
-    if not gid:
-        return []
-
     query = """
     MATCH (doc:Document)-[:HAS_TYPE]->(dt:DocumentType)
     RETURN dt.label AS doc_type, count(doc) AS doc_count
     ORDER BY doc_count DESC
     """
-    return _run_query(gid, query)
+    return _run_query("", query)
 
 
 def expand_graph_context(
     retrieved_text_snippets: list[str],
-    graph_id: str | None = None,
+    graph_id: str | None = None,  # kept for API compatibility; unused
 ) -> dict[str, Any]:
     """
     Given a list of retrieved text snippets, run graph expansion queries
-    to surface corroborating evidence.
+    against Memgraph to surface corroborating evidence.
 
     Returns:
         {
@@ -278,9 +243,12 @@ def expand_graph_context(
           "graph_entities_used": [...],
         }
     """
-    gid = graph_id or NEPTUNE_GRAPH_ID
-    if not gid:
-        logger.warning("NEPTUNE_GRAPH_ID not set – skipping graph expansion")
+    # Verify Memgraph is reachable; return empty context if not
+    try:
+        db = _get_db_clients()
+        db.get_memgraph_driver()
+    except Exception as exc:
+        logger.warning("Memgraph unavailable – skipping graph expansion: %s", exc)
         return {
             "person_summary": {},
             "skill_neighbourhood": [],
@@ -302,10 +270,10 @@ def expand_graph_context(
         skill_labels, pattern_labels, aws_labels = [], [], []
 
     # Run graph queries in sequence (Lambda network calls)
-    person_summary = get_person_summary(gid)
-    skill_neighbourhood = get_skill_neighbourhood(gid, skill_labels[:10])
-    pattern_evidence = get_pattern_evidence(gid, pattern_labels[:10])
-    aws_context = get_aws_service_context(gid, aws_labels[:10])
+    person_summary = get_person_summary("")
+    skill_neighbourhood = get_skill_neighbourhood("", skill_labels[:10])
+    pattern_evidence = get_pattern_evidence("", pattern_labels[:10])
+    aws_context = get_aws_service_context("", aws_labels[:10])
 
     # Aggregate inferred skills from graph results
     inferred_skills: list[str] = list(set(

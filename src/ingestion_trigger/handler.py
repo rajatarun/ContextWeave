@@ -1,22 +1,18 @@
 """
-ExpertiseRAG – Ingestion Trigger Lambda Handler
+ExpertiseRAG – DB Initializer Lambda Handler
 
+Replaces the previous Bedrock Knowledge Base ingestion trigger.
 Serves two roles:
 
 1. CloudFormation Custom Resource (during deployment)
    CloudFormation sends Create/Update/Delete events.
-   On Create/Update → start a Bedrock ingestion job and wait (up to timeout).
-   On Delete → no-op (ingestion jobs cannot be cancelled mid-flight).
+   On Create/Update → initialise pgvector schema + seed Memgraph routing graph.
+   On Delete → no-op.
 
-2. Step Functions task / direct invocation (after new uploads)
-   Accepts { "action": "start" | "status", ... } and responds accordingly.
-   The Step Functions state machine polls via "status" until COMPLETE | FAILED.
+2. Direct invocation (manual re-seeding)
+   Accepts { "action": "init_db" | "seed_routing" } for targeted operations.
 
-Both modes use the same underlying boto3 calls:
-  - bedrock-agent: start_ingestion_job
-  - bedrock-agent: get_ingestion_job
-
-See also: scripts/start_ingestion.py for a standalone boto3 example.
+Both modes use the shared db_clients module to reach Memgraph and PostgreSQL.
 """
 from __future__ import annotations
 
@@ -24,140 +20,54 @@ import json
 import logging
 import os
 import sys
-import time
-import uuid
-from typing import Any
-
-import boto3
 import urllib.request
-import urllib.parse
-from botocore.exceptions import ClientError
+from typing import Any
 
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 
-KNOWLEDGE_BASE_ID = os.environ.get("KNOWLEDGE_BASE_ID", "")
-DATA_SOURCE_ID = os.environ.get("DATA_SOURCE_ID", "")
-NEPTUNE_GRAPH_ID = os.environ.get("NEPTUNE_GRAPH_ID", "")
 
-_BEDROCK_AGENT: Any = None
-
-
-def _get_client() -> Any:
-    global _BEDROCK_AGENT
-    if _BEDROCK_AGENT is None:
-        _BEDROCK_AGENT = boto3.client(
-            "bedrock-agent",
-            region_name=os.environ.get("AWS_REGION", "us-east-1"),
-        )
-    return _BEDROCK_AGENT
+def _get_shared_module(name: str):
+    shared_dir = os.path.join(os.path.dirname(__file__), "..", "shared")
+    if shared_dir not in sys.path:
+        sys.path.insert(0, shared_dir)
+    import importlib
+    return importlib.import_module(name)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Core ingestion operations
+# DB initialisation
 # ─────────────────────────────────────────────────────────────────────────────
 
-def start_ingestion_job(knowledge_base_id: str, data_source_id: str) -> dict:
+def init_db_schema() -> dict:
     """
-    Start a Bedrock Knowledge Base ingestion job.
+    Idempotently create the pgvector extension and chunks table in PostgreSQL.
 
-    Returns the ingestion job dict from the Bedrock API response.
+    Returns {"status": "success", "message": "..."}.
     """
-    client = _get_client()
-    client_token = str(uuid.uuid4())
-
-    logger.info(
-        "Starting ingestion job: KB=%s DataSource=%s",
-        knowledge_base_id,
-        data_source_id,
-    )
     try:
-        response = client.start_ingestion_job(
-            knowledgeBaseId=knowledge_base_id,
-            dataSourceId=data_source_id,
-            clientToken=client_token,
-            description="ExpertiseRAG automated ingestion",
-        )
-        job = response.get("ingestionJob", {})
-        logger.info(
-            "Ingestion job started: %s | status=%s",
-            job.get("ingestionJobId"),
-            job.get("status"),
-        )
-        return job
-    except ClientError as exc:
-        code = exc.response["Error"]["Code"]
-        if code == "ConflictException":
-            logger.warning(
-                "Ingestion job already in progress – retrieving latest job"
-            )
-            return get_latest_ingestion_job(knowledge_base_id, data_source_id)
-        raise
+        db_clients = _get_shared_module("db_clients")
+        db_clients.init_pgvector_schema()
+        return {"status": "success", "message": "pgvector schema initialised"}
+    except Exception as exc:
+        logger.error("pgvector schema init failed: %s", exc, exc_info=True)
+        return {"status": "failed", "reason": str(exc)}
 
 
-def get_ingestion_job(
-    knowledge_base_id: str, data_source_id: str, ingestion_job_id: str
-) -> dict:
-    """Fetch the current status of a specific ingestion job."""
-    client = _get_client()
-    response = client.get_ingestion_job(
-        knowledgeBaseId=knowledge_base_id,
-        dataSourceId=data_source_id,
-        ingestionJobId=ingestion_job_id,
-    )
-    return response.get("ingestionJob", {})
-
-
-def get_latest_ingestion_job(knowledge_base_id: str, data_source_id: str) -> dict:
-    """Return the most recently started ingestion job (any status)."""
-    client = _get_client()
+def seed_routing_graph_memgraph() -> dict:
+    """
+    Seed the adaptive routing graph in Memgraph with initial prior weights.
+    Idempotent – safe to call multiple times.
+    """
     try:
-        response = client.list_ingestion_jobs(
-            knowledgeBaseId=knowledge_base_id,
-            dataSourceId=data_source_id,
-            sortBy={"attribute": "STARTED_AT", "order": "DESCENDING"},
-            maxResults=1,
-        )
-        jobs = response.get("ingestionJobSummaries", [])
-        if jobs:
-            job_id = jobs[0]["ingestionJobId"]
-            return get_ingestion_job(knowledge_base_id, data_source_id, job_id)
-    except ClientError as exc:
-        logger.warning("Could not list ingestion jobs: %s", exc)
-    return {}
-
-
-def wait_for_ingestion(
-    knowledge_base_id: str,
-    data_source_id: str,
-    ingestion_job_id: str,
-    poll_interval: int = 15,
-    max_wait_seconds: int = 840,  # 14 minutes (Lambda timeout = 15 min)
-) -> dict:
-    """
-    Poll ingestion job status until COMPLETE or FAILED.
-    Returns the final job dict.
-    """
-    deadline = time.time() + max_wait_seconds
-    while time.time() < deadline:
-        job = get_ingestion_job(knowledge_base_id, data_source_id, ingestion_job_id)
-        status = job.get("status", "")
-        logger.info("Ingestion job %s status: %s", ingestion_job_id, status)
-
-        if status in ("COMPLETE", "FAILED", "STOPPED"):
-            if status == "FAILED":
-                failure_reasons = job.get("failureReasons", [])
-                logger.error("Ingestion failed: %s", failure_reasons)
-            return job
-
-        time.sleep(poll_interval)
-
-    logger.warning(
-        "Ingestion job %s did not complete within %ds – returning last known status",
-        ingestion_job_id,
-        max_wait_seconds,
-    )
-    return get_ingestion_job(knowledge_base_id, data_source_id, ingestion_job_id)
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "query_api"))
+        from rag_router import seed_routing_graph
+        result = seed_routing_graph()
+        logger.info("Routing graph seeded: %s", result)
+        return {"status": "success", **result}
+    except Exception as exc:
+        logger.error("Routing graph seed failed: %s", exc, exc_info=True)
+        return {"status": "failed", "reason": str(exc)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -221,132 +131,73 @@ def lambda_handler(event: dict, context: Any) -> dict:
     A) CloudFormation custom resource:
        event["RequestType"] in ("Create", "Update", "Delete")
 
-    B) Step Functions task – start:
-       event["action"] == "start"
+    B) Direct invocation – init DB:
+       event["action"] == "init_db"
 
-    C) Step Functions task – poll status:
-       event["action"] == "status"
-       event["ingestion_job_id"] == "<job id>"
+    C) Direct invocation – seed routing graph:
+       event["action"] == "seed_routing"
     """
     logger.info("Event: %s", json.dumps(event, default=str))
-
-    kb_id = event.get("KnowledgeBaseId") or event.get("knowledge_base_id") or KNOWLEDGE_BASE_ID
-    ds_id = event.get("DataSourceId") or event.get("data_source_id") or DATA_SOURCE_ID
 
     # ── CloudFormation Custom Resource ────────────────────────────────────────
     if "RequestType" in event:
         request_type = event["RequestType"]
-        physical_id = event.get("PhysicalResourceId", f"ingestion-{kb_id}")
+        physical_id = event.get("PhysicalResourceId", "expertise-rag-db-init")
 
         if request_type == "Delete":
-            logger.info("Delete event – nothing to clean up for ingestion jobs")
+            logger.info("Delete event – no DB cleanup required")
             _cfn_send(event, context, "SUCCESS", physical_id,
                       data={"Message": "No cleanup required"})
             return {"status": "deleted"}
 
-        # Create or Update: seed routing graph, then start ingestion
-        if not kb_id or not ds_id:
-            msg = "KnowledgeBaseId and DataSourceId are required"
-            logger.error(msg)
-            _cfn_send(event, context, "FAILED", physical_id, reason=msg)
-            return {"status": "failed", "reason": msg}
+        # Create or Update: init pgvector schema + seed routing graph
+        errors: list[str] = []
 
-        # Seed the adaptive routing graph (idempotent)
-        graph_id = event.get("NeptuneGraphId") or NEPTUNE_GRAPH_ID
-        if graph_id:
-            try:
-                sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "query_api"))
-                from rag_router import seed_routing_graph
-                seed_result = seed_routing_graph(graph_id)
-                logger.info("Routing graph seeded: %s", seed_result)
-            except Exception as exc:
-                logger.warning("Routing graph seed failed (non-fatal): %s", exc)
+        pg_result = init_db_schema()
+        if pg_result["status"] != "success":
+            errors.append(f"pgvector init: {pg_result.get('reason', 'unknown')}")
 
-        try:
-            job = start_ingestion_job(kb_id, ds_id)
-            job_id = job.get("ingestionJobId", "")
+        seed_result = seed_routing_graph_memgraph()
+        if seed_result["status"] != "success":
+            # Non-fatal: Memgraph may not be ready yet on first deploy
+            logger.warning("Routing graph seed failed (non-fatal): %s", seed_result)
 
-            if job_id:
-                final_job = wait_for_ingestion(kb_id, ds_id, job_id)
-            else:
-                final_job = job
-
-            status = final_job.get("status", "UNKNOWN")
-            if status == "COMPLETE":
-                _cfn_send(
-                    event, context, "SUCCESS", job_id or physical_id,
-                    data={
-                        "IngestionJobId": job_id,
-                        "Status": status,
-                        "Statistics": json.dumps(final_job.get("statistics", {})),
-                    },
-                )
-                return {"status": "success", "ingestion_job_id": job_id}
-            else:
-                reason = f"Ingestion ended with status: {status}. Reasons: {final_job.get('failureReasons', [])}"
-                _cfn_send(event, context, "FAILED", job_id or physical_id, reason=reason)
-                return {"status": "failed", "reason": reason}
-
-        except Exception as exc:
-            reason = f"Unexpected error: {exc}"
-            logger.error(reason, exc_info=True)
+        if errors:
+            reason = "; ".join(errors)
             _cfn_send(event, context, "FAILED", physical_id, reason=reason)
             return {"status": "failed", "reason": reason}
 
-    # ── Seed routing graph (standalone invocation) ────────────────────────────
+        _cfn_send(
+            event, context, "SUCCESS", physical_id,
+            data={
+                "Message": "DB schema initialised and routing graph seeded",
+                "PgvectorStatus": pg_result["status"],
+                "RoutingGraphNodes": str(seed_result.get("nodes", 0)),
+                "RoutingGraphEdges": str(seed_result.get("edges", 0)),
+            },
+        )
+        return {
+            "status": "success",
+            "pgvector": pg_result,
+            "routing_graph": seed_result,
+        }
+
+    # ── Direct invocation: init DB schema ─────────────────────────────────────
+    if event.get("action") == "init_db":
+        result = init_db_schema()
+        return {"action": "init_db", **result}
+
+    # ── Direct invocation: seed routing graph ─────────────────────────────────
     if event.get("action") == "seed_routing":
-        graph_id = event.get("neptune_graph_id") or NEPTUNE_GRAPH_ID
-        if not graph_id:
-            raise ValueError("neptune_graph_id or NEPTUNE_GRAPH_ID env var required")
-        try:
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "query_api"))
-            from rag_router import seed_routing_graph
-            result = seed_routing_graph(graph_id)
-            return {"action": "seed_routing", "status": "success", **result}
-        except Exception as exc:
-            logger.error("Routing graph seed failed: %s", exc, exc_info=True)
-            return {"action": "seed_routing", "status": "failed", "reason": str(exc)}
+        result = seed_routing_graph_memgraph()
+        return {"action": "seed_routing", **result}
 
-    # ── Step Functions: start ingestion ───────────────────────────────────────
-    if event.get("action") == "start":
-        if not kb_id or not ds_id:
-            raise ValueError("knowledge_base_id and data_source_id are required")
-        job = start_ingestion_job(kb_id, ds_id)
-        return {
-            "action": "started",
-            "ingestion_job_id": job.get("ingestionJobId", ""),
-            "status": job.get("status", "STARTING"),
-        }
-
-    # ── Step Functions: poll status ───────────────────────────────────────────
-    if event.get("action") == "status":
-        job_id = event.get("ingestion_job_id", "")
-        if not job_id:
-            raise ValueError("ingestion_job_id is required for action=status")
-        job = get_ingestion_job(kb_id, ds_id, job_id)
-        return {
-            "action": "status",
-            "ingestion_job_id": job_id,
-            "status": job.get("status", "UNKNOWN"),
-            "statistics": job.get("statistics", {}),
-            "failure_reasons": job.get("failureReasons", []),
-        }
-
-    # ── Direct invocation with no action: start + wait ────────────────────────
-    logger.info("Direct invocation: start ingestion and wait for completion")
-    if not kb_id or not ds_id:
-        raise ValueError("KNOWLEDGE_BASE_ID and DATA_SOURCE_ID environment variables must be set")
-
-    job = start_ingestion_job(kb_id, ds_id)
-    job_id = job.get("ingestionJobId", "")
-    if job_id:
-        final_job = wait_for_ingestion(kb_id, ds_id, job_id)
-    else:
-        final_job = job
-
+    # ── Default: run both init steps ──────────────────────────────────────────
+    logger.info("Default invocation: running full DB initialisation")
+    pg_result = init_db_schema()
+    seed_result = seed_routing_graph_memgraph()
     return {
-        "status": final_job.get("status", "UNKNOWN"),
-        "ingestion_job_id": job_id,
-        "statistics": final_job.get("statistics", {}),
-        "failure_reasons": final_job.get("failureReasons", []),
+        "status": "success" if pg_result["status"] == "success" else "partial",
+        "pgvector": pg_result,
+        "routing_graph": seed_result,
     }

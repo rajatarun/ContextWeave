@@ -1,14 +1,15 @@
 """
-Bedrock Knowledge Base retrieval layer for ExpertiseRAG.
+pgvector retrieval layer for ExpertiseRAG.
 
-Wraps the Bedrock Agent Runtime `retrieve` API and applies
-source-authority weighting to the returned chunks.
+Replaces the Bedrock Knowledge Base Retrieve API with direct queries against
+the PostgreSQL pgvector chunks table, using Bedrock Titan V2 embeddings for
+semantic similarity.
 
 Supports multiple retrieval strategies via retrieve_with_strategy():
-  - semantic_search   : pure Bedrock KB vector search (default)
+  - semantic_search   : pgvector cosine similarity (default)
   - graph_first       : same as semantic, but graph expansion is forced
   - keyword_boosted   : semantic + keyword-overlap reranking
-  - hybrid            : semantic + Neptune vector chunks merged
+  - hybrid            : semantic primary + secondary pgvector pass merged
 
 The RAGRouter selects the strategy at query time; this module executes it.
 """
@@ -17,111 +18,127 @@ from __future__ import annotations
 import logging
 import os
 import re
+import sys
 from typing import Any
-
-import boto3
-from botocore.exceptions import ClientError
 
 from models import RetrievalConfig, RetrievedChunk, RAGStrategyLabel, get_source_weight
 
 logger = logging.getLogger(__name__)
 
-# Lazy clients – reused across warm Lambda invocations
-_BEDROCK_AGENT_RUNTIME: Any = None
-_NEPTUNE_CLIENT: Any = None
 
-
-def _get_bedrock_client() -> Any:
-    global _BEDROCK_AGENT_RUNTIME
-    if _BEDROCK_AGENT_RUNTIME is None:
-        _BEDROCK_AGENT_RUNTIME = boto3.client(
-            "bedrock-agent-runtime",
-            region_name=os.environ.get("AWS_REGION", "us-east-1"),
-        )
-    return _BEDROCK_AGENT_RUNTIME
-
-
-def _get_neptune_client() -> Any:
-    global _NEPTUNE_CLIENT
-    if _NEPTUNE_CLIENT is None:
-        _NEPTUNE_CLIENT = boto3.client(
-            "neptune-graph",
-            region_name=os.environ.get("AWS_REGION", "us-east-1"),
-        )
-    return _NEPTUNE_CLIENT
+def _get_shared_module(name: str):
+    shared_dir = os.path.join(os.path.dirname(__file__), "..", "shared")
+    if shared_dir not in sys.path:
+        sys.path.insert(0, shared_dir)
+    import importlib
+    return importlib.import_module(name)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Core Bedrock KB retrieval (unchanged semantic baseline)
+# Core pgvector retrieval
 # ─────────────────────────────────────────────────────────────────────────────
 
 def retrieve_chunks(
     question: str,
-    knowledge_base_id: str,
+    knowledge_base_id: str = "",  # kept for API compatibility; unused
     top_k: int = 10,
     min_score: float = 0.0,
+    doc_type_filter: str | None = None,
 ) -> list[RetrievedChunk]:
     """
-    Call Bedrock Knowledge Base Retrieve API and return weighted chunks.
+    Embed the question with Titan V2 and run a pgvector cosine similarity query.
 
-    Evidence weighting:
+    Evidence weighting (same thresholds as before):
       - architecture.md, CLAUDE.md → weight 1.0 (highest)
       - PlantUML-derived summaries → weight 0.8
       - code / README               → weight 0.6
-      - articles / blog             → weight 0.5
       - resume                      → weight 0.3
 
-    Chunks are sorted by effective_score (raw score × source_weight).
+    Chunks are sorted by effective_score (cosine_similarity × source_weight).
     """
-    client = _get_bedrock_client()
+    embedder = _get_shared_module("embedder")
+    db_clients = _get_shared_module("db_clients")
+
+    embedding = embedder.embed_text(question)
+    if embedding is None:
+        logger.error("Failed to embed question – cannot retrieve chunks")
+        return []
+
+    conn = db_clients.get_pg_connection()
+
+    # Retrieve child chunks preferentially (more precise); fall back to all
+    # chunks for strategies that need broader context.
+    base_query = """
+        SELECT
+            id::TEXT,
+            content,
+            source_file,
+            doc_type,
+            strategy,
+            parent_content,
+            is_child,
+            metadata,
+            1 - (embedding <=> %s::vector) AS score
+        FROM chunks
+        {where_clause}
+        ORDER BY embedding <=> %s::vector
+        LIMIT %s
+    """
+
+    where_parts = ["embedding IS NOT NULL"]
+    params: list[Any] = [embedding, embedding, top_k * 2]  # over-fetch for dedup
+
+    if doc_type_filter:
+        where_parts.append("doc_type = %s")
+        params.insert(2, doc_type_filter)  # insert before LIMIT param
+
+    where_clause = "WHERE " + " AND ".join(where_parts) if where_parts else ""
+    query = base_query.format(where_clause=where_clause)
 
     try:
-        response = client.retrieve(
-            knowledgeBaseId=knowledge_base_id,
-            retrievalQuery={"text": question},
-            retrievalConfiguration={
-                "vectorSearchConfiguration": {
-                    "numberOfResults": top_k,
-                    "overrideSearchType": "SEMANTIC",
-                }
-            },
-        )
-    except ClientError as exc:
-        logger.error("Bedrock Retrieve failed: %s", exc)
-        raise
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            rows = cur.fetchall()
+            columns = [d[0] for d in cur.description]
+    except Exception as exc:
+        logger.error("pgvector retrieve failed: %s", exc)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return []
 
     chunks: list[RetrievedChunk] = []
-
-    for result in response.get("retrievalResults", []):
-        content = result.get("content", {}).get("text", "")
-        score = float(result.get("score", 0.0))
-        location = result.get("location", {})
-        source_uri = (
-            location.get("s3Location", {}).get("uri", "")
-            or location.get("uri", "")
-        )
-        metadata = result.get("metadata", {})
-
-        # Extract source file name for weighting
-        source_file = source_uri.split("/")[-1] if source_uri else ""
+    for row in rows:
+        r = dict(zip(columns, row))
+        score = float(r.get("score", 0.0))
+        source_file = r.get("source_file", "")
         source_weight = get_source_weight(source_file)
+        metadata = r.get("metadata") or {}
+        if r.get("doc_type"):
+            metadata["doc_type"] = r["doc_type"]
+        if r.get("strategy"):
+            metadata["strategy"] = r["strategy"]
+        if r.get("is_child"):
+            metadata["is_child"] = r["is_child"]
 
+        source_uri = f"pgvector://{source_file}"
         chunk = RetrievedChunk(
-            content=content,
+            content=r.get("content", ""),
             score=score,
             source_uri=source_uri,
             source_weight=source_weight,
             metadata=metadata,
         )
-
         if chunk.effective_score >= min_score:
             chunks.append(chunk)
 
-    # Sort by effective score (semantic score × authority weight)
+    # Sort by effective score (cosine similarity × authority weight)
     chunks.sort(key=lambda c: c.effective_score, reverse=True)
+    chunks = chunks[:top_k]
 
     logger.info(
-        "Retrieved %d chunks (top effective score: %.3f)",
+        "pgvector retrieved %d chunks (top effective score: %.3f)",
         len(chunks),
         chunks[0].effective_score if chunks else 0.0,
     )
@@ -134,24 +151,28 @@ def retrieve_chunks(
 
 def retrieve_with_strategy(
     question: str,
-    knowledge_base_id: str,
-    config: RetrievalConfig,
+    knowledge_base_id: str = "",  # kept for API compatibility; unused
+    config: RetrievalConfig = None,
     top_k: int = 10,
     min_score: float = 0.0,
-    neptune_graph_id: str = "",
+    neptune_graph_id: str = "",   # kept for API compatibility; unused
 ) -> list[RetrievedChunk]:
     """
     Retrieve chunks using the strategy specified in config.
 
     Dispatches to the appropriate combination of:
-      - Bedrock KB semantic search (always the primary source)
+      - pgvector semantic search (always the primary source)
       - Keyword-overlap reranking (keyword_boosted / hybrid)
-      - Neptune vector search (hybrid only)
+      - Secondary pgvector pass for alternative doc types (hybrid)
 
     Returns a deduplicated, ranked list of RetrievedChunk objects.
     """
-    # Primary: always start with Bedrock KB semantic search
-    chunks = retrieve_chunks(question, knowledge_base_id, top_k=top_k, min_score=min_score)
+    if config is None:
+        from models import RetrievalConfig as _RC, RAGStrategyLabel as _RSL
+        config = _RC(strategy=_RSL.SEMANTIC)
+
+    # Primary: pgvector semantic search
+    chunks = retrieve_chunks(question, top_k=top_k, min_score=min_score)
 
     strategy = config.strategy
 
@@ -161,12 +182,10 @@ def retrieve_with_strategy(
     ):
         chunks = _keyword_boost_rerank(chunks, question)
 
-    # Hybrid: also search Neptune vector store and merge
+    # Hybrid: secondary pgvector pass over a complementary doc_type
     if config.use_neptune_chunks and strategy == RAGStrategyLabel.HYBRID:
-        gid = neptune_graph_id or os.environ.get("NEPTUNE_GRAPH_ID", "")
-        if gid:
-            neptune_chunks = _retrieve_from_neptune(question, gid, top_k=top_k // 2)
-            chunks = _merge_results(chunks, neptune_chunks, max_total=top_k)
+        secondary = _retrieve_secondary(question, top_k=top_k // 2)
+        chunks = _merge_results(chunks, secondary, max_total=top_k)
 
     return chunks
 
@@ -194,10 +213,7 @@ def _extract_keywords(text: str) -> set[str]:
 
 
 def _keyword_overlap_score(chunk_text: str, question_keywords: set[str]) -> float:
-    """
-    Fraction of question keywords present in the chunk text.
-    Returns 0–1.
-    """
+    """Fraction of question keywords present in the chunk text. Returns 0–1."""
     if not question_keywords:
         return 0.0
     chunk_keywords = _extract_keywords(chunk_text)
@@ -215,8 +231,6 @@ def _keyword_boost_rerank(
 
     boosted_score = (1 - keyword_weight) × effective_score
                   + keyword_weight       × keyword_overlap_score
-
-    The chunk's score attribute is NOT mutated; reranking is done via sort key.
     """
     q_keywords = _extract_keywords(question)
     if not q_keywords:
@@ -232,99 +246,69 @@ def _keyword_boost_rerank(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Neptune vector search (hybrid strategy)
+# Secondary pgvector pass (hybrid strategy)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _embed_question(question: str) -> list[float] | None:
-    """
-    Generate a 1024-dim Titan Text Embeddings V2 vector for the question.
-    Returns None if embedding fails (non-fatal).
-    """
-    import json
-    import boto3 as _boto3
-
-    try:
-        bedrock = _boto3.client(
-            "bedrock-runtime",
-            region_name=os.environ.get("AWS_REGION", "us-east-1"),
-        )
-        body = json.dumps({"inputText": question, "dimensions": 1024, "normalize": True})
-        resp = bedrock.invoke_model(
-            modelId="amazon.titan-embed-text-v2:0",
-            contentType="application/json",
-            accept="application/json",
-            body=body,
-        )
-        return json.loads(resp["body"].read())["embedding"]
-    except Exception as exc:
-        logger.warning("Embedding failed (non-fatal): %s", exc)
-        return None
-
-
-def _retrieve_from_neptune(
+def _retrieve_secondary(
     question: str,
-    graph_id: str,
     top_k: int = 5,
 ) -> list[RetrievedChunk]:
     """
-    Vector search over ChunkVector nodes stored in Neptune Analytics.
-    These are alternative-strategy chunks embedded during preprocessing.
-
-    Returns RetrievedChunk objects with source_uri prefixed 'neptune://'.
+    Secondary pgvector retrieval that targets parent (non-child) chunks only.
+    Used by the hybrid strategy to complement child-chunk primary results
+    with broader context chunks.
     """
-    import json
+    embedder = _get_shared_module("embedder")
+    db_clients = _get_shared_module("db_clients")
 
-    embedding = _embed_question(question)
-    if not embedding:
+    embedding = embedder.embed_text(question)
+    if embedding is None:
         return []
 
-    client = _get_neptune_client()
     query = """
-    CALL neptune.algo.vectors.topKByEmbedding(
-        $embedding,
-        {topK: $top_k, concurrency: 2}
-    )
-    YIELD node, score
-    WHERE node:ChunkVector
-    RETURN
-        node.text        AS text,
-        node.doc_type    AS doc_type,
-        node.strategy    AS strategy,
-        node.doc_node_id AS doc_node_id,
-        score
+        SELECT
+            id::TEXT,
+            content,
+            source_file,
+            doc_type,
+            strategy,
+            metadata,
+            1 - (embedding <=> %s::vector) AS score
+        FROM chunks
+        WHERE embedding IS NOT NULL
+          AND (is_child = FALSE OR is_child IS NULL)
+        ORDER BY embedding <=> %s::vector
+        LIMIT %s
     """
+    conn = db_clients.get_pg_connection()
     try:
-        kwargs: dict[str, Any] = {
-            "graphIdentifier": graph_id,
-            "queryString": query,
-            "language": "OPEN_CYPHER",
-            "parameters": json.dumps({"embedding": embedding, "top_k": top_k}),
-        }
-        response = client.execute_query(**kwargs)
-        payload = response.get("payload")
-        raw = payload.read() if hasattr(payload, "read") else (payload or b"{}")
-        rows = json.loads(raw).get("results", [])
+        with conn.cursor() as cur:
+            cur.execute(query, [embedding, embedding, top_k])
+            rows = cur.fetchall()
+            columns = [d[0] for d in cur.description]
     except Exception as exc:
-        logger.warning("Neptune vector search failed (non-fatal): %s", exc)
+        logger.warning("Secondary pgvector pass failed (non-fatal): %s", exc)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         return []
 
     chunks = []
     for row in rows:
-        text = row.get("text", "")
-        score = float(row.get("score", 0.0))
-        strategy = row.get("strategy", "unknown")
-        doc_node_id = row.get("doc_node_id", "")
-        source_uri = f"neptune://{doc_node_id}/{strategy}"
-        # Neptune chunks have weight 0.6 by default (similar to code/README)
+        r = dict(zip(columns, row))
+        source_file = r.get("source_file", "")
+        metadata = r.get("metadata") or {}
+        metadata["source"] = "pgvector_secondary"
         chunks.append(RetrievedChunk(
-            content=text,
-            score=score,
-            source_uri=source_uri,
-            source_weight=0.6,
-            metadata={"strategy": strategy, "doc_node_id": doc_node_id, "source": "neptune"},
+            content=r.get("content", ""),
+            score=float(r.get("score", 0.0)),
+            source_uri=f"pgvector://{source_file}",
+            source_weight=get_source_weight(source_file),
+            metadata=metadata,
         ))
 
-    logger.info("Neptune vector search returned %d chunks", len(chunks))
+    logger.info("Secondary pgvector pass returned %d chunks", len(chunks))
     return chunks
 
 
@@ -338,7 +322,7 @@ def _merge_results(
     max_total: int = 10,
 ) -> list[RetrievedChunk]:
     """
-    Merge Bedrock KB chunks with Neptune vector chunks, dedup, and re-rank.
+    Merge primary and secondary chunk lists, dedup, and re-rank.
 
     Secondary chunks are included only if their content is not near-duplicate
     of primary chunks (Jaccard threshold 0.85).
@@ -373,7 +357,6 @@ def deduplicate_chunks(chunks: list[RetrievedChunk], threshold: float = 0.92) ->
     unique: list[RetrievedChunk] = []
     for chunk in chunks:
         prefix = chunk.content[:150]
-        # Check if similar prefix already seen
         is_dup = any(
             _prefix_similarity(prefix, s) >= threshold
             for s in seen
