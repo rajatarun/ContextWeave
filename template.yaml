@@ -471,7 +471,7 @@ Resources:
           # Load Memgraph Docker image from S3 (staged by CI/CD via VPC Gateway Endpoint)
           BUCKET="expertise-rag-artifacts-${AWS::AccountId}-${Environment}"
           for attempt in 1 2 3; do
-            aws s3 cp "s3://${!BUCKET}/binaries/memgraph-2.14.tar.gz" /tmp/memgraph.tar.gz \
+            aws s3 cp "s3://${!BUCKET}/binaries/memgraph-2.14.1.tar.gz" /tmp/memgraph.tar.gz \
               --region ${AWS::Region} && break
             echo "S3 download attempt ${!attempt} failed, retrying..." && sleep 10
           done
@@ -484,7 +484,7 @@ Resources:
             -p 7687:7687 \
             -v /var/lib/memgraph:/var/lib/memgraph \
             -v /var/log/memgraph:/var/log/memgraph \
-            memgraph/memgraph:2.14 \
+            memgraph/memgraph:2.14.1 \
             --storage-properties-on-edges=true \
             --storage-snapshot-interval-sec=300 \
             --storage-wal-enabled=true \
