@@ -435,9 +435,12 @@ Resources:
     Properties:
       InstanceType: !Ref MemgraphInstanceType
       ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
-      SubnetId: !Ref PrivateSubnet1
-      SecurityGroupIds:
-        - !Ref MemgraphSG
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          AssociatePublicIpAddress: true
+          SubnetId: !Ref PublicSubnet1
+          GroupSet:
+            - !Ref MemgraphSG
       IamInstanceProfile: !Ref MemgraphInstanceProfile
       KeyName: !If [HasEC2KeyPair, !Ref EC2KeyPairName, !Ref AWS::NoValue]
       UserData:
