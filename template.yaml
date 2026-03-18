@@ -283,7 +283,7 @@ Resources:
       SubnetId: !Ref PrivateSubnet2
       RouteTableId: !Ref PrivateRouteTable
 
-  # S3 VPC Gateway Endpoint (Lambda → S3 without NAT)
+  # S3 VPC Gateway Endpoint (Lambda + EC2 → S3 without NAT)
   S3VPCEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
@@ -292,6 +292,58 @@ Resources:
       VpcEndpointType: Gateway
       RouteTableIds:
         - !Ref PrivateRouteTable
+
+  # SSM Interface Endpoints – allow Session Manager on private EC2 (no internet needed)
+  SSMEndpointSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: HTTPS from within VPC for SSM interface endpoints
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref VpcCidr
+          Description: HTTPS from VPC for SSM agent
+      Tags:
+        - Key: Name
+          Value: !Sub expertise-rag-ssm-endpoint-sg-${Environment}
+
+  SSMEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ssm
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1
+      SecurityGroupIds:
+        - !Ref SSMEndpointSG
+      PrivateDnsEnabled: true
+
+  SSMMessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ssmmessages
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1
+      SecurityGroupIds:
+        - !Ref SSMEndpointSG
+      PrivateDnsEnabled: true
+
+  EC2MessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ec2messages
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1
+      SecurityGroupIds:
+        - !Ref SSMEndpointSG
+      PrivateDnsEnabled: true
 
   # ───────────────────────────────────────────
   # Security Groups
@@ -468,23 +520,31 @@ Resources:
           dnf install -y docker
           systemctl enable docker
           systemctl start docker
-          # Load Memgraph Docker image from S3 (staged by CI/CD via VPC Gateway Endpoint)
+          # Load Memgraph Docker image from S3 (staged by CI/CD via S3 VPC Gateway Endpoint)
           BUCKET="expertise-rag-artifacts-${AWS::AccountId}-${Environment}"
+          download_ok=false
           for attempt in 1 2 3; do
-            aws s3 cp "s3://${!BUCKET}/binaries/memgraph-2.14.1.tar.gz" /tmp/memgraph.tar.gz \
-              --region ${AWS::Region} && break
-            echo "S3 download attempt ${!attempt} failed, retrying..." && sleep 10
+            if aws s3 cp "s3://${!BUCKET}/binaries/memgraph-2.14.1.tar.gz" /tmp/memgraph.tar.gz \
+                --region ${AWS::Region}; then
+              download_ok=true
+              break
+            fi
+            echo "S3 download attempt ${!attempt}/3 failed, retrying in 10s..."
+            sleep 10
           done
+          ${!download_ok} || { echo "ERROR: S3 download failed after 3 attempts" >&2; exit 1; }
           docker load -i /tmp/memgraph.tar.gz
           rm -f /tmp/memgraph.tar.gz
-          # Run Memgraph CE with WAL + snapshot persistence
+          # Run Memgraph with explicit bolt address binding on all interfaces
           docker run -d \
             --name memgraph \
-            --restart=always \
+            --restart=unless-stopped \
             -p 7687:7687 \
             -v /var/lib/memgraph:/var/lib/memgraph \
             -v /var/log/memgraph:/var/log/memgraph \
             memgraph/memgraph:2.14.1 \
+            --bolt-server-address=0.0.0.0 \
+            --bolt-port=7687 \
             --storage-properties-on-edges=true \
             --storage-snapshot-interval-sec=300 \
             --storage-wal-enabled=true \
