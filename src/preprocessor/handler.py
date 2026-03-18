@@ -32,6 +32,12 @@ from urllib.parse import unquote_plus
 import boto3
 from botocore.exceptions import ClientError
 
+# With CodeUri: src/, Lambda adds /var/task/ to sys.path but the sibling
+# modules live in /var/task/preprocessor/. Insert this directory so that
+# bare module names (extractors, graph_builder, etc.) resolve correctly.
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+
 from extractors import extract
 from graph_builder import build_graph_from_extractions, GraphBuilder
 from models import DerivedArtifact, get_source_weight

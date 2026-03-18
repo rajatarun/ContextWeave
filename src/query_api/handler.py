@@ -37,6 +37,12 @@ from typing import Any
 
 import boto3
 
+# With CodeUri: src/, Lambda adds /var/task/ to sys.path but the sibling
+# modules live in /var/task/query_api/. Insert this directory so that
+# bare module names (graph_expander, rag_router, etc.) resolve correctly.
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+
 from graph_expander import expand_graph_context
 from rag_router import select_strategy, update_feedback
 from retriever import deduplicate_chunks, retrieve_chunks, retrieve_with_strategy
