@@ -577,6 +577,7 @@ Resources:
             --storage-wal-enabled=true \
             --data-recovery-on-startup=true \
             --also-log-to-stderr=true \
+            --log-file=/dev/null \
             --log-level=WARNING
 
           # --- Verify container is running ---
