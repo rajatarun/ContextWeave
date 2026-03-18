@@ -363,11 +363,11 @@ Resources:
     Properties:
       Name: !Sub expertise-rag-memgraph-${Environment}
       Description: Memgraph EC2 connection info for ExpertiseRAG
-      # Host is set via SSM/manual update after EC2 launches
+      # EC2 private IP is injected at deploy time via !Sub ${MemgraphEC2.PrivateIp}
       # Username/password are empty (Memgraph CE has no auth by default)
       SecretString: !Sub |
         {
-          "host": "REPLACE_WITH_MEMGRAPH_PRIVATE_IP",
+          "host": "${MemgraphEC2.PrivateIp}",
           "port": 7687,
           "username": "",
           "password": ""
