@@ -80,7 +80,12 @@ def get_memgraph_driver() -> Any:
 
     uri = f"bolt://{host}:{port}"
     logger.info("Connecting to Memgraph at %s", uri)
-    _memgraph_driver = GraphDatabase.driver(uri, auth=("", ""))
+    _memgraph_driver = GraphDatabase.driver(
+        uri,
+        auth=("", ""),
+        connection_timeout=5,
+        max_connection_lifetime=300,
+    )
     return _memgraph_driver
 
 
