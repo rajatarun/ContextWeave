@@ -516,6 +516,7 @@ Resources:
           mount /dev/xvdf /var/lib/memgraph
           echo '/dev/xvdf /var/lib/memgraph xfs defaults,nofail 0 2' >> /etc/fstab
           mkdir -p /var/log/memgraph /var/lib/memgraph/data
+          chown -R 101:101 /var/log/memgraph /var/lib/memgraph/data
           # Install Docker
           dnf install -y docker
           systemctl enable docker
@@ -549,6 +550,7 @@ Resources:
             --storage-snapshot-interval-sec=300 \
             --storage-wal-enabled=true \
             --storage-recover-on-startup=true \
+            --storage-mode-parallel-schema-recovery=true \
             --log-level=WARNING
           echo "Memgraph started" >> /var/log/memgraph/init.log
       Tags:
