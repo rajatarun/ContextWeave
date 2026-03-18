@@ -297,6 +297,7 @@ def _write_chunks_to_pgvector(
                 none_count, len(embeddings), source_file, "amazon.titan-embed-text-v2:0",
             )
 
+        from psycopg2.extras import Json as _PgJson
         rows = []
         for chunk, embedding in zip(chunks, embeddings):
             if embedding is None:
@@ -310,7 +311,7 @@ def _write_chunks_to_pgvector(
                 embedding,
                 chunk.parent_content,
                 chunk.is_child,
-                {},
+                _PgJson({}),
             ))
 
         if not rows:
