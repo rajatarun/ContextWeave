@@ -536,9 +536,9 @@ Resources:
             || echo "$EBS_DEV /var/lib/memgraph xfs defaults,nofail 0 2" >> /etc/fstab
           log "EBS mounted at /var/lib/memgraph"
 
-          # Dirs and ownership (memgraph container runs as UID 101)
-          mkdir -p /var/log/memgraph /var/lib/memgraph/data
-          chown -R 101:101 /var/log/memgraph /var/lib/memgraph
+          # Data dir ownership (memgraph container runs as UID 101)
+          mkdir -p /var/lib/memgraph/data
+          chown -R 101:101 /var/lib/memgraph
           log "Directories ready"
 
           # --- Docker ---
@@ -569,7 +569,6 @@ Resources:
             --restart=unless-stopped \
             -p 7687:7687 \
             -v /var/lib/memgraph:/var/lib/memgraph \
-            -v /var/log/memgraph:/var/log/memgraph \
             memgraph/memgraph:3.8.1 \
             --bolt-address=0.0.0.0 \
             --bolt-port=7687 \
@@ -577,6 +576,7 @@ Resources:
             --storage-snapshot-interval-sec=300 \
             --storage-wal-enabled=true \
             --data-recovery-on-startup=true \
+            --also-log-to-stderr=true \
             --log-level=WARNING
 
           # --- Verify container is running ---
