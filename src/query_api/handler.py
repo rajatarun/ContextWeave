@@ -52,7 +52,9 @@ from models import QueryRequest, RAGStrategyLabel
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 
-KNOWLEDGE_BASE_ID = os.environ.get("KNOWLEDGE_BASE_ID", "")
+# Retained for backward compatibility with existing callers that pass these
+# in the request; the retriever and router now use pgvector/Memgraph directly.
+KNOWLEDGE_BASE_ID = os.environ.get("KNOWLEDGE_BASE_ID", "unused")
 NEPTUNE_GRAPH_ID = os.environ.get("NEPTUNE_GRAPH_ID", "")
 
 
@@ -123,9 +125,6 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
     # Step 1 – Classify
     question_type = req.question_type or classify_question(req.question)
     logger.info("Question type: %s | Question: %s", question_type, req.question[:100])
-
-    if not KNOWLEDGE_BASE_ID:
-        raise ValueError("KNOWLEDGE_BASE_ID environment variable is not set")
 
     # Step 2 – Route: pick best retrieval strategy from Neptune routing graph
     retrieval_config = select_strategy(
