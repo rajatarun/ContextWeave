@@ -252,6 +252,7 @@ def _process_file(
 def _write_chunks_to_pgvector(
     extractions: list[dict],
     repo_name: str,
+    errors: list | None = None,
 ) -> int:
     """
     Chunk each extracted document, generate Titan V2 embeddings, and insert
@@ -288,6 +289,13 @@ def _write_chunks_to_pgvector(
         # Generate embeddings for all chunk contents
         contents = [c.content for c in chunks]
         embeddings = embedder.embed_texts(contents)
+
+        none_count = sum(1 for e in embeddings if e is None)
+        if none_count > 0:
+            logger.error(
+                "Embedding failed for %d/%d chunks in %s – check Bedrock model access for %s",
+                none_count, len(embeddings), source_file, "amazon.titan-embed-text-v2:0",
+            )
 
         rows = []
         for chunk, embedding in zip(chunks, embeddings):
@@ -339,7 +347,10 @@ def _write_chunks_to_pgvector(
             )
         except Exception as exc:
             conn.rollback()
-            logger.error("pgvector write failed for %s: %s", source_file, exc)
+            msg = f"pgvector write failed for {source_file}: {exc}"
+            logger.error(msg)
+            if errors is not None:
+                errors.append(msg)
 
     return total_written
 
@@ -351,6 +362,7 @@ def _write_chunks_to_pgvector(
 def _write_graph_to_memgraph(
     extractions: list[dict],
     repo_name: str,
+    errors: list | None = None,
 ) -> dict[str, int]:
     """
     Build the knowledge graph from extractions and write it directly to Memgraph.
@@ -398,7 +410,10 @@ def _write_graph_to_memgraph(
         logger.info("Memgraph write result: %s", result)
         return result
     except Exception as exc:
-        logger.error("Memgraph write failed: %s", exc, exc_info=True)
+        msg = f"Memgraph write failed: {exc}"
+        logger.error(msg, exc_info=True)
+        if errors is not None:
+            errors.append(msg)
         return {"nodes_written": 0, "edges_written": 0}
 
 
@@ -509,7 +524,7 @@ def lambda_handler(event: dict, context: Any) -> dict:
     chunks_written = 0
     if extractions:
         try:
-            chunks_written = _write_chunks_to_pgvector(extractions, repo_name)
+            chunks_written = _write_chunks_to_pgvector(extractions, repo_name, errors=errors)
             logger.info("pgvector: total %d chunks written", chunks_written)
         except Exception as exc:
             err_msg = f"pgvector write failed: {exc}"
@@ -520,7 +535,7 @@ def lambda_handler(event: dict, context: Any) -> dict:
     memgraph_result: dict = {"nodes_written": 0, "edges_written": 0}
     if extractions:
         try:
-            memgraph_result = _write_graph_to_memgraph(extractions, repo_name)
+            memgraph_result = _write_graph_to_memgraph(extractions, repo_name, errors=errors)
         except Exception as exc:
             err_msg = f"Memgraph write failed: {exc}"
             logger.error(err_msg, exc_info=True)
