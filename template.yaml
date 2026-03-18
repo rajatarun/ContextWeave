@@ -506,43 +506,69 @@ Resources:
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
-          set -e
-          # Format and mount EBS volume for Memgraph data
-          while [ ! -b /dev/xvdf ]; do sleep 2; done
-          if ! blkid /dev/xvdf; then
-            mkfs.xfs /dev/xvdf
+          set -euo pipefail
+          exec > /var/log/userdata.log 2>&1
+          log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
+
+          log "=== UserData start ==="
+
+          # --- EBS: resolve device (xvdf on Xen, nvme1n1 on Nitro) ---
+          log "Waiting for EBS volume..."
+          EBS_DEV=""
+          for i in $(seq 1 30); do
+            for dev in /dev/xvdf /dev/nvme1n1; do
+              [ -b "$dev" ] && EBS_DEV="$dev" && break 2
+            done
+            sleep 2
+          done
+          [ -n "$EBS_DEV" ] || { log "ERROR: EBS device not found after 60s"; exit 1; }
+          log "EBS device: $EBS_DEV"
+
+          # Format only if filesystem is absent
+          if ! blkid "$EBS_DEV" &>/dev/null; then
+            log "Formatting $EBS_DEV as xfs..."
+            mkfs.xfs "$EBS_DEV"
           fi
+
           mkdir -p /var/lib/memgraph
-          mount /dev/xvdf /var/lib/memgraph
-          echo '/dev/xvdf /var/lib/memgraph xfs defaults,nofail 0 2' >> /etc/fstab
-          mkdir -p /var/log/memgraph /var/lib/memgraph/data
-          chown -R 101:101 /var/log/memgraph /var/lib/memgraph/data
-          # Install Docker
+          mount "$EBS_DEV" /var/lib/memgraph
+          grep -qF "$EBS_DEV" /etc/fstab \
+            || echo "$EBS_DEV /var/lib/memgraph xfs defaults,nofail 0 2" >> /etc/fstab
+          log "EBS mounted at /var/lib/memgraph"
+
+          # Data dir ownership (memgraph container runs as UID 101)
+          mkdir -p /var/lib/memgraph/data
+          chown -R 101:101 /var/lib/memgraph
+          log "Directories ready"
+
+          # --- Docker ---
+          log "Installing Docker..."
           dnf install -y docker
-          systemctl enable docker
-          systemctl start docker
-          # Load Memgraph Docker image from S3 (staged by CI/CD via S3 VPC Gateway Endpoint)
-          BUCKET="expertise-rag-artifacts-${AWS::AccountId}-${Environment}"
-          download_ok=false
-          for attempt in 1 2 3; do
-            if aws s3 cp "s3://${!BUCKET}/binaries/memgraph-3.8.1.tar.gz" /tmp/memgraph.tar.gz \
-                --region ${AWS::Region}; then
-              download_ok=true
+          systemctl enable --now docker
+          log "Docker started"
+
+          # --- Pull image with exponential-backoff retries ---
+          log "Pulling memgraph/memgraph:3.8.1..."
+          pulled=false
+          for attempt in 1 2 3 4 5; do
+            if docker pull memgraph/memgraph:3.8.1; then
+              pulled=true
               break
             fi
-            echo "S3 download attempt ${!attempt}/3 failed, retrying in 10s..."
-            sleep 10
+            wait_sec=$((attempt * 15))
+            log "Pull attempt $attempt failed; retrying in ${!wait_sec}s..."
+            sleep ${!wait_sec}
           done
-          ${!download_ok} || { echo "ERROR: S3 download failed after 3 attempts" >&2; exit 1; }
-          docker load -i /tmp/memgraph.tar.gz
-          rm -f /tmp/memgraph.tar.gz
-          # Run Memgraph with explicit bolt address binding on all interfaces
+          ${!pulled} || { log "ERROR: docker pull failed after 5 attempts"; exit 1; }
+          log "Image pulled"
+
+          # --- Start Memgraph ---
+          log "Starting Memgraph container..."
           docker run -d \
             --name memgraph \
             --restart=unless-stopped \
             -p 7687:7687 \
             -v /var/lib/memgraph:/var/lib/memgraph \
-            -v /var/log/memgraph:/var/log/memgraph \
             memgraph/memgraph:3.8.1 \
             --bolt-address=0.0.0.0 \
             --bolt-port=7687 \
@@ -550,8 +576,20 @@ Resources:
             --storage-snapshot-interval-sec=300 \
             --storage-wal-enabled=true \
             --data-recovery-on-startup=true \
+            --also-log-to-stderr=true \
             --log-level=WARNING
-          echo "Memgraph started" >> /var/log/memgraph/init.log
+
+          # --- Verify container is running ---
+          sleep 5
+          if docker ps --filter "name=^memgraph$" --filter "status=running" | grep -q memgraph; then
+            log "Memgraph container running"
+          else
+            log "ERROR: Memgraph container not running after start"
+            docker logs memgraph || true
+            exit 1
+          fi
+
+          log "=== UserData complete ==="
       Tags:
         - Key: Name
           Value: !Sub expertise-rag-memgraph-${Environment}
