@@ -383,6 +383,8 @@ Resources:
   # ───────────────────────────────────────────
   PostgresSecret:
     Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Name: !Sub expertise-rag-postgres-${Environment}
       Description: PostgreSQL credentials for ExpertiseRAG pgvector
