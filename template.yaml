@@ -420,6 +420,17 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: S3BinariesRead
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub arn:aws:s3:::expertise-rag-artifacts-${AWS::AccountId}-${Environment}/binaries/*
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: !GetAtt ArtifactsKMSKey.Arn
       Tags:
         - Key: Project
           Value: ExpertiseRAG
@@ -435,12 +446,9 @@ Resources:
     Properties:
       InstanceType: !Ref MemgraphInstanceType
       ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
-      NetworkInterfaces:
-        - DeviceIndex: 0
-          AssociatePublicIpAddress: true
-          SubnetId: !Ref PublicSubnet1
-          GroupSet:
-            - !Ref MemgraphSG
+      SubnetId: !Ref PrivateSubnet1
+      SecurityGroupIds:
+        - !Ref MemgraphSG
       IamInstanceProfile: !Ref MemgraphInstanceProfile
       KeyName: !If [HasEC2KeyPair, !Ref EC2KeyPairName, !Ref AWS::NoValue]
       UserData:
@@ -460,7 +468,16 @@ Resources:
           dnf install -y docker
           systemctl enable docker
           systemctl start docker
-          # Pull and run Memgraph CE with WAL + snapshot persistence
+          # Load Memgraph Docker image from S3 (staged by CI/CD via VPC Gateway Endpoint)
+          BUCKET="expertise-rag-artifacts-${AWS::AccountId}-${Environment}"
+          for attempt in 1 2 3; do
+            aws s3 cp "s3://${!BUCKET}/binaries/memgraph-2.14.tar.gz" /tmp/memgraph.tar.gz \
+              --region ${AWS::Region} && break
+            echo "S3 download attempt ${!attempt} failed, retrying..." && sleep 10
+          done
+          docker load -i /tmp/memgraph.tar.gz
+          rm -f /tmp/memgraph.tar.gz
+          # Run Memgraph CE with WAL + snapshot persistence
           docker run -d \
             --name memgraph \
             --restart=always \
