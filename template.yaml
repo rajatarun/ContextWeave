@@ -524,7 +524,7 @@ Resources:
           BUCKET="expertise-rag-artifacts-${AWS::AccountId}-${Environment}"
           download_ok=false
           for attempt in 1 2 3; do
-            if aws s3 cp "s3://${!BUCKET}/binaries/memgraph-2.14.1.tar.gz" /tmp/memgraph.tar.gz \
+            if aws s3 cp "s3://${!BUCKET}/binaries/memgraph-3.8.1.tar.gz" /tmp/memgraph.tar.gz \
                 --region ${AWS::Region}; then
               download_ok=true
               break
@@ -542,7 +542,7 @@ Resources:
             -p 7687:7687 \
             -v /var/lib/memgraph:/var/lib/memgraph \
             -v /var/log/memgraph:/var/log/memgraph \
-            memgraph/memgraph:2.14.1 \
+            memgraph/memgraph:3.8.1 \
             --bolt-server-address=0.0.0.0 \
             --bolt-port=7687 \
             --storage-properties-on-edges=true \
