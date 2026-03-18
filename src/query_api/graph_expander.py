@@ -248,7 +248,7 @@ def expand_graph_context(
         db = _get_db_clients()
         db.get_memgraph_driver()
     except Exception as exc:
-        logger.warning("Memgraph unavailable – skipping graph expansion: %s", exc)
+        logger.warning("Memgraph unavailable – skipping graph expansion: %s", exc, exc_info=True)
         return {
             "person_summary": {},
             "skill_neighbourhood": [],
