@@ -300,6 +300,7 @@ class GraphBuilder:
 
         nodes_written = 0
         edges_written = 0
+        first_error: Exception | None = None
 
         with driver.session() as session:
             # ── Nodes ──────────────────────────────────────────────────────
@@ -319,10 +320,13 @@ class GraphBuilder:
                     "SET n += $props"
                 )
                 try:
-                    session.run(query, node_id=node.node_id, props=props)
+                    # .consume() forces the lazy neo4j result to actually execute
+                    session.run(query, node_id=node.node_id, props=props).consume()
                     nodes_written += 1
                 except Exception as exc:
                     _log.warning("Memgraph node write failed (%s): %s", node.node_id, exc)
+                    if first_error is None:
+                        first_error = exc
 
             # ── Edges ──────────────────────────────────────────────────────
             for edge in self._edges.values():
@@ -346,16 +350,25 @@ class GraphBuilder:
                         to_id=edge.to_id,
                         edge_id=edge.edge_id,
                         props=edge_props,
-                    )
+                    ).consume()
                     edges_written += 1
                 except Exception as exc:
                     _log.warning("Memgraph edge write failed (%s): %s", edge.edge_id, exc)
+                    if first_error is None:
+                        first_error = exc
 
         _log.info(
             "Memgraph write complete: %d nodes, %d edges",
             nodes_written,
             edges_written,
         )
+
+        # If nothing was written at all, raise so the caller surfaces the error
+        if nodes_written == 0 and first_error is not None:
+            raise RuntimeError(
+                f"All Memgraph node writes failed. First error: {first_error}"
+            ) from first_error
+
         return {"nodes_written": nodes_written, "edges_written": edges_written}
 
 
