@@ -285,5 +285,9 @@ def lambda_handler(event: dict, context: Any) -> dict:
             logger.error("Unhandled error: %s\n%s", exc, traceback.format_exc())
             return _error(500, "Internal server error", str(exc))
 
+    # ── CORS preflight ────────────────────────────────────────────────────────
+    if method == "OPTIONS":
+        return {"statusCode": 200, "body": ""}
+
     # ── 404 ───────────────────────────────────────────────────────────────────
     return _error(404, "Not found", f"No handler for {method} {path}")
