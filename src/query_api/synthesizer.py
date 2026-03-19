@@ -56,8 +56,12 @@ def _get_bedrock_runtime() -> Any:
 
 _QUESTION_PATTERNS = {
     "skill_depth": re.compile(
-        r"\b(expert|proficient|experience|skill|know|familiar|deep|"
-        r"strong|level|years?|how well|how long|speciali[sz]e)\b",
+        # "experience with/in/using/of X" is a skill-depth question;
+        # bare "experience" (e.g. "experience at JP Morgan") is NOT – it falls
+        # through to the project classifier below.
+        r"\b(expert|proficient|skill|know|familiar|deep|"
+        r"strong|level|years?|how well|how long|speciali[sz]e)\b"
+        r"|experience\s+(?:with|in|using|of|building)\b",
         re.IGNORECASE,
     ),
     "architecture": re.compile(
@@ -66,8 +70,10 @@ _QUESTION_PATTERNS = {
         re.IGNORECASE,
     ),
     "project": re.compile(
-        r"\b(project|built|created|deployed|implemented|work|repo|product|"
-        r"deliver|ship|application|service|platform)\b",
+        # "experience" without a technology qualifier → employment/project context
+        r"\b(project|built|created|deployed|implemented|work(?:ed)?|repo|product|"
+        r"deliver|ship|application|service|platform|experience|role|responsibilit|"
+        r"company|employe|position|tenure|joined)\b",
         re.IGNORECASE,
     ),
     "comparison": re.compile(
