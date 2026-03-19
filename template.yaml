@@ -1196,6 +1196,7 @@ Resources:
           - OPTIONS
         AllowOrigins:
           - '*'
+        MaxAge: 300
       Tags:
         Project: ExpertiseRAG
         Environment: !Ref Environment
