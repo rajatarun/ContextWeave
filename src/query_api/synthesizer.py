@@ -54,11 +54,69 @@ def _get_bedrock_runtime() -> Any:
 # Question classification
 # ─────────────────────────────────────────────────────────────────────────────
 
+_VALID_QUESTION_TYPES = {
+    "skill_depth", "architecture", "project", "comparison", "credential", "general"
+}
+
+# Haiku is fast and cheap – classification only needs a tiny model.
+# Override with CLASSIFICATION_MODEL_ID env var if needed.
+CLASSIFICATION_MODEL_ID = os.environ.get(
+    "CLASSIFICATION_MODEL_ID",
+    "anthropic.claude-haiku-4-5-20251001",
+)
+
+_CLASSIFICATION_PROMPT = """\
+You are a question router for a developer expertise retrieval system.
+Classify the question below into EXACTLY ONE of these types:
+
+  skill_depth   – asks how skilled/experienced the developer is with a technology or tool
+  architecture  – asks about system design, patterns, infrastructure, or cloud architecture
+  project       – asks about a specific project, employer, role, or deliverable
+  comparison    – asks to compare two things or express a preference
+  credential    – asks about certifications, education, or formal qualifications
+  general       – anything else
+
+Rules:
+- Return ONLY the single type word. No punctuation, no explanation.
+- "experience at [company]" → project
+- "experience with [technology]" → skill_depth
+
+Question: {question}"""
+
+
+def _classify_with_model(question: str) -> str | None:
+    """
+    Ask Haiku to classify the question. Returns the question-type string on
+    success, or None if the call fails or returns an unexpected value.
+    """
+    try:
+        client = _get_bedrock_runtime()
+        body = json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 10,
+            "messages": [{"role": "user", "content": _CLASSIFICATION_PROMPT.format(question=question)}],
+        })
+        resp = client.invoke_model(
+            modelId=CLASSIFICATION_MODEL_ID,
+            body=body,
+            contentType="application/json",
+            accept="application/json",
+        )
+        raw = json.loads(resp["body"].read())
+        answer = raw["content"][0]["text"].strip().lower().rstrip(".")
+        if answer in _VALID_QUESTION_TYPES:
+            logger.info("Model classified question as '%s': %s", answer, question[:80])
+            return answer
+        logger.warning("Model returned unexpected classification '%s' – falling back to regex", answer)
+        return None
+    except Exception as exc:
+        logger.warning("Model classification failed (%s) – falling back to regex", exc)
+        return None
+
+
+# Regex fallback – used only when the model call fails
 _QUESTION_PATTERNS = {
     "skill_depth": re.compile(
-        # "experience with/in/using/of X" is a skill-depth question;
-        # bare "experience" (e.g. "experience at JP Morgan") is NOT – it falls
-        # through to the project classifier below.
         r"\b(expert|proficient|skill|know|familiar|deep|"
         r"strong|level|years?|how well|how long|speciali[sz]e)\b"
         r"|experience\s+(?:with|in|using|of|building)\b",
@@ -70,7 +128,6 @@ _QUESTION_PATTERNS = {
         re.IGNORECASE,
     ),
     "project": re.compile(
-        # "experience" without a technology qualifier → employment/project context
         r"\b(project|built|created|deployed|implemented|work(?:ed)?|repo|product|"
         r"deliver|ship|application|service|platform|experience|role|responsibilit|"
         r"company|employe|position|tenure|joined)\b",
@@ -89,16 +146,27 @@ _QUESTION_PATTERNS = {
 }
 
 
-def classify_question(question: str) -> str:
-    """
-    Classify the question into one of:
-      skill_depth | architecture | project | comparison | credential | general
-    Returns the highest-priority matching type, or 'general'.
-    """
+def _classify_with_regex(question: str) -> str:
     for qtype, pattern in _QUESTION_PATTERNS.items():
         if pattern.search(question):
             return qtype
     return "general"
+
+
+def classify_question(question: str) -> str:
+    """
+    Classify the question into one of:
+      skill_depth | architecture | project | comparison | credential | general
+
+    Primary: ask Claude Haiku to pick the best type (one-word response).
+    Fallback: regex patterns (used when the model call fails).
+    """
+    result = _classify_with_model(question)
+    if result:
+        return result
+    fallback = _classify_with_regex(question)
+    logger.info("Regex fallback classified question as '%s': %s", fallback, question[:80])
+    return fallback
 
 
 # ─────────────────────────────────────────────────────────────────────────────
