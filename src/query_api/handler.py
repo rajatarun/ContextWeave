@@ -62,12 +62,20 @@ NEPTUNE_GRAPH_ID = os.environ.get("NEPTUNE_GRAPH_ID", "")
 # HTTP helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+_CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type,Authorization",
+    "Access-Control-Allow-Methods": "POST,GET,OPTIONS",
+}
+
+
 def _response(status: int, body: Any) -> dict:
     return {
         "statusCode": status,
         "headers": {
             "Content-Type": "application/json",
             "X-Content-Type-Options": "nosniff",
+            **_CORS_HEADERS,
         },
         "body": json.dumps(body, default=str),
     }
@@ -287,7 +295,7 @@ def lambda_handler(event: dict, context: Any) -> dict:
 
     # ── CORS preflight ────────────────────────────────────────────────────────
     if method == "OPTIONS":
-        return {"statusCode": 200, "body": ""}
+        return {"statusCode": 200, "headers": _CORS_HEADERS, "body": ""}
 
     # ── 404 ───────────────────────────────────────────────────────────────────
     return _error(404, "Not found", f"No handler for {method} {path}")
