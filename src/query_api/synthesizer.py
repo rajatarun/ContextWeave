@@ -86,24 +86,42 @@ Question: {question}"""
 
 def _classify_with_model(question: str) -> str | None:
     """
-    Ask Haiku to classify the question. Returns the question-type string on
+    Ask Nova Micro to classify the question. Returns the question-type string on
     success, or None if the call fails or returns an unexpected value.
     """
     try:
         client = _get_bedrock_runtime()
+        logger.info(
+            "[CLASSIFIER:MODEL] Invoking %s to classify question: %s",
+            CLASSIFICATION_MODEL_ID, question[:120],
+        )
         resp = client.converse(
             modelId=CLASSIFICATION_MODEL_ID,
             messages=[{"role": "user", "content": [{"text": _CLASSIFICATION_PROMPT.format(question=question)}]}],
             inferenceConfig={"maxTokens": 10, "temperature": 0},
         )
         answer = resp["output"]["message"]["content"][0]["text"].strip().lower().rstrip(".")
+        usage = resp.get("usage", {})
         if answer in _VALID_QUESTION_TYPES:
-            logger.info("Model classified question as '%s': %s", answer, question[:80])
+            logger.info(
+                "[CLASSIFIER:MODEL] SUCCESS model=%s question_type=%s "
+                "input_tokens=%s output_tokens=%s | question: %s",
+                CLASSIFICATION_MODEL_ID, answer,
+                usage.get("inputTokens", "?"), usage.get("outputTokens", "?"),
+                question[:120],
+            )
             return answer
-        logger.warning("Model returned unexpected classification '%s' – falling back to regex", answer)
+        logger.warning(
+            "[CLASSIFIER:MODEL] UNEXPECTED_RESPONSE model=%s raw_answer='%s' "
+            "valid_types=%s – triggering regex fallback | question: %s",
+            CLASSIFICATION_MODEL_ID, answer, sorted(_VALID_QUESTION_TYPES), question[:120],
+        )
         return None
     except Exception as exc:
-        logger.warning("Model classification failed (%s) – falling back to regex", exc)
+        logger.warning(
+            "[CLASSIFIER:MODEL] FAILED model=%s error=%s(%s) – triggering regex fallback | question: %s",
+            CLASSIFICATION_MODEL_ID, type(exc).__name__, exc, question[:120],
+        )
         return None
 
 
@@ -142,7 +160,15 @@ _QUESTION_PATTERNS = {
 def _classify_with_regex(question: str) -> str:
     for qtype, pattern in _QUESTION_PATTERNS.items():
         if pattern.search(question):
+            logger.info(
+                "[CLASSIFIER:REGEX_FALLBACK] Matched pattern for type='%s' | question: %s",
+                qtype, question[:120],
+            )
             return qtype
+    logger.info(
+        "[CLASSIFIER:REGEX_FALLBACK] No pattern matched – defaulting to 'general' | question: %s",
+        question[:120],
+    )
     return "general"
 
 
@@ -151,15 +177,14 @@ def classify_question(question: str) -> str:
     Classify the question into one of:
       skill_depth | architecture | project | comparison | credential | general
 
-    Primary: ask Claude Haiku to pick the best type (one-word response).
-    Fallback: regex patterns (used when the model call fails).
+    Primary: Nova Micro model (one-word response, temperature=0).
+    Fallback: regex patterns (used when the model call fails or returns unexpected output).
     """
     result = _classify_with_model(question)
     if result:
         return result
-    fallback = _classify_with_regex(question)
-    logger.info("Regex fallback classified question as '%s': %s", fallback, question[:80])
-    return fallback
+    logger.warning("[CLASSIFIER:REGEX_FALLBACK] Model path unavailable – using regex fallback")
+    return _classify_with_regex(question)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
