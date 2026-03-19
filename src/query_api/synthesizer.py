@@ -62,7 +62,7 @@ _VALID_QUESTION_TYPES = {
 # Override with CLASSIFICATION_MODEL_ID env var if needed.
 CLASSIFICATION_MODEL_ID = os.environ.get(
     "CLASSIFICATION_MODEL_ID",
-    "amazon.nova-micro-v1:0",
+    "us.amazon.nova-micro-v1:0",
 )
 
 _CLASSIFICATION_PROMPT = """\
