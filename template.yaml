@@ -1119,6 +1119,12 @@ Resources:
             ApiId: !Ref ExpertiseAPI
             Path: /health
             Method: GET
+        CorsOptions:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ExpertiseAPI
+            Path: /{proxy+}
+            Method: OPTIONS
 
   # ───────────────────────────────────────────
   # Lambda: DB Initializer (replaces ingestion trigger)
