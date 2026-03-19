@@ -62,7 +62,7 @@ _VALID_QUESTION_TYPES = {
 # Override with CLASSIFICATION_MODEL_ID env var if needed.
 CLASSIFICATION_MODEL_ID = os.environ.get(
     "CLASSIFICATION_MODEL_ID",
-    "anthropic.claude-haiku-4-5-20251001",
+    "amazon.nova-micro-v1:0",
 )
 
 _CLASSIFICATION_PROMPT = """\
@@ -91,19 +91,12 @@ def _classify_with_model(question: str) -> str | None:
     """
     try:
         client = _get_bedrock_runtime()
-        body = json.dumps({
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 10,
-            "messages": [{"role": "user", "content": _CLASSIFICATION_PROMPT.format(question=question)}],
-        })
-        resp = client.invoke_model(
+        resp = client.converse(
             modelId=CLASSIFICATION_MODEL_ID,
-            body=body,
-            contentType="application/json",
-            accept="application/json",
+            messages=[{"role": "user", "content": [{"text": _CLASSIFICATION_PROMPT.format(question=question)}]}],
+            inferenceConfig={"maxTokens": 10, "temperature": 0},
         )
-        raw = json.loads(resp["body"].read())
-        answer = raw["content"][0]["text"].strip().lower().rstrip(".")
+        answer = resp["output"]["message"]["content"][0]["text"].strip().lower().rstrip(".")
         if answer in _VALID_QUESTION_TYPES:
             logger.info("Model classified question as '%s': %s", answer, question[:80])
             return answer
