@@ -78,7 +78,7 @@ KNOWN_FILE_WEIGHTS: dict[str, float] = {
 # S3 helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _extract_pdf_text(raw_bytes: bytes) -> str:
+def _extract_pdf_text(raw_bytes: bytes, key: str = "") -> str:
     """Extract plain text from PDF bytes using pypdf."""
     import io
     import pypdf
@@ -88,16 +88,26 @@ def _extract_pdf_text(raw_bytes: bytes) -> str:
         text = page.extract_text()
         if text:
             pages.append(text)
-    return "\n\n".join(pages)
+    result = "\n\n".join(pages)
+    logger.info(
+        "PDF extraction (pypdf): %s → %d pages, %d chars extracted",
+        key or "unknown", len(reader.pages), len(result),
+    )
+    return result
 
 
-def _extract_docx_text(raw_bytes: bytes) -> str:
+def _extract_docx_text(raw_bytes: bytes, key: str = "") -> str:
     """Extract plain text from DOCX bytes using python-docx."""
     import io
     import docx
     doc = docx.Document(io.BytesIO(raw_bytes))
     paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-    return "\n\n".join(paragraphs)
+    result = "\n\n".join(paragraphs)
+    logger.info(
+        "DOCX extraction (python-docx): %s → %d paragraphs, %d chars extracted",
+        key or "unknown", len(paragraphs), len(result),
+    )
+    return result
 
 
 def _read_s3_text(bucket: str, key: str) -> str | None:
@@ -107,9 +117,11 @@ def _read_s3_text(bucket: str, key: str) -> str | None:
         raw_bytes = response["Body"].read()
         lower = key.lower()
         if lower.endswith(".pdf"):
-            return _extract_pdf_text(raw_bytes)
+            logger.info("Dispatching PDF extractor for s3://%s/%s (%d bytes)", bucket, key, len(raw_bytes))
+            return _extract_pdf_text(raw_bytes, key)
         if lower.endswith((".docx", ".doc")):
-            return _extract_docx_text(raw_bytes)
+            logger.info("Dispatching DOCX extractor for s3://%s/%s (%d bytes)", bucket, key, len(raw_bytes))
+            return _extract_docx_text(raw_bytes, key)
         return raw_bytes.decode("utf-8", errors="replace")
     except ClientError as exc:
         code = exc.response["Error"]["Code"]
@@ -312,6 +324,10 @@ def _write_chunks_to_pgvector(
             continue
 
         chunks = chunker.chunk_text(extracted_text, strategy)
+        logger.info(
+            "Chunking: %s → doc_type=%s strategy=%s produced %d chunks",
+            source_file, doc_type, strategy, len(chunks),
+        )
         if not chunks:
             continue
 
@@ -377,8 +393,8 @@ def _write_chunks_to_pgvector(
             conn.commit()
             total_written += len(rows)
             logger.info(
-                "pgvector: wrote %d chunks for %s (strategy=%s)",
-                len(rows), source_file, strategy,
+                "pgvector COMMITTED: %d chunks for %s (doc_type=%s strategy=%s) — total so far: %d",
+                len(rows), source_file, doc_type, strategy, total_written,
             )
         except Exception as exc:
             conn.rollback()
