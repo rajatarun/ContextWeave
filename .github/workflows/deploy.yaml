@@ -126,7 +126,6 @@ jobs:
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameter-overrides \
               Environment=prod \
-              NeptuneProvisionedMemory=16 \
               LogRetentionDays=365 \
               GenerationModelId=us.amazon.nova-pro-v1:0 \
             --tags \
@@ -149,24 +148,11 @@ jobs:
             --region ${{ env.AWS_REGION }} \
             --query "Stacks[0].Outputs[?OutputKey=='APIEndpoint'].OutputValue" \
             --output text)
-          KB_ID=$(aws cloudformation describe-stacks \
-            --stack-name ${{ env.STACK_NAME_PROD }} \
-            --region ${{ env.AWS_REGION }} \
-            --query "Stacks[0].Outputs[?OutputKey=='KnowledgeBaseId'].OutputValue" \
-            --output text)
-          DS_ID=$(aws cloudformation describe-stacks \
-            --stack-name ${{ env.STACK_NAME_PROD }} \
-            --region ${{ env.AWS_REGION }} \
-            --query "Stacks[0].Outputs[?OutputKey=='DataSourceId'].OutputValue" \
-            --output text)
           echo "artifacts_bucket=$BUCKET" >> "$GITHUB_OUTPUT"
           echo "api_endpoint=$API" >> "$GITHUB_OUTPUT"
-          echo "knowledge_base_id=$KB_ID" >> "$GITHUB_OUTPUT"
-          echo "data_source_id=$DS_ID" >> "$GITHUB_OUTPUT"
           echo "### Deploy Outputs (prod)" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Artifacts bucket**: \`$BUCKET\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- **API endpoint**: $API" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Knowledge Base ID**: \`$KB_ID\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Push repo signals and docs to S3
         run: |
@@ -206,40 +192,47 @@ jobs:
 
           echo "Upload complete."
 
-      - name: Trigger Bedrock KB ingestion
+      - name: Trigger preprocessor via Step Functions
         run: |
-          KB_ID="${{ steps.stack-outputs.outputs.knowledge_base_id }}"
-          DS_ID="${{ steps.stack-outputs.outputs.data_source_id }}"
-
-          echo "Starting ingestion job for KB=$KB_ID DS=$DS_ID"
-          JOB_ID=$(aws bedrock-agent start-ingestion-job \
-            --knowledge-base-id "$KB_ID" \
-            --data-source-id "$DS_ID" \
+          BUCKET="${{ steps.stack-outputs.outputs.artifacts_bucket }}"
+          REPO="contextweave"
+          SF_ARN=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME_PROD }} \
             --region ${{ env.AWS_REGION }} \
-            --query "ingestionJob.ingestionJobId" \
+            --query "Stacks[0].Outputs[?OutputKey=='IngestionStateMachineArn'].OutputValue" \
             --output text)
-          echo "Ingestion job started: $JOB_ID"
-          echo "ingestion_job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
+
+          if [ -z "$SF_ARN" ] || [ "$SF_ARN" = "None" ]; then
+            echo "No Step Functions state machine found – S3 notification will trigger preprocessor automatically."
+            exit 0
+          fi
+
+          echo "Starting ingestion state machine: $SF_ARN"
+          EXEC_ARN=$(aws stepfunctions start-execution \
+            --state-machine-arn "$SF_ARN" \
+            --input "{\"repo_prefix\": \"raw/${REPO}/\", \"bucket\": \"${BUCKET}\"}" \
+            --region ${{ env.AWS_REGION }} \
+            --query "executionArn" \
+            --output text)
+          echo "Execution started: $EXEC_ARN"
 
           # Poll until complete (max ~10 min)
           for i in $(seq 1 20); do
             sleep 30
-            STATUS=$(aws bedrock-agent get-ingestion-job \
-              --knowledge-base-id "$KB_ID" \
-              --data-source-id "$DS_ID" \
-              --ingestion-job-id "$JOB_ID" \
+            STATUS=$(aws stepfunctions describe-execution \
+              --execution-arn "$EXEC_ARN" \
               --region ${{ env.AWS_REGION }} \
-              --query "ingestionJob.status" \
+              --query "status" \
               --output text)
-            echo "[$i/20] Ingestion status: $STATUS"
-            if [ "$STATUS" = "COMPLETE" ]; then
+            echo "[$i/20] Execution status: $STATUS"
+            if [ "$STATUS" = "SUCCEEDED" ]; then
               echo "Ingestion complete."
               echo "### Ingestion" >> "$GITHUB_STEP_SUMMARY"
-              echo "- Job \`$JOB_ID\` completed successfully" >> "$GITHUB_STEP_SUMMARY"
+              echo "- Execution \`$EXEC_ARN\` succeeded" >> "$GITHUB_STEP_SUMMARY"
               exit 0
-            elif [ "$STATUS" = "FAILED" ]; then
-              echo "Ingestion job failed."
+            elif [ "$STATUS" = "FAILED" ] || [ "$STATUS" = "ABORTED" ] || [ "$STATUS" = "TIMED_OUT" ]; then
+              echo "Execution $STATUS."
               exit 1
             fi
           done
-          echo "Ingestion timed out after 10 minutes – job $JOB_ID may still be running."
+          echo "Execution timed out after 10 minutes – may still be running."

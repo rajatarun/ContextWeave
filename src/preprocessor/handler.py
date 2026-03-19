@@ -302,13 +302,18 @@ def _write_chunks_to_pgvector(
         for chunk, embedding in zip(chunks, embeddings):
             if embedding is None:
                 continue
+            # pgvector requires the '[f1,f2,...]' string literal format when
+            # using %s::vector in SQL.  Passing a raw Python list would have
+            # psycopg2 emit ARRAY[...] syntax which PostgreSQL cannot cast to
+            # the vector type, silently causing every INSERT to fail.
+            embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
             rows.append((
                 doc_id,
                 source_file,
                 doc_type,
                 strategy,
                 chunk.content,
-                embedding,
+                embedding_str,
                 chunk.parent_content,
                 chunk.is_child,
                 _PgJson({}),
