@@ -193,6 +193,42 @@ assert len(QUESTIONS) >= 100, f"Need at least 100 questions, got {len(QUESTIONS)
 # Data model
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Weight mechanics – mirror rag_router.py constants so this script can
+# simulate/predict the exact same updates that happen server-side.
+# ─────────────────────────────────────────────────────────────────────────────
+_REINFORCE_THRESHOLD = 0.70   # conf ≥ this → weight += REINFORCE_DELTA
+_PENALISE_THRESHOLD  = 0.40   # conf <  this → weight += PENALISE_DELTA
+_REINFORCE_DELTA     = +0.05
+_PENALISE_DELTA      = -0.02
+_WEIGHT_FLOOR        = 0.10
+_WEIGHT_CEIL         = 1.00
+# To break even: need REINFORCE_DELTA / abs(PENALISE_DELTA) = 2.5 reinforces
+# for every 1 penalise just to stay at the same weight level.
+_BREAK_EVEN_RATIO    = _REINFORCE_DELTA / abs(_PENALISE_DELTA)  # 2.5
+
+
+def _feedback_action(confidence: float | None) -> str:
+    """Map a confidence score to the weight-update action string."""
+    if confidence is None:
+        return "unknown"
+    if confidence >= _REINFORCE_THRESHOLD:
+        return "reinforce"
+    if confidence < _PENALISE_THRESHOLD:
+        return "penalise"
+    return "neutral"
+
+
+def _feedback_delta(confidence: float | None) -> float:
+    """Return the numeric weight delta that the server will apply."""
+    action = _feedback_action(confidence)
+    if action == "reinforce":
+        return _REINFORCE_DELTA
+    if action == "penalise":
+        return _PENALISE_DELTA
+    return 0.0
+
+
 @dataclass
 class QuestionResult:
     index: int
@@ -201,6 +237,9 @@ class QuestionResult:
     classified_type: str | None = None
     routing_decision: str | None = None
     confidence: float | None = None
+    # Feedback action inferred from confidence (mirrors rag_router.update_feedback)
+    feedback_action: str | None = None   # "reinforce" | "penalise" | "neutral"
+    feedback_delta: float = 0.0          # +0.05 / -0.02 / 0.00
     retrieval_count: int | None = None
     graph_entities_used: list[str] = field(default_factory=list)
     inferred_skills: list[str] = field(default_factory=list)
@@ -268,6 +307,8 @@ def run_question(
             result.latency_ms          = data.get("latencyMs") or data.get("_elapsed_ms")
             answer                     = data.get("answer", "")
             result.answer_preview      = answer[:120].replace("\n", " ")
+            result.feedback_action     = _feedback_action(result.confidence)
+            result.feedback_delta      = _feedback_delta(result.confidence)
             result.status              = "ok"
             return result
         except Exception as exc:
@@ -284,33 +325,38 @@ def run_question(
 # Console helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-COL_W = {"idx": 4, "decl": 12, "cls": 12, "route": 16, "conf": 6, "lat": 7, "status": 6}
+_FB_SYMBOL = {"reinforce": "↑+.05", "penalise": "↓-.02", "neutral": "→   ", "unknown": "?    "}
+
+COL_W = {"idx": 4, "decl": 12, "cls": 12, "route": 16, "conf": 6, "fb": 6, "lat": 7, "status": 6}
 HEADER = (
     f"{'#':>{COL_W['idx']}}  "
     f"{'Declared':<{COL_W['decl']}}  "
     f"{'Classified':<{COL_W['cls']}}  "
     f"{'Route':<{COL_W['route']}}  "
     f"{'Conf':>{COL_W['conf']}}  "
+    f"{'Wt':>{COL_W['fb']}}  "
     f"{'Lat(ms)':>{COL_W['lat']}}  "
     f"{'St':<{COL_W['status']}}  "
     f"Answer preview"
 )
-SEP = "-" * min(len(HEADER) + 20, 140)
+SEP = "-" * min(len(HEADER) + 20, 145)
 
 
 def _row(r: QuestionResult) -> str:
     conf_str = f"{r.confidence:.2f}" if r.confidence is not None else "  -- "
-    lat_str  = f"{r.latency_ms}"     if r.latency_ms  is not None else "  -- "
+    lat_str  = f"{r.latency_ms}"     if r.latency_ms  is not None else "   -- "
     status   = "OK" if r.status == "ok" else "ERR"
     route    = r.routing_decision or "--"
     cls      = r.classified_type  or "--"
     preview  = (r.error[:80] if r.status == "error" else r.answer_preview)
+    fb       = _FB_SYMBOL.get(r.feedback_action or "unknown", "?    ")
     return (
         f"{r.index:>{COL_W['idx']}}  "
         f"{r.declared_type:<{COL_W['decl']}}  "
         f"{cls:<{COL_W['cls']}}  "
         f"{route:<{COL_W['route']}}  "
         f"{conf_str:>{COL_W['conf']}}  "
+        f"{fb:<{COL_W['fb']}}  "
         f"{lat_str:>{COL_W['lat']}}  "
         f"{status:<{COL_W['status']}}  "
         f"{preview}"
@@ -325,14 +371,26 @@ def _pct(n: int, total: int) -> str:
     return f"{100*n/total:.1f}%" if total else "  0%"
 
 
+def _weight_bar(delta: float, width: int = 20) -> str:
+    """ASCII bar showing net weight movement magnitude and direction."""
+    norm = max(-1.0, min(1.0, delta))   # clamp to [-1, 1]
+    half = width // 2
+    pos = int(abs(norm) * half)
+    if delta >= 0:
+        bar = " " * half + "+" * pos + " " * (half - pos)
+    else:
+        bar = " " * (half - pos) + "-" * pos + " " * half
+    return f"[{bar}]"
+
+
 def print_summary(results: list[QuestionResult]) -> None:
     ok     = [r for r in results if r.status == "ok"]
     errors = [r for r in results if r.status == "error"]
     total  = len(results)
 
-    print("\n" + "=" * 70)
+    print("\n" + "=" * 75)
     print("EXPERIMENT SUMMARY")
-    print("=" * 70)
+    print("=" * 75)
     print(f"  Total questions : {total}")
     print(f"  Succeeded       : {len(ok)}  ({_pct(len(ok), total)})")
     print(f"  Failed          : {len(errors)}")
@@ -340,22 +398,94 @@ def print_summary(results: list[QuestionResult]) -> None:
     if not ok:
         return
 
-    # Confidence stats
+    # ── Feedback action breakdown ─────────────────────────────────────────────
+    n_reinforce = sum(1 for r in ok if r.feedback_action == "reinforce")
+    n_penalise  = sum(1 for r in ok if r.feedback_action == "penalise")
+    n_neutral   = sum(1 for r in ok if r.feedback_action == "neutral")
+    n_ok        = len(ok)
+
+    total_delta = sum(r.feedback_delta for r in ok)
+
+    print(f"\n  ── Weight feedback actions (adversarial pressure analysis) ──")
+    print(f"    ↑ Reinforce (conf ≥ {_REINFORCE_THRESHOLD:.2f})  : "
+          f"{n_reinforce:>3}  ({_pct(n_reinforce, n_ok)})  "
+          f"net +{n_reinforce * _REINFORCE_DELTA:.2f}")
+    print(f"    ↓ Penalise  (conf <  {_PENALISE_THRESHOLD:.2f})  : "
+          f"{n_penalise:>3}  ({_pct(n_penalise, n_ok)})  "
+          f"net {n_penalise * _PENALISE_DELTA:.2f}")
+    print(f"    → Neutral                   : "
+          f"{n_neutral:>3}  ({_pct(n_neutral, n_ok)})  no change")
+    print(f"    ──────────────────────────────────────────────")
+    sign = "+" if total_delta >= 0 else ""
+    print(f"    Net estimated weight delta  : {sign}{total_delta:.3f}  "
+          f"{_weight_bar(total_delta / max(n_ok, 1) * 10)}")
+
+    # Break-even warning
+    if n_penalise > 0:
+        actual_ratio = n_reinforce / n_penalise if n_penalise else float("inf")
+        status_str = "OK" if actual_ratio >= _BREAK_EVEN_RATIO else "BELOW BREAK-EVEN"
+        print(f"\n    Break-even ratio required   : {_BREAK_EVEN_RATIO:.1f}× reinforces per penalise")
+        print(f"    Actual ratio                : {actual_ratio:.1f}×  [{status_str}]")
+        if actual_ratio < _BREAK_EVEN_RATIO:
+            print(f"    WARNING  Adversarial controls are eroding weights faster than they")
+            print(f"             are being built. The system likely has insufficient indexed")
+            print(f"             data to synthesise high-confidence answers. Run /ingest first.")
+
+    # ── Per (strategy, question_type) net delta ───────────────────────────────
+    print(f"\n  ── Estimated net weight delta per (strategy, question_type) ──")
+    print(f"    {'Strategy':<20}  {'Q-Type':<14}  {'↑':>3}  {'↓':>3}  {'→':>3}  {'Net Δ':>7}  Status")
+    print(f"    {'─'*20}  {'─'*14}  {'─'*3}  {'─'*3}  {'─'*3}  {'─'*7}  ──────")
+
+    pair_stats: dict[tuple[str,str], dict] = defaultdict(lambda: {"r": 0, "p": 0, "n": 0, "delta": 0.0})
+    for r in ok:
+        key = (r.routing_decision or "unknown", r.classified_type or r.declared_type)
+        ps = pair_stats[key]
+        if r.feedback_action == "reinforce":
+            ps["r"] += 1
+        elif r.feedback_action == "penalise":
+            ps["p"] += 1
+        else:
+            ps["n"] += 1
+        ps["delta"] += r.feedback_delta
+
+    erosion_pairs: list[tuple[str,str]] = []
+    for (strategy, qtype), ps in sorted(pair_stats.items()):
+        delta = ps["delta"]
+        sign  = "+" if delta >= 0 else ""
+        ratio = ps["r"] / ps["p"] if ps["p"] else float("inf")
+        if delta < 0:
+            flag = "ERODING"
+            erosion_pairs.append((strategy, qtype))
+        elif ps["p"] > 0 and ratio < _BREAK_EVEN_RATIO:
+            flag = "at-risk"
+        else:
+            flag = ""
+        print(f"    {strategy:<20}  {qtype:<14}  "
+              f"{ps['r']:>3}  {ps['p']:>3}  {ps['n']:>3}  "
+              f"{sign}{delta:>6.3f}  {flag}")
+
+    # ── Confidence stats ──────────────────────────────────────────────────────
     confs = [r.confidence for r in ok if r.confidence is not None]
     if confs:
         avg_conf = sum(confs) / len(confs)
-        print(f"\n  Confidence  avg={avg_conf:.3f}  "
-              f"min={min(confs):.3f}  max={max(confs):.3f}")
+        below40  = sum(1 for c in confs if c < _PENALISE_THRESHOLD)
+        above70  = sum(1 for c in confs if c >= _REINFORCE_THRESHOLD)
+        print(f"\n  ── Confidence distribution ──")
+        print(f"    avg={avg_conf:.3f}  min={min(confs):.3f}  max={max(confs):.3f}")
+        print(f"    < {_PENALISE_THRESHOLD:.2f} (penalise zone)  : "
+              f"{below40:>3}  ({_pct(below40, len(confs))})")
+        print(f"    ≥ {_REINFORCE_THRESHOLD:.2f} (reinforce zone) : "
+              f"{above70:>3}  ({_pct(above70, len(confs))})")
 
-    # Latency stats
+    # ── Latency stats ─────────────────────────────────────────────────────────
     lats = [r.latency_ms for r in ok if r.latency_ms is not None]
     if lats:
         avg_lat = sum(lats) / len(lats)
         p95_lat = sorted(lats)[int(len(lats) * 0.95)]
-        print(f"  Latency(ms)  avg={avg_lat:.0f}  "
-              f"p95={p95_lat}  min={min(lats)}  max={max(lats)}")
+        print(f"\n  ── Latency (ms) ──")
+        print(f"    avg={avg_lat:.0f}  p95={p95_lat}  min={min(lats)}  max={max(lats)}")
 
-    # Classifier accuracy (declared type vs classified type)
+    # ── Classifier accuracy ───────────────────────────────────────────────────
     print("\n  ── Classifier accuracy by declared type ──")
     by_decl: dict[str, list[QuestionResult]] = defaultdict(list)
     for r in ok:
@@ -365,7 +495,7 @@ def print_summary(results: list[QuestionResult]) -> None:
         correct = sum(1 for r in group if r.classified_type == dtype)
         print(f"    {dtype:<14}  {correct:>2}/{len(group):>2}  ({_pct(correct, len(group))})")
 
-    # Routing distribution
+    # ── Routing distribution ──────────────────────────────────────────────────
     print("\n  ── Routing strategy distribution ──")
     route_counts: dict[str, int] = defaultdict(int)
     for r in ok:
@@ -373,17 +503,21 @@ def print_summary(results: list[QuestionResult]) -> None:
     for route, count in sorted(route_counts.items(), key=lambda x: -x[1]):
         print(f"    {route:<20}  {count:>3}  ({_pct(count, len(ok))})")
 
-    # Confidence by routing strategy
-    print("\n  ── Avg confidence by routing strategy ──")
+    # ── Avg confidence by routing strategy ───────────────────────────────────
+    print("\n  ── Avg confidence + feedback pressure by routing strategy ──")
     route_confs: dict[str, list[float]] = defaultdict(list)
     for r in ok:
         if r.confidence is not None:
             route_confs[r.routing_decision or "unknown"].append(r.confidence)
     for route, confs in sorted(route_confs.items()):
         avg = sum(confs) / len(confs)
-        print(f"    {route:<20}  avg={avg:.3f}  n={len(confs)}")
+        n_r = sum(1 for c in confs if c >= _REINFORCE_THRESHOLD)
+        n_p = sum(1 for c in confs if c < _PENALISE_THRESHOLD)
+        ratio_str = f"{n_r/n_p:.1f}×" if n_p else "∞"
+        flag = "" if n_p == 0 or (n_r/n_p) >= _BREAK_EVEN_RATIO else "  ← adversarial pressure"
+        print(f"    {route:<20}  avg={avg:.3f}  ↑{n_r} ↓{n_p}  ratio={ratio_str}{flag}")
 
-    # Type→route cross-tab
+    # ── Type → route cross-tab ────────────────────────────────────────────────
     print("\n  ── Question type → routing strategy cross-tab ──")
     type_route: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for r in ok:
@@ -394,14 +528,27 @@ def print_summary(results: list[QuestionResult]) -> None:
         )
         print(f"    {dtype:<14}  →  {routes}")
 
-    # Graph expansion stats
+    # ── Graph expansion ───────────────────────────────────────────────────────
     graph_users = [r for r in ok if r.graph_entities_used]
     if graph_users:
         avg_entities = sum(len(r.graph_entities_used) for r in graph_users) / len(graph_users)
         print(f"\n  Graph expansion used in {len(graph_users)}/{len(ok)} queries "
-              f"(avg {avg_entities:.1f} entities per query)")
+              f"(avg {avg_entities:.1f} entities/query)")
 
-    # Top repeated patterns
+    # ── Erosion summary ───────────────────────────────────────────────────────
+    if erosion_pairs:
+        print(f"\n  !! WEIGHT EROSION WARNING  ({len(erosion_pairs)} strategy/type pair(s)) !!")
+        for strategy, qtype in erosion_pairs:
+            ps = pair_stats[(strategy, qtype)]
+            print(f"    {strategy} × {qtype}  "
+                  f"net={ps['delta']:+.3f}  "
+                  f"↑{ps['r']} ↓{ps['p']}  "
+                  f"need {int(ps['p'] * _BREAK_EVEN_RATIO + 1)} more reinforces to recover")
+        print(f"\n    Recommendation: ensure documents are fully ingested before running")
+        print(f"    the experiment, or run /ingest and re-seed the routing graph, then")
+        print(f"    run this experiment again with --resume to re-test eroded pairs.")
+
+    # ── Top repeated patterns ─────────────────────────────────────────────────
     all_patterns: list[str] = []
     for r in ok:
         all_patterns.extend(r.repeated_patterns)
@@ -414,13 +561,13 @@ def print_summary(results: list[QuestionResult]) -> None:
         for pat, cnt in top5:
             print(f"    {pat:<40}  {cnt}×")
 
-    # Errors
+    # ── Errors ────────────────────────────────────────────────────────────────
     if errors:
         print(f"\n  ── Errors ({len(errors)}) ──")
         for r in errors:
             print(f"    [{r.index}] {r.question[:60]}…  →  {r.error}")
 
-    print("=" * 70)
+    print("=" * 75)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -529,6 +676,18 @@ def main() -> None:
             results_order.append(i)
             print(_row(r), flush=True)
             _save_checkpoint(done)
+            # Running adversarial-pressure check every 10 questions
+            completed = [v for v in done.values() if v.status == "ok"]
+            if len(completed) % 10 == 0 and len(completed) >= 10:
+                n_r = sum(1 for x in completed if x.feedback_action == "reinforce")
+                n_p = sum(1 for x in completed if x.feedback_action == "penalise")
+                net  = sum(x.feedback_delta for x in completed)
+                sign = "+" if net >= 0 else ""
+                ratio = f"{n_r/n_p:.1f}x" if n_p else "∞"
+                flag  = "  << BELOW BREAK-EVEN" if n_p > 0 and (n_r/n_p) < _BREAK_EVEN_RATIO else ""
+                print(f"  [weight-check @{len(completed)}]  "
+                      f"↑{n_r} ↓{n_p} →{len(completed)-n_r-n_p}  "
+                      f"net={sign}{net:.2f}  ratio={ratio}{flag}", flush=True)
 
     # --------------------------------------------------------------------------
     # Parallel path (faster but weight updates may race)
