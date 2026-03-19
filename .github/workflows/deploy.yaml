@@ -78,6 +78,7 @@ jobs:
     outputs:
       artifacts_bucket: ${{ steps.stack-outputs.outputs.artifacts_bucket }}
       api_endpoint: ${{ steps.stack-outputs.outputs.api_endpoint }}
+      sf_arn: ${{ steps.stack-outputs.outputs.sf_arn }}
 
     steps:
       - name: Checkout source
@@ -148,8 +149,14 @@ jobs:
             --region ${{ env.AWS_REGION }} \
             --query "Stacks[0].Outputs[?OutputKey=='APIEndpoint'].OutputValue" \
             --output text)
+          SF_ARN=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME_PROD }} \
+            --region ${{ env.AWS_REGION }} \
+            --query "Stacks[0].Outputs[?OutputKey=='IngestionStateMachineArn'].OutputValue" \
+            --output text)
           echo "artifacts_bucket=$BUCKET" >> "$GITHUB_OUTPUT"
           echo "api_endpoint=$API" >> "$GITHUB_OUTPUT"
+          echo "sf_arn=$SF_ARN" >> "$GITHUB_OUTPUT"
           echo "### Deploy Outputs (prod)" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Artifacts bucket**: \`$BUCKET\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- **API endpoint**: $API" >> "$GITHUB_STEP_SUMMARY"
@@ -192,47 +199,94 @@ jobs:
 
           echo "Upload complete."
 
-      - name: Trigger preprocessor via Step Functions
+      - name: Ingest all raw/ repos via Step Functions
         run: |
           BUCKET="${{ steps.stack-outputs.outputs.artifacts_bucket }}"
-          REPO="contextweave"
-          SF_ARN=$(aws cloudformation describe-stacks \
-            --stack-name ${{ env.STACK_NAME_PROD }} \
-            --region ${{ env.AWS_REGION }} \
-            --query "Stacks[0].Outputs[?OutputKey=='IngestionStateMachineArn'].OutputValue" \
-            --output text)
+          SF_ARN="${{ steps.stack-outputs.outputs.sf_arn }}"
 
           if [ -z "$SF_ARN" ] || [ "$SF_ARN" = "None" ]; then
-            echo "No Step Functions state machine found – S3 notification will trigger preprocessor automatically."
+            echo "No Step Functions state machine provisioned."
+            echo "S3 notifications will trigger the preprocessor automatically as files are uploaded."
             exit 0
           fi
 
-          echo "Starting ingestion state machine: $SF_ARN"
-          EXEC_ARN=$(aws stepfunctions start-execution \
-            --state-machine-arn "$SF_ARN" \
-            --input "{\"repo_prefix\": \"raw/${REPO}/\", \"bucket\": \"${BUCKET}\"}" \
+          # Discover every repo folder under raw/
+          REPOS=$(aws s3api list-objects-v2 \
+            --bucket "$BUCKET" \
+            --prefix "raw/" \
+            --delimiter "/" \
             --region ${{ env.AWS_REGION }} \
-            --query "executionArn" \
+            --query "CommonPrefixes[].Prefix" \
             --output text)
-          echo "Execution started: $EXEC_ARN"
 
-          # Poll until complete (max ~10 min)
+          if [ -z "$REPOS" ]; then
+            echo "No sub-prefixes found under s3://${BUCKET}/raw/ – nothing to ingest."
+            exit 0
+          fi
+
+          echo "Repos to ingest:"
+          for REPO_PREFIX in $REPOS; do
+            echo "  $REPO_PREFIX"
+          done
+
+          # Fan out: start one execution per repo
+          declare -A EXEC_ARNS
+          for REPO_PREFIX in $REPOS; do
+            EXEC_ARN=$(aws stepfunctions start-execution \
+              --state-machine-arn "$SF_ARN" \
+              --name "deploy-$(echo "$REPO_PREFIX" | tr '/' '-' | tr -d '-' | cut -c1-40)-${{ github.run_id }}" \
+              --input "{\"repo_prefix\": \"${REPO_PREFIX}\", \"bucket\": \"${BUCKET}\", \"trigger_source\": \"github-actions\"}" \
+              --region ${{ env.AWS_REGION }} \
+              --query "executionArn" \
+              --output text)
+            EXEC_ARNS["$REPO_PREFIX"]="$EXEC_ARN"
+            echo "Started: $REPO_PREFIX → $EXEC_ARN"
+          done
+
+          # Poll all executions until each reaches a terminal state (max ~10 min)
+          FAILED=0
+          declare -A DONE
           for i in $(seq 1 20); do
             sleep 30
+            ALL_DONE=true
+            for REPO_PREFIX in $REPOS; do
+              [ "${DONE[$REPO_PREFIX]+_}" ] && continue
+              EXEC_ARN="${EXEC_ARNS[$REPO_PREFIX]}"
+              STATUS=$(aws stepfunctions describe-execution \
+                --execution-arn "$EXEC_ARN" \
+                --region ${{ env.AWS_REGION }} \
+                --query "status" \
+                --output text)
+              echo "[$i/20] $REPO_PREFIX → $STATUS"
+              case "$STATUS" in
+                SUCCEEDED)
+                  DONE["$REPO_PREFIX"]=1
+                  ;;
+                FAILED|ABORTED|TIMED_OUT)
+                  echo "ERROR: execution for $REPO_PREFIX $STATUS"
+                  DONE["$REPO_PREFIX"]=1
+                  FAILED=$((FAILED + 1))
+                  ;;
+                *)
+                  ALL_DONE=false
+                  ;;
+              esac
+            done
+            $ALL_DONE && break
+          done
+
+          # Step summary
+          echo "### Ingestion Results" >> "$GITHUB_STEP_SUMMARY"
+          for REPO_PREFIX in $REPOS; do
+            EXEC_ARN="${EXEC_ARNS[$REPO_PREFIX]}"
             STATUS=$(aws stepfunctions describe-execution \
               --execution-arn "$EXEC_ARN" \
               --region ${{ env.AWS_REGION }} \
               --query "status" \
               --output text)
-            echo "[$i/20] Execution status: $STATUS"
-            if [ "$STATUS" = "SUCCEEDED" ]; then
-              echo "Ingestion complete."
-              echo "### Ingestion" >> "$GITHUB_STEP_SUMMARY"
-              echo "- Execution \`$EXEC_ARN\` succeeded" >> "$GITHUB_STEP_SUMMARY"
-              exit 0
-            elif [ "$STATUS" = "FAILED" ] || [ "$STATUS" = "ABORTED" ] || [ "$STATUS" = "TIMED_OUT" ]; then
-              echo "Execution $STATUS."
-              exit 1
-            fi
+            ICON="✓"; [ "$STATUS" != "SUCCEEDED" ] && ICON="✗"
+            echo "- ${ICON} \`${REPO_PREFIX}\` → ${STATUS}" >> "$GITHUB_STEP_SUMMARY"
           done
-          echo "Execution timed out after 10 minutes – may still be running."
+
+          [ "$FAILED" -gt 0 ] && exit 1
+          echo "All ingestion executions succeeded."
