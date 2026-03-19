@@ -444,5 +444,9 @@ def extract(content: str, source_file: str, weight: float) -> dict[str, Any]:
         return extract_yaml(content, source_file, weight)
     elif lower.endswith((".md", ".markdown", ".mdx")):
         return extract_markdown(content, source_file, weight)
+    elif lower.endswith((".pdf", ".docx", ".doc")):
+        # Text already extracted from binary by handler._read_s3_text;
+        # treat as plain text for signal extraction.
+        return extract_text(content, source_file, weight)
     else:
         return extract_text(content, source_file, weight)

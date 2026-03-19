@@ -78,11 +78,38 @@ KNOWN_FILE_WEIGHTS: dict[str, float] = {
 # S3 helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _extract_pdf_text(raw_bytes: bytes) -> str:
+    """Extract plain text from PDF bytes using pypdf."""
+    import io
+    import pypdf
+    reader = pypdf.PdfReader(io.BytesIO(raw_bytes))
+    pages = []
+    for page in reader.pages:
+        text = page.extract_text()
+        if text:
+            pages.append(text)
+    return "\n\n".join(pages)
+
+
+def _extract_docx_text(raw_bytes: bytes) -> str:
+    """Extract plain text from DOCX bytes using python-docx."""
+    import io
+    import docx
+    doc = docx.Document(io.BytesIO(raw_bytes))
+    paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+    return "\n\n".join(paragraphs)
+
+
 def _read_s3_text(bucket: str, key: str) -> str | None:
     """Download an S3 object and return its content as a UTF-8 string."""
     try:
         response = _S3.get_object(Bucket=bucket, Key=key)
         raw_bytes = response["Body"].read()
+        lower = key.lower()
+        if lower.endswith(".pdf"):
+            return _extract_pdf_text(raw_bytes)
+        if lower.endswith((".docx", ".doc")):
+            return _extract_docx_text(raw_bytes)
         return raw_bytes.decode("utf-8", errors="replace")
     except ClientError as exc:
         code = exc.response["Error"]["Code"]
@@ -183,6 +210,8 @@ def _process_file(
         "plantuml" if file_name.endswith((".puml", ".plantuml", ".pu", ".wsd"))
         else "yaml" if file_name.endswith((".yaml", ".yml"))
         else "markdown" if file_name.endswith((".md", ".markdown"))
+        else "pdf" if file_name.lower().endswith(".pdf")
+        else "docx" if file_name.lower().endswith((".docx", ".doc"))
         else "text"
     )
 

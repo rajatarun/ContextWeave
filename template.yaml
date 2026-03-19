@@ -1238,7 +1238,6 @@ Resources:
             Parameters:
               repo_prefix.$: $.repo_prefix
               bucket.$: $.bucket
-              trigger_source.$: $.trigger_source
             ResultPath: $.preprocessor_output
             Retry:
               - ErrorEquals: [States.TaskFailed, Lambda.ServiceException]
