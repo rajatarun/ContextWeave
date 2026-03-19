@@ -327,16 +327,29 @@ def run_question(
 
 _FB_SYMBOL = {"reinforce": "↑+.05", "penalise": "↓-.02", "neutral": "→   ", "unknown": "?    "}
 
-COL_W = {"idx": 4, "decl": 12, "cls": 12, "route": 16, "conf": 6, "fb": 6, "lat": 7, "status": 6}
+# Column widths extracted to plain ints so they can be used inside f-string
+# format specs on Python < 3.12 (dict key lookups inside format specs are
+# not reliably parsed by the older tokeniser).
+_W_IDX    = 4
+_W_DECL   = 12
+_W_CLS    = 12
+_W_ROUTE  = 16
+_W_CONF   = 6
+_W_FB     = 6
+_W_LAT    = 7
+_W_STATUS = 6
+COL_W = {"idx": _W_IDX, "decl": _W_DECL, "cls": _W_CLS, "route": _W_ROUTE,
+         "conf": _W_CONF, "fb": _W_FB, "lat": _W_LAT, "status": _W_STATUS}
+
 HEADER = (
-    f"{'#':>{COL_W['idx']}}  "
-    f"{'Declared':<{COL_W['decl']}}  "
-    f"{'Classified':<{COL_W['cls']}}  "
-    f"{'Route':<{COL_W['route']}}  "
-    f"{'Conf':>{COL_W['conf']}}  "
-    f"{'Wt':>{COL_W['fb']}}  "
-    f"{'Lat(ms)':>{COL_W['lat']}}  "
-    f"{'St':<{COL_W['status']}}  "
+    f"{'#':>{_W_IDX}}  "
+    f"{'Declared':<{_W_DECL}}  "
+    f"{'Classified':<{_W_CLS}}  "
+    f"{'Route':<{_W_ROUTE}}  "
+    f"{'Conf':>{_W_CONF}}  "
+    f"{'Wt':>{_W_FB}}  "
+    f"{'Lat(ms)':>{_W_LAT}}  "
+    f"{'St':<{_W_STATUS}}  "
     f"Answer preview"
 )
 SEP = "-" * min(len(HEADER) + 20, 145)
@@ -351,14 +364,14 @@ def _row(r: QuestionResult) -> str:
     preview  = (r.error[:80] if r.status == "error" else r.answer_preview)
     fb       = _FB_SYMBOL.get(r.feedback_action or "unknown", "?    ")
     return (
-        f"{r.index:>{COL_W['idx']}}  "
-        f"{r.declared_type:<{COL_W['decl']}}  "
-        f"{cls:<{COL_W['cls']}}  "
-        f"{route:<{COL_W['route']}}  "
-        f"{conf_str:>{COL_W['conf']}}  "
-        f"{fb:<{COL_W['fb']}}  "
-        f"{lat_str:>{COL_W['lat']}}  "
-        f"{status:<{COL_W['status']}}  "
+        f"{r.index:>{_W_IDX}}  "
+        f"{r.declared_type:<{_W_DECL}}  "
+        f"{cls:<{_W_CLS}}  "
+        f"{route:<{_W_ROUTE}}  "
+        f"{conf_str:>{_W_CONF}}  "
+        f"{fb:<{_W_FB}}  "
+        f"{lat_str:>{_W_LAT}}  "
+        f"{status:<{_W_STATUS}}  "
         f"{preview}"
     )
 
