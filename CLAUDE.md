@@ -109,9 +109,9 @@ No long-lived AWS credentials are stored in GitHub secrets. The workflow assumes
 - **Response shape**: `{ answer, sources, inferredSkills, repeatedPatterns, confidence, questionType, graphEntitiesUsed, routingDecision }`
 - **Code**: `src/query_api/handler.py`
 
-### `expertise-rag-ingestion-trigger-{env}`
+### `expertise-rag-db-init-{env}`
 - **Trigger**: CloudFormation custom resource (post-deploy) + Step Functions + manual
-- **Actions**: `start` (StartIngestionJob), `status` (GetIngestionJob), `seed_routing` (seed Neptune routing graph)
+- **Actions**: `start` (StartIngestionJob), `status` (GetIngestionJob), `seed_routing` (seed Neptune routing graph), `empty_all` (clear all Neptune data)
 - **On Deploy**: Seeds Neptune with initial `EFFECTIVE_FOR` prior weights for all strategy/question-type pairs
 - **Code**: `src/ingestion_trigger/handler.py`
 
