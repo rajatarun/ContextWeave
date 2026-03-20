@@ -184,6 +184,53 @@ QUESTIONS: list[dict[str, str]] = [
     {"type": "general", "q": "What is Rajat's experience with infrastructure as code?"},
     {"type": "general", "q": "What are Rajat's strongest technical competencies?"},
     {"type": "general", "q": "How would you describe Rajat's software engineering philosophy?"},
+
+    # ── Tarun Raja – skill_depth (10 questions) ───────────────────────────────
+    {"type": "skill_depth", "q": "How deep is Tarun's expertise with LangChain and LLM orchestration?"},
+    {"type": "skill_depth", "q": "How proficient is Tarun with LangGraph for building agentic workflows?"},
+    {"type": "skill_depth", "q": "What is Tarun's level of expertise with Kubernetes and container orchestration?"},
+    {"type": "skill_depth", "q": "How skilled is Tarun with CI/CD pipeline design and implementation?"},
+    {"type": "skill_depth", "q": "How deep is Tarun's knowledge of OpenAI APIs and AI integration patterns?"},
+    {"type": "skill_depth", "q": "How experienced is Tarun with Java Spring Framework for full-stack development?"},
+    {"type": "skill_depth", "q": "How strong is Tarun's Site Reliability Engineering (SRE) background?"},
+    {"type": "skill_depth", "q": "How proficient is Tarun with Terraform for infrastructure as code?"},
+    {"type": "skill_depth", "q": "How skilled is Tarun at engineering leadership and cross-functional team management?"},
+    {"type": "skill_depth", "q": "How experienced is Tarun with banking regulatory compliance and governance for payment systems?"},
+
+    # ── Tarun Raja – architecture (6 questions) ───────────────────────────────
+    {"type": "architecture", "q": "How did Tarun architect the TaskWeave agentic AI framework using LangGraph and LangChain?"},
+    {"type": "architecture", "q": "Describe the architecture of the Jules library Tarun built for shift-left testing in Kubernetes."},
+    {"type": "architecture", "q": "What cloud-native migration architecture did Tarun lead at JP Morgan Chase during the modernization effort?"},
+    {"type": "architecture", "q": "How does TaskWeave use JSON configuration to define atomic tasks across LLM prompts, API calls, and data analysis?"},
+    {"type": "architecture", "q": "How did Tarun design the Commercial Banking Portal for middle-market clients at JP Morgan Chase?"},
+    {"type": "architecture", "q": "What three workstreams did Tarun lead at JP Morgan Chase and how were they structured?"},
+
+    # ── Tarun Raja – project (6 questions) ────────────────────────────────────
+    {"type": "project", "q": "What is the TaskWeave project and what problem does it solve?"},
+    {"type": "project", "q": "What is the Jules library that Tarun built at JP Morgan Chase and why was it created?"},
+    {"type": "project", "q": "What agentic AI projects has Tarun shipped using OpenAI APIs and LangGraph?"},
+    {"type": "project", "q": "What banking portal did Tarun deliver for middle-market clients at JP Morgan Chase?"},
+    {"type": "project", "q": "What AI Enablement initiatives did Tarun lead at JP Morgan Chase?"},
+    {"type": "project", "q": "What full-stack applications did Tarun build using JavaScript and Java Spring Framework?"},
+
+    # ── Tarun Raja – comparison (4 questions) ─────────────────────────────────
+    {"type": "comparison", "q": "How does Tarun's LangGraph experience compare to his LangChain usage in TaskWeave?"},
+    {"type": "comparison", "q": "How does Tarun's VP Software Engineering Lead role differ from his Senior Lead Software Engineer role?"},
+    {"type": "comparison", "q": "Compare Tarun's front-end development background with his current AI and agentic systems work."},
+    {"type": "comparison", "q": "How does Tarun's approach to multi-agent workflows compare to traditional microservices orchestration?"},
+
+    # ── Tarun Raja – credential (5 questions) ─────────────────────────────────
+    {"type": "credential", "q": "What AWS certifications does Tarun hold?"},
+    {"type": "credential", "q": "Is Tarun a Certified Kubernetes Application Developer (CKAD)?"},
+    {"type": "credential", "q": "What is Tarun's educational background and graduate degree?"},
+    {"type": "credential", "q": "Does Tarun have an MBA and from which institution?"},
+    {"type": "credential", "q": "What is Tarun's GPA from his Master of Science in Computer Engineering?"},
+
+    # ── Tarun Raja – general (4 questions) ────────────────────────────────────
+    {"type": "general", "q": "Give me a summary of Tarun's professional background and career at JP Morgan Chase."},
+    {"type": "general", "q": "How long has Tarun worked at JP Morgan Chase and what roles has he held there?"},
+    {"type": "general", "q": "What makes Tarun a strong candidate for a senior AI engineering or leadership role?"},
+    {"type": "general", "q": "What is Tarun's most impressive technical project and what was its impact?"},
 ]
 
 assert len(QUESTIONS) >= 100, f"Need at least 100 questions, got {len(QUESTIONS)}"
