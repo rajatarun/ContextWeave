@@ -192,6 +192,18 @@ def lambda_handler(event: dict, context: Any) -> dict:
         result = seed_routing_graph_memgraph()
         return {"action": "seed_routing", **result}
 
+    # ── Direct invocation: reset routing graph to priors ──────────────────────
+    if event.get("action") == "reset_routing":
+        try:
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "query_api"))
+            from rag_router import reset_routing_graph
+            result = reset_routing_graph()
+            logger.info("Routing graph reset: %s", result)
+            return {"action": "reset_routing", "status": "success", **result}
+        except Exception as exc:
+            logger.error("Routing graph reset failed: %s", exc, exc_info=True)
+            return {"action": "reset_routing", "status": "failed", "reason": str(exc)}
+
     # ── Default: run both init steps ──────────────────────────────────────────
     logger.info("Default invocation: running full DB initialisation")
     pg_result = init_db_schema()

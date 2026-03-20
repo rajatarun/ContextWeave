@@ -191,7 +191,40 @@ def update_feedback(
 # Routing graph seed (called from ingestion_trigger on first deploy)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def seed_routing_graph(graph_id: str = "") -> dict[str, int]:
+def reset_routing_graph(graph_id: str = "") -> dict[str, int]:
+    """
+    Force-reset all EFFECTIVE_FOR edge weights back to their initial prior values,
+    overwriting any weight drift caused by the feedback loop.
+
+    Unlike seed_routing_graph (which uses ON CREATE SET and skips existing edges),
+    this function unconditionally SET the weight on every edge.
+
+    Use this after confirming ingestion is complete but confidence is still low
+    due to weights being eroded before data was available.
+    """
+    edges_reset = 0
+
+    for (strategy, question_type), weight in ROUTING_PRIORS.items():
+        q = """
+        MATCH (r:RAGStrategy {label: $strategy})-[e:EFFECTIVE_FOR]->(d:DocumentType {question_type: $question_type})
+        SET e.weight = $weight, e.feedback_count = 0, e.reset_at = timestamp()
+        RETURN e.weight AS w
+        """
+        rows = _run_query(q, {
+            "strategy":      strategy,
+            "question_type": question_type,
+            "weight":        weight,
+        })
+        if rows:
+            edges_reset += 1
+            logger.info("Reset weight: %s → %s = %.2f", strategy, question_type, weight)
+        else:
+            logger.warning("No edge found to reset: %s → %s", strategy, question_type)
+
+    logger.info("Routing graph reset: %d edges restored to priors", edges_reset)
+    return {"edges_reset": edges_reset}
+
+
     """
     Idempotently create RAGStrategy and DocumentType proxy nodes plus
     EFFECTIVE_FOR edges with initial prior weights in Memgraph.
