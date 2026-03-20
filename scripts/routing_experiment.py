@@ -355,13 +355,14 @@ SEP = "-" * min(len(HEADER) + 20, 145)
 
 
 def _row(r: QuestionResult) -> str:
-    conf_str = f"{r.confidence:.2f}" if r.confidence is not None else "  -- "
+    conf_str = f"{r.confidence:.2f}" if isinstance(r.confidence, (int, float)) else "  -- "
     lat_str  = str(r.latency_ms) if r.latency_ms is not None else "   -- "
     status   = "OK" if r.status == "ok" else "ERR"
-    route    = r.routing_decision or "--"
-    cls      = r.classified_type  or "--"
-    preview  = (r.error[:80] if r.status == "error" else r.answer_preview)
-    fb       = _FB_SYMBOL.get(r.feedback_action or "unknown", "?    ")
+    route    = str(r.routing_decision) if r.routing_decision else "--"
+    cls      = str(r.classified_type)  if r.classified_type  else "--"
+    fb_key   = str(r.feedback_action)  if r.feedback_action  else "unknown"
+    fb       = _FB_SYMBOL.get(fb_key, "?    ")
+    preview  = str(r.error)[:80] if r.status == "error" else str(r.answer_preview)
     return (
         str(r.index).rjust(_W_IDX) + "  " +
         str(r.declared_type).ljust(_W_DECL) + "  " +
