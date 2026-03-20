@@ -165,7 +165,7 @@ sam deploy
 | `LogRetentionDays` | `30` |
 | `EnableStepFunctions` | `true` |
 
-On first deploy the `IngestionTriggerFunction` **seeds the routing graph**
+On first deploy the `DbInitFunction` **seeds the routing graph**
 in Neptune with initial prior weights for all strategy/question-type pairs,
 so routing works immediately before any feedback has been collected.
 
@@ -268,8 +268,9 @@ GRAPH_ID=$(aws cloudformation describe-stacks \
   --output text)
 
 aws lambda invoke \
-  --function-name expertise-rag-ingestion-trigger-dev \
+  --function-name expertise-rag-db-init-dev \
   --payload '{"action":"seed_routing","neptune_graph_id":"'$GRAPH_ID'"}' \
+  --cli-binary-format raw-in-base64-out \
   response.json && cat response.json
 ```
 
