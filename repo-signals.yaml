@@ -10,7 +10,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 schema_version: "1.0"
-generated_at: "2026-03-16"
+generated_at: "2026-03-20"
 repo: contextweave
 owner: rajatarun
 
@@ -141,6 +141,208 @@ architecture_patterns:
       - src/shared/models.py
       - docs/graph_schema.md
     repeat_count: 1
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Software design patterns (GoF + cloud-native)
+# ─────────────────────────────────────────────────────────────────────────────
+design_patterns:
+
+  # ── GoF patterns ─────────────────────────────────────────────────────────
+
+  - name: Strategy Pattern (Chunking)
+    category: gof-behavioural
+    description: >
+      Runtime selection of the text-chunking algorithm based on DocumentType.
+      `chunk_text()` in chunker.py dispatches to `_chunk_hierarchical()`,
+      `_chunk_sentence()`, or `_chunk_fixed()` depending on the strategy
+      recommended by the routing analyzer. New chunking strategies can be
+      added without touching the dispatcher.
+    evidence_files:
+      - src/shared/chunker.py
+      - src/preprocessor/routing_analyzer.py
+
+  - name: Strategy Pattern (RAG Retrieval)
+    category: gof-behavioural
+    description: >
+      Four interchangeable retrieval strategies (semantic_search, graph_first,
+      keyword_boosted, hybrid) share a common interface. RAGRouter selects the
+      strategy at runtime by reading learned EFFECTIVE_FOR weights from Neptune;
+      `retrieve_with_strategy()` dispatches to the chosen implementation.
+    evidence_files:
+      - src/query_api/rag_router.py
+      - src/query_api/retriever.py
+
+  - name: Builder Pattern
+    category: gof-creational
+    description: >
+      `GraphBuilder` in graph_builder.py is a stateful accumulator. Callers
+      repeatedly invoke `add_extraction()` for each document; the builder
+      deduplicates nodes and edges using stable IDs, then finalises the graph
+      with `build()` or persists it via `write_to_neptune()`. Separates
+      construction from representation.
+    evidence_files:
+      - src/preprocessor/graph_builder.py
+
+  - name: Factory Pattern (Extractor Dispatch)
+    category: gof-creational
+    description: >
+      `extract()` in extractors.py acts as a factory function: given a file
+      path and its content, it selects and invokes the correct extractor
+      (`extract_markdown`, `extract_yaml`, `extract_plantuml`, `extract_text`)
+      based on file extension, returning a uniform output envelope regardless
+      of the underlying extractor used.
+    evidence_files:
+      - src/preprocessor/extractors.py
+
+  - name: Template Method Pattern
+    category: gof-behavioural
+    description: >
+      The preprocessor `lambda_handler()` defines the invariant skeleton of
+      the document processing algorithm — parse event → extract → route-classify
+      → build graph → write derived artifacts — while delegating each step to
+      specialised helper functions that can be evolved independently.
+    evidence_files:
+      - src/preprocessor/handler.py
+
+  - name: Facade Pattern
+    category: gof-structural
+    description: >
+      `_run_query_pipeline()` in query_api/handler.py presents a single
+      unified entry point to a five-stage reasoning pipeline (classify →
+      RAGRouter.select_strategy → retrieve_with_strategy → expand_graph_context
+      → synthesize_answer → RAGRouter.update_feedback). Callers interact with
+      one function; internal orchestration complexity is hidden behind the facade.
+    evidence_files:
+      - src/query_api/handler.py
+
+  - name: Command Pattern (Action Dispatch)
+    category: gof-behavioural
+    description: >
+      The ingestion-trigger Lambda dispatches on an `action` field in the
+      event payload: `start`, `status`, `seed_routing`, `empty_all`, etc.
+      Each action is encapsulated in its own function, making it trivial to
+      add or remove operations without changing the dispatcher.
+    evidence_files:
+      - src/ingestion_trigger/handler.py
+
+  - name: Observer Pattern (Confidence Feedback Loop)
+    category: gof-behavioural
+    description: >
+      After every synthesized answer, `RAGRouter.update_feedback()` observes
+      the answer confidence score and adjusts the `EFFECTIVE_FOR` edge weight
+      for the winning strategy in Neptune. Confidence ≥ 0.70 → +0.05 (reinforce);
+      confidence < 0.40 → −0.02 (penalise). The routing graph acts as the
+      subject; the feedback function is the observer that mutates it.
+    evidence_files:
+      - src/query_api/rag_router.py
+
+  - name: Singleton / Connection Pool Pattern
+    category: gof-creational
+    description: >
+      AWS SDK and Neptune clients are initialised once per Lambda container
+      lifecycle and cached in module-level globals. `get_neptune_client()` and
+      `_get_bedrock_client()` in db_clients.py return the cached instance on
+      warm invocations, avoiding repeated TCP handshakes and auth overhead.
+    evidence_files:
+      - src/shared/db_clients.py
+
+  - name: Adapter Pattern (JSON ↔ Dataclass)
+    category: gof-structural
+    description: >
+      `QueryRequest.from_dict()`, `RetrievedChunk.to_dict()`, and
+      `QueryResponse.to_dict()` in models.py adapt the camelCase HTTP request
+      and response shapes to and from the snake_case Python dataclasses used
+      internally, preventing HTTP-layer concerns from leaking into business logic.
+    evidence_files:
+      - src/shared/models.py
+
+  - name: Chain of Responsibility (Classification Fallback)
+    category: gof-behavioural
+    description: >
+      `classify_question()` in synthesizer.py tries handlers in order:
+      model-based classification → regex-pattern matching → default fallback
+      to "general". Each handler attempts to satisfy the request; if it cannot,
+      responsibility is passed to the next handler in the chain.
+    evidence_files:
+      - src/query_api/synthesizer.py
+
+  # ── Cloud / distributed patterns ─────────────────────────────────────────
+
+  - name: Polling Pattern (Async Job Completion)
+    category: cloud-async
+    description: >
+      The Step Functions state machine uses a Wait → CheckStatus → branch loop
+      to monitor the Bedrock Knowledge Base ingestion job. Rather than blocking
+      a Lambda for potentially minutes, the orchestrator polls at a fixed
+      interval and branches on COMPLETE / FAILED / IN_PROGRESS, avoiding
+      Lambda timeout limits for long-running operations.
+    evidence_files:
+      - template.yaml  # WaitForIngestion + CheckIngestionStatus states
+
+  - name: Retry with Exponential Backoff
+    category: cloud-resilience
+    description: >
+      Step Functions state machine tasks declare `Retry` blocks with
+      `BackoffRate: 2` and `MaxAttempts: 3`, providing automatic exponential
+      backoff for transient service errors. The GitHub Actions workflow also
+      retries SAM deploy steps on network failures.
+    evidence_files:
+      - template.yaml
+      - .github/workflows/deploy.yaml
+
+  - name: Circuit Breaker (Connection Health Check)
+    category: cloud-resilience
+    description: >
+      Before returning a cached Neptune or Bedrock client, db_clients.py
+      performs a lightweight connectivity probe (`verify_connectivity()`).
+      If the probe fails, the cached reference is cleared and a fresh connection
+      is established, preventing cascading failures from stale client state.
+    evidence_files:
+      - src/shared/db_clients.py
+
+  - name: CloudFormation Custom Resource Pattern
+    category: cloud-iac
+    description: >
+      `PostDeploymentIngestionJob` is a CloudFormation custom resource backed
+      by the IngestionTriggerFunction Lambda. On stack Create/Update events,
+      it seeds the Neptune routing graph and kicks off the initial Bedrock KB
+      ingestion job, then signals success or failure to CloudFormation via a
+      pre-signed S3 URL callback.
+    evidence_files:
+      - src/ingestion_trigger/handler.py
+      - template.yaml  # AWS::CloudFormation::CustomResource
+
+  - name: Idempotency Pattern
+    category: cloud-reliability
+    description: >
+      All schema-init and graph-seed operations use upsert semantics (SQL
+      `IF NOT EXISTS`, openCypher `MERGE`) so they are safe to run multiple
+      times without side effects. This makes CloudFormation stack updates,
+      Lambda retries, and manual re-seeds all idempotent by construction.
+    evidence_files:
+      - src/ingestion_trigger/handler.py
+      - src/preprocessor/graph_builder.py
+
+  - name: Bulkhead Pattern (Lambda Isolation)
+    category: cloud-resilience
+    description: >
+      Each Lambda function (Preprocessor, Query API, IngestionTrigger) is
+      deployed with independent memory, timeout, IAM role, and log group.
+      Resource exhaustion or a runaway request in one function cannot affect
+      the others, containing blast radius to the function boundary.
+    evidence_files:
+      - template.yaml  # Globals + per-function overrides
+
+  - name: Secrets Manager Integration
+    category: cloud-security
+    description: >
+      Database credentials and API keys are stored in AWS Secrets Manager.
+      Lambda functions retrieve secrets at cold-start and cache them for the
+      container lifetime. No credentials appear in environment variables or
+      source code.
+    evidence_files:
+      - src/shared/db_clients.py
+      - template.yaml  # AWS::SecretsManager::Secret
 
 # ─────────────────────────────────────────────────────────────────────────────
 # AWS services used
