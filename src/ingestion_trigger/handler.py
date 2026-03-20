@@ -71,6 +71,91 @@ def seed_routing_graph_memgraph() -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Datastore empty / clear helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def empty_s3_bucket() -> dict:
+    """
+    Delete all objects (and all versions) from the artifacts S3 bucket.
+    The bucket itself is NOT deleted – only its contents are cleared.
+    """
+    import boto3
+
+    bucket_name = os.environ.get("ARTIFACTS_BUCKET", "")
+    if not bucket_name:
+        return {"status": "failed", "reason": "ARTIFACTS_BUCKET env var not set"}
+
+    try:
+        s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+        paginator = s3.get_paginator("list_object_versions")
+        deleted = 0
+
+        for page in paginator.paginate(Bucket=bucket_name):
+            objects_to_delete = []
+            for v in page.get("Versions", []):
+                objects_to_delete.append({"Key": v["Key"], "VersionId": v["VersionId"]})
+            for m in page.get("DeleteMarkers", []):
+                objects_to_delete.append({"Key": m["Key"], "VersionId": m["VersionId"]})
+
+            if objects_to_delete:
+                s3.delete_objects(
+                    Bucket=bucket_name,
+                    Delete={"Objects": objects_to_delete, "Quiet": True},
+                )
+                deleted += len(objects_to_delete)
+
+        # Also sweep non-versioned objects in case versioning is not enabled
+        paginator2 = s3.get_paginator("list_objects_v2")
+        for page in paginator2.paginate(Bucket=bucket_name):
+            objects_to_delete = [{"Key": o["Key"]} for o in page.get("Contents", [])]
+            if objects_to_delete:
+                s3.delete_objects(
+                    Bucket=bucket_name,
+                    Delete={"Objects": objects_to_delete, "Quiet": True},
+                )
+                deleted += len(objects_to_delete)
+
+        logger.info("S3 bucket %s emptied: %d objects removed", bucket_name, deleted)
+        return {"status": "success", "bucket": bucket_name, "deleted_objects": deleted}
+    except Exception as exc:
+        logger.error("S3 empty failed: %s", exc, exc_info=True)
+        return {"status": "failed", "reason": str(exc)}
+
+
+def empty_memgraph() -> dict:
+    """
+    Delete all nodes and edges from Memgraph.
+    Equivalent to MATCH (n) DETACH DELETE n.
+    """
+    try:
+        db_clients = _get_shared_module("db_clients")
+        db_clients.run_graph_query("MATCH (n) DETACH DELETE n")
+        logger.info("Memgraph emptied")
+        return {"status": "success", "message": "All nodes and edges deleted"}
+    except Exception as exc:
+        logger.error("Memgraph empty failed: %s", exc, exc_info=True)
+        return {"status": "failed", "reason": str(exc)}
+
+
+def empty_pgvector() -> dict:
+    """
+    Truncate the chunks table in PostgreSQL, removing all stored vectors.
+    The table schema is preserved (indexes and extension remain intact).
+    """
+    try:
+        db_clients = _get_shared_module("db_clients")
+        conn = db_clients.get_pg_connection()
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE chunks RESTART IDENTITY")
+        conn.commit()
+        logger.info("pgvector chunks table truncated")
+        return {"status": "success", "message": "chunks table truncated"}
+    except Exception as exc:
+        logger.error("pgvector empty failed: %s", exc, exc_info=True)
+        return {"status": "failed", "reason": str(exc)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # CloudFormation custom resource helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -203,6 +288,37 @@ def lambda_handler(event: dict, context: Any) -> dict:
         except Exception as exc:
             logger.error("Routing graph reset failed: %s", exc, exc_info=True)
             return {"action": "reset_routing", "status": "failed", "reason": str(exc)}
+
+    # ── Direct invocation: empty S3 bucket ────────────────────────────────────
+    if event.get("action") == "empty_s3":
+        result = empty_s3_bucket()
+        return {"action": "empty_s3", **result}
+
+    # ── Direct invocation: empty Memgraph ─────────────────────────────────────
+    if event.get("action") == "empty_memgraph":
+        result = empty_memgraph()
+        return {"action": "empty_memgraph", **result}
+
+    # ── Direct invocation: empty pgvector chunks table ────────────────────────
+    if event.get("action") == "empty_pgvector":
+        result = empty_pgvector()
+        return {"action": "empty_pgvector", **result}
+
+    # ── Direct invocation: empty all datastores ───────────────────────────────
+    if event.get("action") == "empty_all":
+        s3_result = empty_s3_bucket()
+        mg_result = empty_memgraph()
+        pg_result = empty_pgvector()
+        overall = "success" if all(
+            r["status"] == "success" for r in [s3_result, mg_result, pg_result]
+        ) else "partial"
+        return {
+            "action": "empty_all",
+            "status": overall,
+            "s3": s3_result,
+            "memgraph": mg_result,
+            "pgvector": pg_result,
+        }
 
     # ── Default: run both init steps ──────────────────────────────────────────
     logger.info("Default invocation: running full DB initialisation")
