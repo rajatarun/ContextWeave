@@ -99,7 +99,7 @@ Globals:
     Environment:
       Variables:
         POWERTOOLS_SERVICE_NAME: expertise-rag
-        LOG_LEVEL: INFO
+        LOG_LEVEL: DEBUG
         ENVIRONMENT: !Ref Environment
         ARTIFACTS_BUCKET: !Sub expertise-rag-artifacts-${AWS::AccountId}-${Environment}
         MEMGRAPH_SECRET_ARN: !Ref MemgraphSecret
@@ -1120,7 +1120,7 @@ Resources:
         Variables:
           GENERATION_MODEL_ID: !Ref GenerationModelId
           ENVIRONMENT: !Ref Environment
-          LOG_LEVEL: INFO
+          LOG_LEVEL: DEBUG
       Events:
         QueryExpertise:
           Type: HttpApi
