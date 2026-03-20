@@ -225,6 +225,7 @@ def reset_routing_graph(graph_id: str = "") -> dict[str, int]:
     return {"edges_reset": edges_reset}
 
 
+def seed_routing_graph(graph_id: str = "") -> dict[str, int]:
     """
     Idempotently create RAGStrategy and DocumentType proxy nodes plus
     EFFECTIVE_FOR edges with initial prior weights in Memgraph.
