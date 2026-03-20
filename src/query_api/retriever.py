@@ -171,16 +171,23 @@ def retrieve_with_strategy(
         from models import RetrievalConfig as _RC, RAGStrategyLabel as _RSL
         config = _RC(strategy=_RSL.SEMANTIC)
 
-    # Primary: pgvector semantic search
-    chunks = retrieve_chunks(question, top_k=top_k, min_score=min_score)
-
     strategy = config.strategy
+
+    # For keyword-boosted strategies fetch a larger initial pool so the reranker
+    # has access to semantically-relevant chunks that would otherwise be filtered
+    # out by the source_weight penalty (e.g. PDF chunks with weight 0.3–0.4
+    # scoring below authoritative docs even when more semantically on-topic).
+    initial_top_k = top_k * 2 if config.boost_keywords else top_k
+
+    # Primary: pgvector semantic search
+    chunks = retrieve_chunks(question, top_k=initial_top_k, min_score=min_score)
 
     # Keyword-boosted reranking
     if config.boost_keywords and strategy in (
         RAGStrategyLabel.KEYWORD_BOOSTED, RAGStrategyLabel.HYBRID
     ):
         chunks = _keyword_boost_rerank(chunks, question)
+        chunks = chunks[:top_k]  # trim back after reranking
 
     # Hybrid: secondary pgvector pass over a complementary doc_type
     if config.use_neptune_chunks and strategy == RAGStrategyLabel.HYBRID:
