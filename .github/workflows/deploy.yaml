@@ -26,6 +26,7 @@ env:
   AWS_ACCOUNT_ID: "239571291755"
   DEPLOY_ROLE_ARN: arn:aws:iam::239571291755:role/teamweave-github-actions-sam-deployer
   SAM_TEMPLATE: template.yaml
+  STACK_NAME_DEV: expertise-rag-dev
   STACK_NAME_PROD: expertise-rag-prod
 
 jobs:
