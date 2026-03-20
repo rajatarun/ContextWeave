@@ -130,7 +130,15 @@ def classify_doc_type(
     if stats.get("heading_count", 0) >= 3 and aws_signal_count >= 2:
         return DocumentTypeLabel.TECHNICAL_SPEC
 
-    # 5. Default: narrative prose
+    # 5. PDF / DOCX: pypdf-extracted text lacks clean sentence boundaries
+    # (bullet points, section headers, key:value lines don't end with .!?).
+    # Sentence chunking produces coarse 90-word windows that dilute semantics.
+    # Hierarchical chunking gives 300-word child chunks with overlap → better
+    # precision for pgvector matching.
+    if fname.endswith((".pdf", ".docx", ".doc")):
+        return DocumentTypeLabel.TECHNICAL_SPEC
+
+    # 6. Default: narrative prose
     return DocumentTypeLabel.NARRATIVE
 
 
