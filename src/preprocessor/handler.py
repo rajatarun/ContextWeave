@@ -328,6 +328,24 @@ def _write_chunks_to_pgvector(
             "Chunking: %s → doc_type=%s strategy=%s produced %d chunks",
             source_file, doc_type, strategy, len(chunks),
         )
+        if logger.isEnabledFor(logging.DEBUG):
+            is_pdf = source_file.lower().endswith(".pdf")
+            for i, chunk in enumerate(chunks):
+                label = "child" if chunk.is_child else "parent"
+                logger.debug(
+                    "[chunk-debug] %s chunk %d/%d (%s, idx=%d):\n%s",
+                    source_file,
+                    i + 1,
+                    len(chunks),
+                    label,
+                    chunk.chunk_index,
+                    chunk.content,
+                )
+                if is_pdf and chunk.parent_content:
+                    logger.debug(
+                        "[chunk-debug] %s chunk %d parent_content:\n%s",
+                        source_file, i + 1, chunk.parent_content,
+                    )
         if not chunks:
             continue
 
