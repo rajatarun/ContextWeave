@@ -1121,6 +1121,8 @@ Resources:
           GENERATION_MODEL_ID: !Ref GenerationModelId
           ENVIRONMENT: !Ref Environment
           LOG_LEVEL: DEBUG
+          CACHE_SIMILARITY_THRESHOLD: "0.95"
+          CACHE_TTL_DAYS: "7"
       Events:
         QueryExpertise:
           Type: HttpApi

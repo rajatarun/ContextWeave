@@ -196,5 +196,27 @@ def init_pgvector_schema() -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS chunks_doc_id_idx ON chunks (doc_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS chunks_doc_type_idx ON chunks (doc_type)")
         cur.execute("CREATE INDEX IF NOT EXISTS chunks_source_file_idx ON chunks (source_file)")
+
+        # ── Query cache (CAG) ────────────────────────────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS query_cache (
+                id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                question_embedding  vector(1024)  NOT NULL,
+                response_json       JSONB         NOT NULL,
+                question_type       TEXT,
+                hit_count           INTEGER       DEFAULT 0,
+                created_at          TIMESTAMPTZ   DEFAULT NOW(),
+                expires_at          TIMESTAMPTZ   NOT NULL
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS qcache_embedding_idx
+                ON query_cache USING ivfflat (question_embedding vector_cosine_ops)
+                WITH (lists = 50)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS qcache_expires_idx
+                ON query_cache (expires_at)
+        """)
     conn.commit()
     logger.info("pgvector schema initialised")

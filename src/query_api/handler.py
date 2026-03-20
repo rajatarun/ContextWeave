@@ -48,6 +48,7 @@ from rag_router import select_strategy, update_feedback
 from retriever import deduplicate_chunks, retrieve_chunks, retrieve_with_strategy
 from synthesizer import classify_question, synthesize_answer
 from models import QueryRequest, RAGStrategyLabel
+import cache as _cache
 
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
@@ -119,6 +120,7 @@ def _parse_request(event: dict) -> QueryRequest | None:
 def _run_query_pipeline(req: QueryRequest) -> dict:
     """
     Adaptive RAG reasoning pipeline:
+      0. Embed question; check semantic cache (skip steps 1-6 on hit)
       1. Classify the question
       2. Route: consult Neptune routing graph → select best RAG strategy
       3. Retrieve using chosen strategy (Bedrock KB ± Neptune vectors ± keyword boost)
@@ -129,6 +131,35 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
       8. Return structured response with routingDecision field
     """
     start_time = time.monotonic()
+
+    # Step 0 – Semantic cache check (CAG)
+    # Embed once here; retriever will embed again internally on a cache miss
+    # (double embed cost ~$0.00002 — negligible vs synthesis savings).
+    if not _cache.is_time_sensitive(req.question):
+        try:
+            import sys as _sys, os as _os
+            shared_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "shared")
+            if shared_dir not in _sys.path:
+                _sys.path.insert(0, shared_dir)
+            import importlib
+            _embedder = importlib.import_module("embedder")
+            _db = importlib.import_module("db_clients")
+
+            question_embedding = _embedder.embed_text(req.question)
+            if question_embedding is not None:
+                cached = _cache.check_cache(question_embedding, _db.get_pg_connection())
+                if cached is not None:
+                    elapsed_ms = int((time.monotonic() - start_time) * 1000)
+                    logger.info("Cache HIT for question (%.0fms): %s", elapsed_ms, req.question[:80])
+                    cached["cacheHit"] = True
+                    cached["latencyMs"] = elapsed_ms
+                    return cached
+        except Exception as exc:
+            logger.warning("Cache check failed (non-fatal): %s", exc)
+            question_embedding = None
+    else:
+        logger.info("Bypassing cache: time-sensitive question")
+        question_embedding = None
 
     # Step 1 – Classify
     question_type = req.question_type or classify_question(req.question)
@@ -198,7 +229,24 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
         question_type=question_type,
     )
 
-    # Step 7 – Routing feedback (learning loop)
+    # Step 7 – Write to semantic cache (non-fatal)
+    try:
+        if question_embedding is not None:
+            import importlib, sys as _sys, os as _os
+            shared_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "shared")
+            if shared_dir not in _sys.path:
+                _sys.path.insert(0, shared_dir)
+            _db = importlib.import_module("db_clients")
+            _cache.write_cache(
+                question_embedding,
+                query_response.to_dict(),
+                question_type,
+                _db.get_pg_connection(),
+            )
+    except Exception as exc:
+        logger.warning("Cache write failed (non-fatal): %s", exc)
+
+    # Step 8 – Routing feedback (learning loop)
     if NEPTUNE_GRAPH_ID:
         try:
             update_feedback(
@@ -231,6 +279,7 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
 
     result = query_response.to_dict()
     result["latencyMs"] = elapsed_ms
+    result["cacheHit"] = False
     return result
 
 
