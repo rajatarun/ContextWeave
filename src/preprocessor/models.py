@@ -115,7 +115,7 @@ ROUTING_PRIORS: dict[tuple[str, str], float] = {
 # Evidence weighting constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Source weight table – higher = more authoritative
+# Source weight table – higher = more authoritative (used as default / fallback)
 SOURCE_WEIGHTS: dict[str, float] = {
     "architecture.md": 1.0,
     "CLAUDE.md": 1.0,
@@ -132,12 +132,76 @@ SOURCE_WEIGHTS: dict[str, float] = {
     "default": 0.4,
 }
 
-def get_source_weight(source_key: str) -> float:
-    """Return evidence weight for a given source identifier."""
-    for k, w in SOURCE_WEIGHTS.items():
+# Strategy-specific weight overrides applied at query time.
+# Different retrieval strategies treat document types differently:
+#   keyword_boosted  → PDF/resume/doc is primary evidence for project work
+#   graph_first      → authoritative MD/diagram files dominate
+#   hybrid           → balanced between the two
+#   semantic_search  → falls back to SOURCE_WEIGHTS (no override)
+STRATEGY_SOURCE_WEIGHTS: dict[str, dict[str, float]] = {
+    # project / credential questions: PDF/resume is first-hand evidence;
+    # authoritative design docs are less relevant than project artefacts.
+    "keyword_boosted": {
+        ".pdf": 0.9,
+        ".docx": 0.85,
+        ".doc": 0.85,
+        "resume": 0.9,
+        "repo-signals": 0.8,
+        "readme": 0.7,
+        "README": 0.7,
+        "architecture.md": 0.6,
+        "CLAUDE.md": 0.5,
+        "default": 0.65,
+    },
+    # skill_depth / architecture questions: design docs dominate;
+    # PDFs/resumes are low-signal.
+    "graph_first": {
+        "architecture.md": 1.0,
+        "CLAUDE.md": 1.0,
+        "plantuml_derived": 0.9,
+        "c4_diagram": 0.9,
+        "aws_architecture": 0.9,
+        "repo-signals": 0.8,
+        "code": 0.6,
+        "readme": 0.5,
+        "README": 0.5,
+        ".pdf": 0.2,
+        ".docx": 0.2,
+        ".doc": 0.2,
+        "resume": 0.2,
+        "default": 0.45,
+    },
+    # comparison questions: balanced, slight boost to authoritative docs.
+    "hybrid": {
+        "architecture.md": 0.9,
+        "CLAUDE.md": 0.9,
+        "plantuml_derived": 0.8,
+        "repo-signals": 0.75,
+        ".pdf": 0.65,
+        ".docx": 0.6,
+        ".doc": 0.6,
+        "resume": 0.6,
+        "code": 0.6,
+        "default": 0.55,
+    },
+}
+
+
+def get_source_weight(source_key: str, strategy: str = "") -> float:
+    """Return evidence weight for a given source identifier.
+
+    When strategy is provided, uses the strategy-specific weight table so
+    PDF/resume chunks score higher for project/credential queries and
+    authoritative MD files score higher for skill_depth/architecture queries.
+    Falls back to SOURCE_WEIGHTS when no strategy override exists.
+    """
+    weights = STRATEGY_SOURCE_WEIGHTS.get(strategy, SOURCE_WEIGHTS)
+    for k, w in weights.items():
+        if k == "default":
+            continue
         if k.lower() in source_key.lower():
             return w
-    return SOURCE_WEIGHTS["default"]
+    return weights.get("default", SOURCE_WEIGHTS["default"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
