@@ -169,9 +169,15 @@ jobs:
 
           echo "Uploading repo signals and documentation to s3://${BUCKET}/${PREFIX}/"
 
-          # repo-signals.yaml – structured expertise signals (highest authority)
+          # repo-signals.yaml – structured expertise signals (machine-readable)
           aws s3 cp repo-signals.yaml \
             "s3://${BUCKET}/${PREFIX}/repo-signals.yaml" \
+            --region ${{ env.AWS_REGION }} \
+            --metadata "source=github-actions,sha=${{ github.sha }},env=prod"
+
+          # docs/repo-signals.md – markdown rendering of repo-signals.yaml
+          aws s3 cp docs/repo-signals.md \
+            "s3://${BUCKET}/${PREFIX}/repo-signals.md" \
             --region ${{ env.AWS_REGION }} \
             --metadata "source=github-actions,sha=${{ github.sha }},env=prod"
 

@@ -537,7 +537,12 @@ documentation:
   - file: repo-signals.yaml
     type: structured-signals
     evidence_weight: 0.7
-    description: This file – machine-readable expertise signals for RAG ingestion
+    description: Machine-readable expertise signals for RAG ingestion (YAML source)
+
+  - file: docs/repo-signals.md
+    type: structured-signals
+    evidence_weight: 0.7
+    description: Markdown rendering of repo-signals.yaml – human-readable expertise signals
 
   - file: docs/graph_schema.md
     type: schema-doc
