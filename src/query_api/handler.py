@@ -229,22 +229,27 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
         question_type=question_type,
     )
 
-    # Step 7 – Write to semantic cache (non-fatal)
-    try:
-        if question_embedding is not None:
-            import importlib, sys as _sys, os as _os
-            shared_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "shared")
-            if shared_dir not in _sys.path:
-                _sys.path.insert(0, shared_dir)
-            _db = importlib.import_module("db_clients")
-            _cache.write_cache(
-                question_embedding,
-                query_response.to_dict(),
-                question_type,
-                _db.get_pg_connection(),
-            )
-    except Exception as exc:
-        logger.warning("Cache write failed (non-fatal): %s", exc)
+    # Step 7 – Write to semantic cache (non-fatal; skip low-confidence answers)
+    if query_response.confidence >= 0.5:
+        try:
+            if question_embedding is not None:
+                import importlib, sys as _sys, os as _os
+                shared_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "shared")
+                if shared_dir not in _sys.path:
+                    _sys.path.insert(0, shared_dir)
+                _db = importlib.import_module("db_clients")
+                _cache.write_cache(
+                    question_embedding,
+                    query_response.to_dict(),
+                    question_type,
+                    _db.get_pg_connection(),
+                )
+        except Exception as exc:
+            logger.warning("Cache write failed (non-fatal): %s", exc)
+    else:
+        logger.info(
+            "Skipping cache write: confidence %.2f < 0.5", query_response.confidence
+        )
 
     # Step 8 – Routing feedback (learning loop)
     if NEPTUNE_GRAPH_ID:
