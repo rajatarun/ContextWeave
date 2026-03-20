@@ -44,6 +44,7 @@ def retrieve_chunks(
     top_k: int = 10,
     min_score: float = 0.0,
     doc_type_filter: str | None = None,
+    strategy: str = "",
 ) -> list[RetrievedChunk]:
     """
     Embed the question with Titan V2 and run a pgvector cosine similarity query.
@@ -113,7 +114,6 @@ def retrieve_chunks(
         r = dict(zip(columns, row))
         score = float(r.get("score", 0.0))
         source_file = r.get("source_file", "")
-        source_weight = get_source_weight(source_file)
         metadata = r.get("metadata") or {}
         if r.get("doc_type"):
             metadata["doc_type"] = r["doc_type"]
@@ -127,7 +127,7 @@ def retrieve_chunks(
             content=r.get("content", ""),
             score=score,
             source_uri=source_uri,
-            source_weight=source_weight,
+            source_weight=get_source_weight(source_file, strategy),
             metadata=metadata,
         )
         if chunk.effective_score >= min_score:
@@ -173,21 +173,16 @@ def retrieve_with_strategy(
 
     strategy = config.strategy
 
-    # For keyword-boosted strategies fetch a larger initial pool so the reranker
-    # has access to semantically-relevant chunks that would otherwise be filtered
-    # out by the source_weight penalty (e.g. PDF chunks with weight 0.3–0.4
-    # scoring below authoritative docs even when more semantically on-topic).
-    initial_top_k = top_k * 2 if config.boost_keywords else top_k
-
-    # Primary: pgvector semantic search
-    chunks = retrieve_chunks(question, top_k=initial_top_k, min_score=min_score)
+    # Primary: pgvector semantic search with strategy-aware source weights.
+    # PDF/resume chunks score higher for keyword_boosted (project/credential);
+    # authoritative MD files score higher for graph_first (skill/architecture).
+    chunks = retrieve_chunks(question, top_k=top_k, min_score=min_score, strategy=strategy)
 
     # Keyword-boosted reranking
     if config.boost_keywords and strategy in (
         RAGStrategyLabel.KEYWORD_BOOSTED, RAGStrategyLabel.HYBRID
     ):
         chunks = _keyword_boost_rerank(chunks, question)
-        chunks = chunks[:top_k]  # trim back after reranking
 
     # Hybrid: secondary pgvector pass over a complementary doc_type
     if config.use_neptune_chunks and strategy == RAGStrategyLabel.HYBRID:
