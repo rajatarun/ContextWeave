@@ -327,9 +327,6 @@ def run_question(
 
 _FB_SYMBOL = {"reinforce": "↑+.05", "penalise": "↓-.02", "neutral": "→   ", "unknown": "?    "}
 
-# Column widths extracted to plain ints so they can be used inside f-string
-# format specs on Python < 3.12 (dict key lookups inside format specs are
-# not reliably parsed by the older tokeniser).
 _W_IDX    = 4
 _W_DECL   = 12
 _W_CLS    = 12
@@ -341,38 +338,40 @@ _W_STATUS = 6
 COL_W = {"idx": _W_IDX, "decl": _W_DECL, "cls": _W_CLS, "route": _W_ROUTE,
          "conf": _W_CONF, "fb": _W_FB, "lat": _W_LAT, "status": _W_STATUS}
 
+# Use string methods (.ljust/.rjust) rather than f-string format specs so
+# this works correctly on all Python versions and regardless of field type.
 HEADER = (
-    f"{'#':>{_W_IDX}}  "
-    f"{'Declared':<{_W_DECL}}  "
-    f"{'Classified':<{_W_CLS}}  "
-    f"{'Route':<{_W_ROUTE}}  "
-    f"{'Conf':>{_W_CONF}}  "
-    f"{'Wt':>{_W_FB}}  "
-    f"{'Lat(ms)':>{_W_LAT}}  "
-    f"{'St':<{_W_STATUS}}  "
-    f"Answer preview"
+    "#".rjust(_W_IDX) + "  " +
+    "Declared".ljust(_W_DECL) + "  " +
+    "Classified".ljust(_W_CLS) + "  " +
+    "Route".ljust(_W_ROUTE) + "  " +
+    "Conf".rjust(_W_CONF) + "  " +
+    "Wt".ljust(_W_FB) + "  " +
+    "Lat(ms)".rjust(_W_LAT) + "  " +
+    "St".ljust(_W_STATUS) + "  " +
+    "Answer preview"
 )
 SEP = "-" * min(len(HEADER) + 20, 145)
 
 
 def _row(r: QuestionResult) -> str:
     conf_str = f"{r.confidence:.2f}" if r.confidence is not None else "  -- "
-    lat_str  = f"{r.latency_ms}"     if r.latency_ms  is not None else "   -- "
+    lat_str  = str(r.latency_ms) if r.latency_ms is not None else "   -- "
     status   = "OK" if r.status == "ok" else "ERR"
     route    = r.routing_decision or "--"
     cls      = r.classified_type  or "--"
     preview  = (r.error[:80] if r.status == "error" else r.answer_preview)
     fb       = _FB_SYMBOL.get(r.feedback_action or "unknown", "?    ")
     return (
-        f"{r.index:>{_W_IDX}}  "
-        f"{r.declared_type:<{_W_DECL}}  "
-        f"{cls:<{_W_CLS}}  "
-        f"{route:<{_W_ROUTE}}  "
-        f"{conf_str:>{_W_CONF}}  "
-        f"{fb:<{_W_FB}}  "
-        f"{lat_str:>{_W_LAT}}  "
-        f"{status:<{_W_STATUS}}  "
-        f"{preview}"
+        str(r.index).rjust(_W_IDX) + "  " +
+        str(r.declared_type).ljust(_W_DECL) + "  " +
+        cls.ljust(_W_CLS) + "  " +
+        route.ljust(_W_ROUTE) + "  " +
+        conf_str.rjust(_W_CONF) + "  " +
+        fb.ljust(_W_FB) + "  " +
+        lat_str.rjust(_W_LAT) + "  " +
+        status.ljust(_W_STATUS) + "  " +
+        preview
     )
 
 
