@@ -483,19 +483,28 @@ Resources:
       Roles:
         - !Ref MemgraphInstanceRole
 
+  # Spot market options live in a LaunchTemplate (cfn-lint doesn't recognise
+  # InstanceMarketOptions directly on AWS::EC2::Instance).
+  # Persistent request + stop-on-interruption: EBS data survives, instance
+  # restarts automatically when Spot capacity is restored (~50-70% saving).
+  MemgraphLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub expertise-rag-memgraph-spot-${Environment}
+      LaunchTemplateData:
+        InstanceMarketOptions:
+          MarketType: spot
+          SpotOptions:
+            SpotInstanceType: persistent
+            InstanceInterruptionBehavior: stop
+
   MemgraphEC2:
     Type: AWS::EC2::Instance
     Properties:
       InstanceType: !Ref MemgraphInstanceType
-      # Spot instance – persistent request with stop-on-interruption so the
-      # instance is automatically re-started when capacity is restored.
-      # EBS data survives interruption; Memgraph resumes from disk on restart.
-      # Typical saving vs on-demand: 50-70% for Graviton instance families.
-      InstanceMarketOptions:
-        MarketType: spot
-        SpotOptions:
-          SpotInstanceType: persistent
-          InstanceInterruptionBehavior: stop
+      LaunchTemplate:
+        LaunchTemplateId: !Ref MemgraphLaunchTemplate
+        Version: !GetAtt MemgraphLaunchTemplate.LatestVersionNumber
       ImageId: !If
         - MemgraphIsGraviton
         - '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}'
