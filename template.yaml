@@ -347,7 +347,7 @@ Resources:
           Description: "IPv4 egress (VPC-local: RDS, Memgraph EC2)"
         - IpProtocol: '-1'
           CidrIpv6: ::/0
-          Description: IPv6 egress via EIGW (AWS APIs: Bedrock, Secrets Manager)
+          Description: "IPv6 egress via EIGW (AWS APIs: Bedrock, Secrets Manager)"
       Tags:
         - Key: Name
           Value: !Sub expertise-rag-lambda-sg-${Environment}
