@@ -1189,6 +1189,7 @@ Resources:
     # arrive if VPC/NAT resources are torn down before the Lambda can PUT to the
     # pre-signed S3 ResponseURL, causing the deletion to time out and fail.
     DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     DependsOn:
       - PostgresSecretAttachment
       - MemgraphEC2
