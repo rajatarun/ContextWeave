@@ -493,7 +493,6 @@ Resources:
         MarketType: spot
         SpotOptions:
           SpotInstanceType: persistent
-          InstanceInterruptionBehavior: stop
       ImageId: !If
         - MemgraphIsGraviton
         - '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}'
@@ -741,7 +740,7 @@ Resources:
   PreprocessorLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/expertise-rag-preprocessor-${Environment}
+      LogGroupName: !Sub /aws/lambda/contextweave-rag-preprocessor-${Environment}
       RetentionInDays: !Ref LogRetentionDays
       Tags:
         - Key: Project
@@ -752,7 +751,7 @@ Resources:
   QueryAPILogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/expertise-rag-query-api-${Environment}
+      LogGroupName: !Sub /aws/lambda/contextweave-rag-query-api-${Environment}
       RetentionInDays: !Ref LogRetentionDays
       Tags:
         - Key: Project
@@ -763,7 +762,7 @@ Resources:
   DBInitLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/expertise-rag-db-init-${Environment}
+      LogGroupName: !Sub /aws/lambda/contextweave-rag-db-init-${Environment}
       RetentionInDays: !Ref LogRetentionDays
       Tags:
         - Key: Project
@@ -775,7 +774,7 @@ Resources:
     Type: AWS::Logs::LogGroup
     Condition: DeployStepFunctions
     Properties:
-      LogGroupName: !Sub /aws/states/expertise-rag-ingestion-${Environment}
+      LogGroupName: !Sub /aws/states/contextweave-rag-ingestion-${Environment}
       RetentionInDays: !Ref LogRetentionDays
       Tags:
         - Key: Project
@@ -786,7 +785,7 @@ Resources:
   ApiGatewayLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/apigateway/expertise-rag-${Environment}
+      LogGroupName: !Sub /aws/apigateway/contextweave-rag-${Environment}
       RetentionInDays: !Ref LogRetentionDays
       Tags:
         - Key: Project
@@ -1057,7 +1056,7 @@ Resources:
     Type: AWS::Serverless::Function
     DependsOn: PreprocessorLogGroup
     Properties:
-      FunctionName: !Sub expertise-rag-preprocessor-${Environment}
+      FunctionName: !Sub contextweave-rag-preprocessor-${Environment}
       Description: >
         Reads raw repo uploads from S3, extracts text, chunks and embeds content,
         writes to pgvector and Memgraph, then emits derived JSON artifacts to S3.
@@ -1091,7 +1090,7 @@ Resources:
     Type: AWS::Serverless::Function
     DependsOn: QueryAPILogGroup
     Properties:
-      FunctionName: !Sub expertise-rag-query-api-${Environment}
+      FunctionName: !Sub contextweave-rag-query-api-${Environment}
       Description: >
         Reasoning API: classifies questions, retrieves from pgvector, expands
         graph-linked evidence via Memgraph, synthesizes answers, and returns
@@ -1141,7 +1140,7 @@ Resources:
     Type: AWS::Serverless::Function
     DependsOn: DBInitLogGroup
     Properties:
-      FunctionName: !Sub expertise-rag-db-init-${Environment}
+      FunctionName: !Sub contextweave-rag-db-init-${Environment}
       Description: >
         Creates pgvector schema in PostgreSQL and seeds the Memgraph routing graph
         with initial EFFECTIVE_FOR edge weights. Invoked as a CloudFormation custom
