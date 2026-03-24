@@ -111,7 +111,7 @@ Globals:
         # addresses so Lambda can reach Bedrock, Secrets Manager, etc. via
         # the Egress-Only Internet Gateway without VPC interface endpoints.
         AWS_USE_DUALSTACK_ENDPOINT: 'true'
-        ARTIFACTS_BUCKET: !Sub expertise-rag-artifacts-${AWS::AccountId}-${Environment}
+        ARTIFACTS_BUCKET: !Sub contextweave-rag-artifacts-${AWS::AccountId}-${Environment}
         MEMGRAPH_SECRET_ARN: !Ref MemgraphSecret
         POSTGRES_SECRET_ARN: !Ref PostgresSecret
     Tags:
@@ -469,7 +469,7 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: s3:GetObject
-                Resource: !Sub arn:aws:s3:::expertise-rag-artifacts-${AWS::AccountId}-${Environment}/binaries/*
+                Resource: !Sub arn:aws:s3:::contextweave-rag-artifacts-${AWS::AccountId}-${Environment}/binaries/*
               - Effect: Allow
                 Action: kms:Decrypt
                 Resource: !GetAtt ArtifactsKMSKey.Arn
@@ -677,7 +677,7 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      BucketName: !Sub expertise-rag-artifacts-${AWS::AccountId}-${Environment}
+      BucketName: !Sub contextweave-rag-artifacts-${AWS::AccountId}-${Environment}
       VersioningConfiguration:
         Status: Enabled
       BucketEncryption:
@@ -743,7 +743,7 @@ Resources:
       FunctionName: !GetAtt PreprocessorFunction.Arn
       Action: lambda:InvokeFunction
       Principal: s3.amazonaws.com
-      SourceArn: !Sub arn:aws:s3:::expertise-rag-artifacts-${AWS::AccountId}-${Environment}
+      SourceArn: !Sub arn:aws:s3:::contextweave-rag-artifacts-${AWS::AccountId}-${Environment}
       SourceAccount: !Ref AWS::AccountId
 
   # ───────────────────────────────────────────
@@ -872,17 +872,17 @@ Resources:
                 Action:
                   - s3:GetObject
                   - s3:HeadObject
-                Resource: !Sub arn:aws:s3:::expertise-rag-artifacts-${AWS::AccountId}-${Environment}/raw/*
+                Resource: !Sub arn:aws:s3:::contextweave-rag-artifacts-${AWS::AccountId}-${Environment}/raw/*
               - Sid: WriteDerived
                 Effect: Allow
                 Action:
                   - s3:PutObject
                   - s3:PutObjectTagging
-                Resource: !Sub arn:aws:s3:::expertise-rag-artifacts-${AWS::AccountId}-${Environment}/derived/*
+                Resource: !Sub arn:aws:s3:::contextweave-rag-artifacts-${AWS::AccountId}-${Environment}/derived/*
               - Sid: ListBucket
                 Effect: Allow
                 Action: s3:ListBucket
-                Resource: !Sub arn:aws:s3:::expertise-rag-artifacts-${AWS::AccountId}-${Environment}
+                Resource: !Sub arn:aws:s3:::contextweave-rag-artifacts-${AWS::AccountId}-${Environment}
                 Condition:
                   StringLike:
                     s3:prefix:
