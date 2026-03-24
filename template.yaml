@@ -107,6 +107,10 @@ Globals:
         POWERTOOLS_SERVICE_NAME: expertise-rag
         LOG_LEVEL: DEBUG
         ENVIRONMENT: !Ref Environment
+        # boto3/botocore: resolve AWS service endpoints to dual-stack (IPv6)
+        # addresses so Lambda can reach Bedrock, Secrets Manager, etc. via
+        # the Egress-Only Internet Gateway without VPC interface endpoints.
+        AWS_USE_DUALSTACK_ENDPOINT: 'true'
         ARTIFACTS_BUCKET: !Sub expertise-rag-artifacts-${AWS::AccountId}-${Environment}
         MEMGRAPH_SECRET_ARN: !Ref MemgraphSecret
         POSTGRES_SECRET_ARN: !Ref PostgresSecret
@@ -150,7 +154,12 @@ Resources:
       TargetKeyId: !Ref ArtifactsKMSKey
 
   # ───────────────────────────────────────────
-  # VPC – private networking for EC2, RDS, Lambda
+  # VPC – dual-stack (IPv4 + IPv6), no NAT Gateway
+  #
+  # Cost model:
+  #   IGW   – free (EC2 outbound IPv4/IPv6)
+  #   EIGW  – free (Lambda outbound IPv6 only; blocks inbound)
+  #   No NAT Gateway, no VPC Interface Endpoints
   # ───────────────────────────────────────────
   VPC:
     Type: AWS::EC2::VPC
@@ -163,6 +172,13 @@ Resources:
           Value: !Sub expertise-rag-vpc-${Environment}
         - Key: Project
           Value: ExpertiseRAG
+
+  # Amazon-provided /56 IPv6 CIDR attached to the VPC
+  VPCIpv6CidrBlock:
+    Type: AWS::EC2::VPCCidrBlock
+    Properties:
+      VpcId: !Ref VPC
+      AmazonProvidedIpv6CidrBlock: true
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
@@ -177,53 +193,74 @@ Resources:
       VpcId: !Ref VPC
       InternetGatewayId: !Ref InternetGateway
 
-  # Public subnets (for NAT Gateway)
+  # Egress-Only Internet Gateway – free; allows Lambda → internet (IPv6),
+  # blocks all inbound connections from internet → Lambda
+  EgressOnlyInternetGateway:
+    Type: AWS::EC2::EgressOnlyInternetGateway
+    Properties:
+      VpcId: !Ref VPC
+
+  # Public subnets – Memgraph EC2 (dual-stack, public IPv4 + IPv6 via IGW)
   PublicSubnet1:
     Type: AWS::EC2::Subnet
+    DependsOn: VPCIpv6CidrBlock
     Properties:
       VpcId: !Ref VPC
       CidrBlock: !Select [0, !Cidr [!Ref VpcCidr, 8, 8]]
+      Ipv6CidrBlock: !Select [0, !Cidr [!Select [0, !GetAtt VPC.Ipv6CidrBlocks], 8, 64]]
       AvailabilityZone: !Select [0, !GetAZs '']
       MapPublicIpOnLaunch: true
+      AssignIpv6AddressOnCreation: true
       Tags:
         - Key: Name
           Value: !Sub expertise-rag-public-1-${Environment}
 
   PublicSubnet2:
     Type: AWS::EC2::Subnet
+    DependsOn: VPCIpv6CidrBlock
     Properties:
       VpcId: !Ref VPC
       CidrBlock: !Select [1, !Cidr [!Ref VpcCidr, 8, 8]]
+      Ipv6CidrBlock: !Select [1, !Cidr [!Select [0, !GetAtt VPC.Ipv6CidrBlocks], 8, 64]]
       AvailabilityZone: !Select [1, !GetAZs '']
       MapPublicIpOnLaunch: true
+      AssignIpv6AddressOnCreation: true
       Tags:
         - Key: Name
           Value: !Sub expertise-rag-public-2-${Environment}
 
-  # Private subnets (for Lambda, EC2 Memgraph, RDS)
+  # Private subnets – Lambda + RDS (dual-stack; IPv4 for VPC-local, IPv6 via EIGW)
   PrivateSubnet1:
     Type: AWS::EC2::Subnet
+    DependsOn: VPCIpv6CidrBlock
     Properties:
       VpcId: !Ref VPC
       CidrBlock: !Select [2, !Cidr [!Ref VpcCidr, 8, 8]]
+      Ipv6CidrBlock: !Select [2, !Cidr [!Select [0, !GetAtt VPC.Ipv6CidrBlocks], 8, 64]]
       AvailabilityZone: !Select [0, !GetAZs '']
       MapPublicIpOnLaunch: false
+      AssignIpv6AddressOnCreation: true
       Tags:
         - Key: Name
           Value: !Sub expertise-rag-private-1-${Environment}
 
   PrivateSubnet2:
     Type: AWS::EC2::Subnet
+    DependsOn: VPCIpv6CidrBlock
     Properties:
       VpcId: !Ref VPC
       CidrBlock: !Select [3, !Cidr [!Ref VpcCidr, 8, 8]]
+      Ipv6CidrBlock: !Select [3, !Cidr [!Select [0, !GetAtt VPC.Ipv6CidrBlocks], 8, 64]]
       AvailabilityZone: !Select [1, !GetAZs '']
       MapPublicIpOnLaunch: false
+      AssignIpv6AddressOnCreation: true
       Tags:
         - Key: Name
           Value: !Sub expertise-rag-private-2-${Environment}
 
-  # Route tables
+  # ── Route tables ────────────────────────────────────────────────────────────
+
+  # Public route table: IPv4 + IPv6 → IGW (for Memgraph EC2)
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
@@ -235,6 +272,14 @@ Resources:
     Properties:
       RouteTableId: !Ref PublicRouteTable
       DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicRouteIPv6:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationIpv6CidrBlock: ::/0
       GatewayId: !Ref InternetGateway
 
   PublicSubnet1RouteTableAssociation:
@@ -249,13 +294,19 @@ Resources:
       SubnetId: !Ref PublicSubnet2
       RouteTableId: !Ref PublicRouteTable
 
+  # Private route table: no IPv4 default route (VPC-local only),
+  #                      IPv6 ::/0 → EIGW (Lambda → AWS APIs over IPv6)
   PrivateRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref VPC
-    # No default route — Lambda only needs VPC-local routing + VPC endpoints.
-    # Internet-bound traffic (e.g. Docker pull) goes through Memgraph EC2 in
-    # the public subnet via the IGW route table instead.
+
+  PrivateRouteIPv6:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationIpv6CidrBlock: ::/0
+      EgressOnlyInternetGatewayId: !Ref EgressOnlyInternetGateway
 
   PrivateSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
@@ -269,8 +320,7 @@ Resources:
       SubnetId: !Ref PrivateSubnet2
       RouteTableId: !Ref PrivateRouteTable
 
-  # S3 VPC Gateway Endpoint (free; Lambda → S3 via private route table,
-  #                           EC2 → S3 via public route table)
+  # S3 VPC Gateway Endpoint – free; keeps S3 traffic off the internet
   S3VPCEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
@@ -281,88 +331,11 @@ Resources:
         - !Ref PrivateRouteTable
         - !Ref PublicRouteTable
 
-  # VPC Interface Endpoints – Lambda (no internet route) → AWS services
-  VPCEndpointSG:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: HTTPS from within VPC for interface endpoints
-      VpcId: !Ref VPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          CidrIp: !Ref VpcCidr
-          Description: HTTPS from VPC
-      Tags:
-        - Key: Name
-          Value: !Sub expertise-rag-vpce-sg-${Environment}
-
-  BedrockRuntimeEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref VPC
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.bedrock-runtime
-      VpcEndpointType: Interface
-      SubnetIds:
-        - !Ref PrivateSubnet1
-      SecurityGroupIds:
-        - !Ref VPCEndpointSG
-      PrivateDnsEnabled: true
-
-  SecretsManagerEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref VPC
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.secretsmanager
-      VpcEndpointType: Interface
-      SubnetIds:
-        - !Ref PrivateSubnet1
-      SecurityGroupIds:
-        - !Ref VPCEndpointSG
-      PrivateDnsEnabled: true
-
-  # SSM Interface Endpoints – allow Session Manager on EC2 (uses VPCEndpointSG)
-  SSMEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref VPC
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.ssm
-      VpcEndpointType: Interface
-      SubnetIds:
-        - !Ref PrivateSubnet1
-      SecurityGroupIds:
-        - !Ref VPCEndpointSG
-      PrivateDnsEnabled: true
-
-  SSMMessagesEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref VPC
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.ssmmessages
-      VpcEndpointType: Interface
-      SubnetIds:
-        - !Ref PrivateSubnet1
-      SecurityGroupIds:
-        - !Ref VPCEndpointSG
-      PrivateDnsEnabled: true
-
-  EC2MessagesEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref VPC
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.ec2messages
-      VpcEndpointType: Interface
-      SubnetIds:
-        - !Ref PrivateSubnet1
-      SecurityGroupIds:
-        - !Ref VPCEndpointSG
-      PrivateDnsEnabled: true
-
   # ───────────────────────────────────────────
   # Security Groups
   # ───────────────────────────────────────────
 
-  # Lambda functions SG – outbound only
+  # Lambda functions SG – outbound only (IPv4 for VPC-local, IPv6 for internet via EIGW)
   LambdaSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -371,6 +344,10 @@ Resources:
       SecurityGroupEgress:
         - IpProtocol: '-1'
           CidrIp: 0.0.0.0/0
+          Description: IPv4 egress (VPC-local: RDS, Memgraph EC2)
+        - IpProtocol: '-1'
+          CidrIpv6: ::/0
+          Description: IPv6 egress via EIGW (AWS APIs: Bedrock, Secrets Manager)
       Tags:
         - Key: Name
           Value: !Sub expertise-rag-lambda-sg-${Environment}
