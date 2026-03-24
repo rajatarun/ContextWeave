@@ -94,6 +94,69 @@ jobs:
       - name: Setup SAM
         uses: aws-actions/setup-sam@v2
 
+      # When a stack is deleted, ArtifactsBucket is retained (DeletionPolicy:
+      # Retain).  If we then try to create a new stack, CloudFormation fails
+      # trying to create a bucket that already exists.  Detect this case and
+      # import the existing bucket into the new stack so SAM deploy proceeds
+      # cleanly without re-creating (or re-uploading to) the bucket.
+      - name: Import retained S3 bucket into new stack (if needed)
+        run: |
+          STACK_NAME="${{ env.STACK_NAME_PROD }}"
+          REGION="${{ env.AWS_REGION }}"
+          BUCKET="expertise-rag-artifacts-${{ env.AWS_ACCOUNT_ID }}-prod"
+
+          STACK_STATUS=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" --region "$REGION" \
+            --query "Stacks[0].StackStatus" --output text 2>/dev/null \
+            || echo "DOES_NOT_EXIST")
+
+          if [ "$STACK_STATUS" != "DOES_NOT_EXIST" ]; then
+            echo "Stack already exists ($STACK_STATUS) – import not needed."
+            exit 0
+          fi
+
+          if ! aws s3api head-bucket --bucket "$BUCKET" --region "$REGION" 2>/dev/null; then
+            echo "Bucket $BUCKET not found – nothing to import."
+            exit 0
+          fi
+
+          echo "Retained bucket $BUCKET found; importing into new stack..."
+
+          aws cloudformation create-change-set \
+            --stack-name "$STACK_NAME" \
+            --region "$REGION" \
+            --change-set-name import-retained-bucket \
+            --change-set-type IMPORT \
+            --resources-to-import \
+              "[{\"ResourceType\":\"AWS::S3::Bucket\",\"LogicalResourceId\":\"ArtifactsBucket\",\"ResourceIdentifier\":{\"BucketName\":\"$BUCKET\"}}]" \
+            --template-body \
+              "{\"AWSTemplateFormatVersion\":\"2010-09-09\",\"Resources\":{\"ArtifactsBucket\":{\"Type\":\"AWS::S3::Bucket\",\"DeletionPolicy\":\"Retain\",\"UpdateReplacePolicy\":\"Retain\",\"Properties\":{\"BucketName\":\"$BUCKET\"}}}}"
+
+          aws cloudformation wait change-set-create-complete \
+            --stack-name "$STACK_NAME" \
+            --change-set-name import-retained-bucket \
+            --region "$REGION"
+
+          aws cloudformation execute-change-set \
+            --stack-name "$STACK_NAME" \
+            --change-set-name import-retained-bucket \
+            --region "$REGION"
+
+          echo "Waiting for import to complete..."
+          for i in $(seq 1 24); do
+            sleep 5
+            STATUS=$(aws cloudformation describe-stacks \
+              --stack-name "$STACK_NAME" --region "$REGION" \
+              --query "Stacks[0].StackStatus" --output text)
+            echo "[$i] $STATUS"
+            case "$STATUS" in
+              IMPORT_COMPLETE) echo "Import complete."; exit 0 ;;
+              IMPORT_ROLLBACK_COMPLETE|IMPORT_ROLLBACK_FAILED|ROLLBACK_COMPLETE)
+                echo "Import failed with status $STATUS"; exit 1 ;;
+            esac
+          done
+          echo "Timed out waiting for import"; exit 1
+
       # If a previous deploy left the stack in UPDATE_ROLLBACK_FAILED the next
       # sam deploy will immediately fail with "Stack is in UPDATE_ROLLBACK_FAILED
       # state and can not be updated".  Detect that state here and call
