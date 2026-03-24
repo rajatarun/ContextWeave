@@ -26,7 +26,7 @@ env:
   AWS_ACCOUNT_ID: "239571291755"
   DEPLOY_ROLE_ARN: arn:aws:iam::239571291755:role/teamweave-github-actions-sam-deployer
   SAM_TEMPLATE: template.yaml
-  STACK_NAME_PROD: expertise-rag-prod
+  STACK_NAME_PROD: contextweave-rag-prod
 
 jobs:
   # ───────────────────────────────────────────────────────────────────────────
@@ -103,7 +103,7 @@ jobs:
         run: |
           STACK_NAME="${{ env.STACK_NAME_PROD }}"
           REGION="${{ env.AWS_REGION }}"
-          BUCKET="expertise-rag-artifacts-${{ env.AWS_ACCOUNT_ID }}-prod"
+          BUCKET="contextweave-rag-artifacts-${{ env.AWS_ACCOUNT_ID }}-prod"
 
           STACK_STATUS=$(aws cloudformation describe-stacks \
             --stack-name "$STACK_NAME" --region "$REGION" \
@@ -224,7 +224,7 @@ jobs:
 
       - name: Stage Memgraph Docker image to S3
         run: |
-          BUCKET="expertise-rag-artifacts-${{ env.AWS_ACCOUNT_ID }}-prod"
+          BUCKET="contextweave-rag-artifacts-${{ env.AWS_ACCOUNT_ID }}-prod"
           S3_KEY="binaries/memgraph-3.8.1.tar.gz"
           # Skip if already staged (avoids re-uploading ~400 MB on every deploy)
           if aws s3 ls "s3://${BUCKET}/${S3_KEY}" --region ${{ env.AWS_REGION }} 2>/dev/null; then

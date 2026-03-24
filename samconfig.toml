@@ -11,15 +11,15 @@ version = 0.1
 
 [default]
 [default.global.parameters]
-stack_name = "expertise-rag-dev"
+stack_name = "contextweave-rag-dev"
 
 [default.build.parameters]
 cached = true
 parallel = true
 
 [default.deploy.parameters]
-stack_name           = "expertise-rag-dev"
-s3_prefix            = "expertise-rag"
+stack_name           = "contextweave-rag-dev"
+s3_prefix            = "contextweave-rag"
 region               = "us-east-1"
 confirm_changeset    = true
 capabilities         = "CAPABILITY_NAMED_IAM"
@@ -46,8 +46,8 @@ tags = [
 # ─────────────────────────────────────────────────────────────────────────────
 [staging]
 [staging.deploy.parameters]
-stack_name           = "expertise-rag-staging"
-s3_prefix            = "expertise-rag-staging"
+stack_name           = "contextweave-rag-staging"
+s3_prefix            = "contextweave-rag-staging"
 region               = "us-east-1"
 confirm_changeset    = true
 capabilities         = "CAPABILITY_NAMED_IAM"
@@ -69,8 +69,8 @@ tags = [
 # ─────────────────────────────────────────────────────────────────────────────
 [prod]
 [prod.deploy.parameters]
-stack_name           = "expertise-rag-prod"
-s3_prefix            = "expertise-rag-prod"
+stack_name           = "contextweave-rag-prod"
+s3_prefix            = "contextweave-rag-prod"
 region               = "us-east-1"
 confirm_changeset    = true
 capabilities         = "CAPABILITY_NAMED_IAM"
