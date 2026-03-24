@@ -1259,6 +1259,7 @@ Resources:
     DependsOn:
       - PostgresSecretAttachment
       - MemgraphEC2
+      - SecretsManagerVPCEndpoint
     Properties:
       ServiceToken: !GetAtt DBInitFunction.Arn
       TriggerReason: post-deployment

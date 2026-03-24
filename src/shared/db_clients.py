@@ -30,9 +30,11 @@ def _get_secret(secret_arn: str) -> dict:
         return _secrets_cache[secret_arn]
 
     import boto3
+    from botocore.config import Config
     client = boto3.client(
         "secretsmanager",
         region_name=os.environ.get("AWS_REGION", "us-east-1"),
+        config=Config(connect_timeout=5, retries={"max_attempts": 2}),
     )
     response = client.get_secret_value(SecretId=secret_arn)
     secret = json.loads(response["SecretString"])
