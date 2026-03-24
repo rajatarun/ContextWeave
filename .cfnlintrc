@@ -1,0 +1,8 @@
+# cfn-lint configuration for ContextWeave / ExpertiseRAG
+#
+# E3002: InstanceMarketOptions is a valid AWS::EC2::Instance property per the
+# CloudFormation service API but is absent from cfn-lint's bundled schema.
+# Suppress the false-positive here rather than adding resource-level Metadata
+# blocks (which can confuse CloudFormation's EarlyValidation hooks).
+ignore_checks:
+  - E3002

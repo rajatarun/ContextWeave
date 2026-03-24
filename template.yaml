@@ -485,16 +485,6 @@ Resources:
 
   MemgraphEC2:
     Type: AWS::EC2::Instance
-    Metadata:
-      # cfn-lint's bundled schema doesn't include InstanceMarketOptions for
-      # AWS::EC2::Instance (E3002), but it is a valid CloudFormation property.
-      # Suppress the false-positive rather than routing through a LaunchTemplate,
-      # which triggers AWS::EarlyValidation::ResourceExistenceCheck at changeset
-      # creation time because the LT ID doesn't exist yet in a new stack.
-      cfn-lint:
-        config:
-          ignore_checks:
-            - E3002
     Properties:
       InstanceType: !Ref MemgraphInstanceType
       # Persistent Spot request: instance restarts automatically when capacity
@@ -940,7 +930,7 @@ Resources:
                   - bedrock:InvokeModel
                   - bedrock:InvokeModelWithResponseStream
                 Resource:
-                  - arn:aws:bedrock:*::foundation-model/amazon.nova-pro-v1:0
+                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-pro-v1:0
                   - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.amazon.nova-pro-v1:0
                   - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0
         - PolicyName: S3ReadDerived
