@@ -344,7 +344,7 @@ Resources:
       SecurityGroupEgress:
         - IpProtocol: '-1'
           CidrIp: 0.0.0.0/0
-          Description: IPv4 egress (VPC-local: RDS, Memgraph EC2)
+          Description: "IPv4 egress (VPC-local: RDS, Memgraph EC2)"
         - IpProtocol: '-1'
           CidrIpv6: ::/0
           Description: IPv6 egress via EIGW (AWS APIs: Bedrock, Secrets Manager)
