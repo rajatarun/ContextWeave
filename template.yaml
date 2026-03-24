@@ -514,6 +514,20 @@ Resources:
         - !Ref MemgraphSG
       IamInstanceProfile: !Ref MemgraphInstanceProfile
       KeyName: !If [HasEC2KeyPair, !Ref EC2KeyPairName, !Ref AWS::NoValue]
+      # Data volume defined inline so it is always attached before UserData runs,
+      # eliminating the race condition that occurs when a separate
+      # AWS::EC2::VolumeAttachment is used during instance replacement.
+      # DeleteOnTermination: false preserves the volume across stop/start;
+      # on a true instance replacement a fresh volume is created (acceptable
+      # because Memgraph data can be re-ingested from S3).
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvdf
+          Ebs:
+            VolumeSize: !Ref MemgraphEBSSizeGB
+            VolumeType: gp3
+            Encrypted: true
+            KmsKeyId: !Ref ArtifactsKMSKey
+            DeleteOnTermination: false
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
@@ -609,29 +623,6 @@ Resources:
           Value: ExpertiseRAG
         - Key: Environment
           Value: !Ref Environment
-
-  MemgraphEBSVolume:
-    Type: AWS::EC2::Volume
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      AvailabilityZone: !Select [0, !GetAZs '']
-      Size: !Ref MemgraphEBSSizeGB
-      VolumeType: gp3
-      Encrypted: true
-      KmsKeyId: !Ref ArtifactsKMSKey
-      Tags:
-        - Key: Name
-          Value: !Sub expertise-rag-memgraph-data-${Environment}
-        - Key: Project
-          Value: ExpertiseRAG
-
-  MemgraphEBSAttachment:
-    Type: AWS::EC2::VolumeAttachment
-    Properties:
-      InstanceId: !Ref MemgraphEC2
-      VolumeId: !Ref MemgraphEBSVolume
-      Device: /dev/xvdf
 
   # ───────────────────────────────────────────
   # RDS PostgreSQL with pgvector
@@ -1195,7 +1186,6 @@ Resources:
     DependsOn:
       - PostgresSecretAttachment
       - MemgraphEC2
-      - MemgraphEBSAttachment
     Properties:
       ServiceToken: !GetAtt DBInitFunction.Arn
       TriggerReason: post-deployment
