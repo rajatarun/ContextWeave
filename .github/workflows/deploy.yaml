@@ -94,6 +94,61 @@ jobs:
       - name: Setup SAM
         uses: aws-actions/setup-sam@v2
 
+      # If a previous deploy left the stack in UPDATE_ROLLBACK_FAILED the next
+      # sam deploy will immediately fail with "Stack is in UPDATE_ROLLBACK_FAILED
+      # state and can not be updated".  Detect that state here and call
+      # continue-update-rollback, skipping any resource that is itself stuck in
+      # UPDATE_FAILED, so the stack reaches UPDATE_ROLLBACK_COMPLETE before we
+      # attempt a fresh deploy.
+      - name: Recover stack from UPDATE_ROLLBACK_FAILED (if needed)
+        run: |
+          STATUS=$(aws cloudformation describe-stacks \
+            --stack-name "${{ env.STACK_NAME_PROD }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --query "Stacks[0].StackStatus" \
+            --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+
+          echo "Current stack status: $STATUS"
+
+          if [ "$STATUS" != "UPDATE_ROLLBACK_FAILED" ]; then
+            echo "No recovery needed."
+            exit 0
+          fi
+
+          echo "Stack is stuck in UPDATE_ROLLBACK_FAILED – collecting failed resources..."
+
+          # Collect every LogicalResourceId that appears in UPDATE_FAILED status
+          # across the most-recent stack events (last 200 is enough for any realistic
+          # changeset).  Duplicates are removed; the list is space-separated.
+          FAILED=$(aws cloudformation describe-stack-events \
+            --stack-name "${{ env.STACK_NAME_PROD }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --max-items 200 \
+            --query "StackEvents[?ResourceStatus=='UPDATE_FAILED'].LogicalResourceId" \
+            --output text \
+          | tr '\t' '\n' | sort -u | tr '\n' ' ' | xargs)
+
+          echo "Resources to skip: $FAILED"
+
+          if [ -z "$FAILED" ]; then
+            echo "No UPDATE_FAILED resources found; attempting bare continue-update-rollback."
+            aws cloudformation continue-update-rollback \
+              --stack-name "${{ env.STACK_NAME_PROD }}" \
+              --region "${{ env.AWS_REGION }}"
+          else
+            aws cloudformation continue-update-rollback \
+              --stack-name "${{ env.STACK_NAME_PROD }}" \
+              --region "${{ env.AWS_REGION }}" \
+              --resources-to-skip $FAILED
+          fi
+
+          echo "Waiting for rollback to complete..."
+          aws cloudformation wait stack-rollback-complete \
+            --stack-name "${{ env.STACK_NAME_PROD }}" \
+            --region "${{ env.AWS_REGION }}"
+
+          echo "Stack recovered to UPDATE_ROLLBACK_COMPLETE."
+
       - name: SAM build
         run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel
 
