@@ -1183,6 +1183,12 @@ Resources:
   # ───────────────────────────────────────────
   PostDeploymentDBInit:
     Type: AWS::CloudFormation::CustomResource
+    # DeletionPolicy: Retain prevents CloudFormation from invoking the Lambda
+    # Delete handler during stack deletion.  The handler is a no-op anyway, but
+    # without Retain, CloudFormation waits for a response signal that may never
+    # arrive if VPC/NAT resources are torn down before the Lambda can PUT to the
+    # pre-signed S3 ResponseURL, causing the deletion to time out and fail.
+    DeletionPolicy: Retain
     DependsOn:
       - PostgresSecretAttachment
       - MemgraphEC2
