@@ -487,6 +487,15 @@ Resources:
     Type: AWS::EC2::Instance
     Properties:
       InstanceType: !Ref MemgraphInstanceType
+      # Spot instance – persistent request with stop-on-interruption so the
+      # instance is automatically re-started when capacity is restored.
+      # EBS data survives interruption; Memgraph resumes from disk on restart.
+      # Typical saving vs on-demand: 50-70% for Graviton instance families.
+      InstanceMarketOptions:
+        MarketType: spot
+        SpotOptions:
+          SpotInstanceType: persistent
+          InstanceInterruptionBehavior: stop
       ImageId: !If
         - MemgraphIsGraviton
         - '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}'
