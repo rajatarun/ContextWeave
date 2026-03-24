@@ -222,24 +222,6 @@ jobs:
       - name: SAM build
         run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel
 
-      - name: Stage Memgraph Docker image to S3
-        run: |
-          BUCKET="contextweave-rag-artifacts-${{ env.AWS_ACCOUNT_ID }}-prod"
-          S3_KEY="binaries/memgraph-3.8.1.tar.gz"
-          # Skip if already staged (avoids re-uploading ~400 MB on every deploy)
-          if aws s3 ls "s3://${BUCKET}/${S3_KEY}" --region ${{ env.AWS_REGION }} 2>/dev/null; then
-            echo "Memgraph image already staged at s3://${BUCKET}/${S3_KEY} – skipping."
-          else
-            echo "Pulling memgraph/memgraph:3.8.1 and staging to S3..."
-            docker pull memgraph/memgraph:3.8.1
-            docker save memgraph/memgraph:3.8.1 | gzip > /tmp/memgraph-3.8.1.tar.gz
-            aws s3 cp /tmp/memgraph-3.8.1.tar.gz \
-              "s3://${BUCKET}/${S3_KEY}" \
-              --region ${{ env.AWS_REGION }}
-            rm /tmp/memgraph-3.8.1.tar.gz
-            echo "Staged successfully."
-          fi
-
       - name: SAM deploy – prod
         run: |
           sam deploy \
@@ -285,6 +267,24 @@ jobs:
           echo "### Deploy Outputs (prod)" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Artifacts bucket**: \`$BUCKET\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- **API endpoint**: $API" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Stage Memgraph Docker image to S3
+        run: |
+          BUCKET="contextweave-rag-artifacts-${{ env.AWS_ACCOUNT_ID }}-prod"
+          S3_KEY="binaries/memgraph-3.8.1.tar.gz"
+          # Skip if already staged (avoids re-uploading ~400 MB on every deploy)
+          if aws s3 ls "s3://${BUCKET}/${S3_KEY}" --region ${{ env.AWS_REGION }} 2>/dev/null; then
+            echo "Memgraph image already staged at s3://${BUCKET}/${S3_KEY} – skipping."
+          else
+            echo "Pulling memgraph/memgraph:3.8.1 and staging to S3..."
+            docker pull memgraph/memgraph:3.8.1
+            docker save memgraph/memgraph:3.8.1 | gzip > /tmp/memgraph-3.8.1.tar.gz
+            aws s3 cp /tmp/memgraph-3.8.1.tar.gz \
+              "s3://${BUCKET}/${S3_KEY}" \
+              --region ${{ env.AWS_REGION }}
+            rm /tmp/memgraph-3.8.1.tar.gz
+            echo "Staged successfully."
+          fi
 
       - name: Push repo signals and docs to S3
         run: |
