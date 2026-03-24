@@ -483,16 +483,27 @@ Resources:
       Roles:
         - !Ref MemgraphInstanceRole
 
+  MemgraphLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub contextweave-rag-memgraph-${Environment}
+      LaunchTemplateData:
+        # Persistent Spot request: instance restarts automatically when capacity
+        # is restored; EBS data survives interruption.  ~50-70% saving vs on-demand.
+        # InstanceMarketOptions is only valid in LaunchTemplate, not AWS::EC2::Instance.
+        InstanceMarketOptions:
+          MarketType: spot
+          SpotOptions:
+            SpotInstanceType: persistent
+            InstanceInterruptionBehavior: stop
+
   MemgraphEC2:
     Type: AWS::EC2::Instance
     Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref MemgraphLaunchTemplate
+        Version: !GetAtt MemgraphLaunchTemplate.LatestVersionNumber
       InstanceType: !Ref MemgraphInstanceType
-      # Persistent Spot request: instance restarts automatically when capacity
-      # is restored; EBS data survives interruption.  ~50-70% saving vs on-demand.
-      InstanceMarketOptions:
-        MarketType: spot
-        SpotOptions:
-          SpotInstanceType: persistent
       ImageId: !If
         - MemgraphIsGraviton
         - '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}'
