@@ -117,16 +117,23 @@ jobs:
 
           echo "Stack is stuck in UPDATE_ROLLBACK_FAILED – collecting failed resources..."
 
-          # Collect every LogicalResourceId that appears in UPDATE_FAILED status
-          # across the most-recent stack events (last 200 is enough for any realistic
-          # changeset).  Duplicates are removed; the list is space-separated.
+          # Only resources whose rollback genuinely failed (not ones that were
+          # cascade-cancelled) may be passed to --resources-to-skip.
+          # Filter out any event where ResourceStatusReason contains "cancelled".
           FAILED=$(aws cloudformation describe-stack-events \
             --stack-name "${{ env.STACK_NAME_PROD }}" \
             --region "${{ env.AWS_REGION }}" \
             --max-items 200 \
-            --query "StackEvents[?ResourceStatus=='UPDATE_FAILED'].LogicalResourceId" \
-            --output text \
-          | tr '\t' '\n' | sort -u | tr '\n' ' ' | xargs)
+            --output json \
+          | jq -r '
+              .StackEvents[]
+              | select(
+                  .ResourceStatus == "UPDATE_FAILED" and
+                  ((.ResourceStatusReason // "") | ascii_downcase | contains("cancelled") | not)
+                )
+              | .LogicalResourceId
+            ' \
+          | sort -u | tr '\n' ' ' | xargs)
 
           echo "Resources to skip: $FAILED"
 
