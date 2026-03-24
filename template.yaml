@@ -483,28 +483,27 @@ Resources:
       Roles:
         - !Ref MemgraphInstanceRole
 
-  # Spot market options live in a LaunchTemplate (cfn-lint doesn't recognise
-  # InstanceMarketOptions directly on AWS::EC2::Instance).
-  # Persistent request + stop-on-interruption: EBS data survives, instance
-  # restarts automatically when Spot capacity is restored (~50-70% saving).
-  MemgraphLaunchTemplate:
-    Type: AWS::EC2::LaunchTemplate
-    Properties:
-      LaunchTemplateName: !Sub expertise-rag-memgraph-spot-${Environment}
-      LaunchTemplateData:
-        InstanceMarketOptions:
-          MarketType: spot
-          SpotOptions:
-            SpotInstanceType: persistent
-            InstanceInterruptionBehavior: stop
-
   MemgraphEC2:
     Type: AWS::EC2::Instance
+    Metadata:
+      # cfn-lint's bundled schema doesn't include InstanceMarketOptions for
+      # AWS::EC2::Instance (E3002), but it is a valid CloudFormation property.
+      # Suppress the false-positive rather than routing through a LaunchTemplate,
+      # which triggers AWS::EarlyValidation::ResourceExistenceCheck at changeset
+      # creation time because the LT ID doesn't exist yet in a new stack.
+      cfn-lint:
+        config:
+          ignore_checks:
+            - E3002
     Properties:
       InstanceType: !Ref MemgraphInstanceType
-      LaunchTemplate:
-        LaunchTemplateId: !Ref MemgraphLaunchTemplate
-        Version: !GetAtt MemgraphLaunchTemplate.LatestVersionNumber
+      # Persistent Spot request: instance restarts automatically when capacity
+      # is restored; EBS data survives interruption.  ~50-70% saving vs on-demand.
+      InstanceMarketOptions:
+        MarketType: spot
+        SpotOptions:
+          SpotInstanceType: persistent
+          InstanceInterruptionBehavior: stop
       ImageId: !If
         - MemgraphIsGraviton
         - '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}'
