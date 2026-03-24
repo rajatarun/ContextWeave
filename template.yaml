@@ -150,7 +150,7 @@ Resources:
   ArtifactsKMSKeyAlias:
     Type: AWS::KMS::Alias
     Properties:
-      AliasName: !Sub alias/expertise-rag-${Environment}
+      AliasName: !Sub alias/contextweave-rag-${Environment}
       TargetKeyId: !Ref ArtifactsKMSKey
 
   # ───────────────────────────────────────────
@@ -403,7 +403,7 @@ Resources:
   MemgraphSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub expertise-rag-memgraph-${Environment}
+      Name: !Sub contextweave-rag-memgraph-${Environment}
       Description: Memgraph EC2 connection info for ExpertiseRAG
       # EC2 private IP is injected at deploy time via !Sub ${MemgraphEC2.PrivateIp}
       # Username/password are empty (Memgraph CE has no auth by default)
@@ -428,7 +428,7 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      Name: !Sub expertise-rag-postgres-${Environment}
+      Name: !Sub contextweave-rag-postgres-${Environment}
       Description: PostgreSQL credentials for ExpertiseRAG pgvector
       GenerateSecretString:
         SecretStringTemplate: !Sub |
@@ -452,7 +452,7 @@ Resources:
   MemgraphInstanceRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub expertise-rag-memgraph-ec2-${Environment}
+      RoleName: !Sub contextweave-rag-memgraph-ec2-${Environment}
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -483,17 +483,25 @@ Resources:
       Roles:
         - !Ref MemgraphInstanceRole
 
+  MemgraphLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        # Persistent Spot request: instance restarts automatically when capacity
+        # is restored; EBS data survives interruption.  ~50-70% saving vs on-demand.
+        InstanceMarketOptions:
+          MarketType: spot
+          SpotOptions:
+            SpotInstanceType: persistent
+            InstanceInterruptionBehavior: stop
+
   MemgraphEC2:
     Type: AWS::EC2::Instance
     Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref MemgraphLaunchTemplate
+        Version: !GetAtt MemgraphLaunchTemplate.LatestVersionNumber
       InstanceType: !Ref MemgraphInstanceType
-      # Persistent Spot request: instance restarts automatically when capacity
-      # is restored; EBS data survives interruption.  ~50-70% saving vs on-demand.
-      InstanceMarketOptions:
-        MarketType: spot
-        SpotOptions:
-          SpotInstanceType: persistent
-          InstanceInterruptionBehavior: stop
       ImageId: !If
         - MemgraphIsGraviton
         - '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}'
@@ -632,7 +640,7 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      DBInstanceIdentifier: !Sub expertise-rag-postgres-${Environment}
+      DBInstanceIdentifier: !Sub contextweave-rag-postgres-${Environment}
       DBInstanceClass: !Ref PostgresInstanceClass
       Engine: postgres
       EngineVersion: '16.6'
@@ -741,7 +749,7 @@ Resources:
   PreprocessorLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/expertise-rag-preprocessor-${Environment}
+      LogGroupName: !Sub /aws/lambda/contextweave-rag-preprocessor-${Environment}
       RetentionInDays: !Ref LogRetentionDays
       Tags:
         - Key: Project
@@ -752,7 +760,7 @@ Resources:
   QueryAPILogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/expertise-rag-query-api-${Environment}
+      LogGroupName: !Sub /aws/lambda/contextweave-rag-query-api-${Environment}
       RetentionInDays: !Ref LogRetentionDays
       Tags:
         - Key: Project
@@ -763,7 +771,7 @@ Resources:
   DBInitLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/expertise-rag-db-init-${Environment}
+      LogGroupName: !Sub /aws/lambda/contextweave-rag-db-init-${Environment}
       RetentionInDays: !Ref LogRetentionDays
       Tags:
         - Key: Project
@@ -775,7 +783,7 @@ Resources:
     Type: AWS::Logs::LogGroup
     Condition: DeployStepFunctions
     Properties:
-      LogGroupName: !Sub /aws/states/expertise-rag-ingestion-${Environment}
+      LogGroupName: !Sub /aws/states/contextweave-rag-ingestion-${Environment}
       RetentionInDays: !Ref LogRetentionDays
       Tags:
         - Key: Project
@@ -786,7 +794,7 @@ Resources:
   ApiGatewayLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/apigateway/expertise-rag-${Environment}
+      LogGroupName: !Sub /aws/apigateway/contextweave-rag-${Environment}
       RetentionInDays: !Ref LogRetentionDays
       Tags:
         - Key: Project
@@ -802,7 +810,7 @@ Resources:
   LambdaVPCPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: !Sub expertise-rag-lambda-vpc-${Environment}
+      ManagedPolicyName: !Sub contextweave-rag-lambda-vpc-${Environment}
       Description: Allows Lambda to create/delete VPC ENIs
       PolicyDocument:
         Version: '2012-10-17'
@@ -820,7 +828,7 @@ Resources:
   SecretsReadPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: !Sub expertise-rag-secrets-read-${Environment}
+      ManagedPolicyName: !Sub contextweave-rag-secrets-read-${Environment}
       Description: Allows ExpertiseRAG Lambdas to read DB secrets
       PolicyDocument:
         Version: '2012-10-17'
@@ -837,7 +845,7 @@ Resources:
   PreprocessorRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub expertise-rag-preprocessor-${Environment}
+      RoleName: !Sub contextweave-rag-preprocessor-${Environment}
       Description: Allows preprocessor Lambda to read/write S3, embed via Bedrock, write to Memgraph and pgvector
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -905,7 +913,7 @@ Resources:
   QueryAPIRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub expertise-rag-query-api-${Environment}
+      RoleName: !Sub contextweave-rag-query-api-${Environment}
       Description: Allows Query API Lambda to embed via Bedrock, query Memgraph, and query pgvector
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -959,7 +967,7 @@ Resources:
   DBInitRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub expertise-rag-db-init-${Environment}
+      RoleName: !Sub contextweave-rag-db-init-${Environment}
       Description: Allows DB init Lambda to create pgvector schema and seed Memgraph routing graph
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -999,7 +1007,7 @@ Resources:
     Type: AWS::IAM::Role
     Condition: DeployStepFunctions
     Properties:
-      RoleName: !Sub expertise-rag-sfn-${Environment}
+      RoleName: !Sub contextweave-rag-sfn-${Environment}
       Description: Allows Step Functions ingestion state machine to invoke Lambdas
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -1057,7 +1065,7 @@ Resources:
     Type: AWS::Serverless::Function
     DependsOn: PreprocessorLogGroup
     Properties:
-      FunctionName: !Sub expertise-rag-preprocessor-${Environment}
+      FunctionName: !Sub contextweave-rag-preprocessor-${Environment}
       Description: >
         Reads raw repo uploads from S3, extracts text, chunks and embeds content,
         writes to pgvector and Memgraph, then emits derived JSON artifacts to S3.
@@ -1091,7 +1099,7 @@ Resources:
     Type: AWS::Serverless::Function
     DependsOn: QueryAPILogGroup
     Properties:
-      FunctionName: !Sub expertise-rag-query-api-${Environment}
+      FunctionName: !Sub contextweave-rag-query-api-${Environment}
       Description: >
         Reasoning API: classifies questions, retrieves from pgvector, expands
         graph-linked evidence via Memgraph, synthesizes answers, and returns
@@ -1141,7 +1149,7 @@ Resources:
     Type: AWS::Serverless::Function
     DependsOn: DBInitLogGroup
     Properties:
-      FunctionName: !Sub expertise-rag-db-init-${Environment}
+      FunctionName: !Sub contextweave-rag-db-init-${Environment}
       Description: >
         Creates pgvector schema in PostgreSQL and seeds the Memgraph routing graph
         with initial EFFECTIVE_FOR edge weights. Invoked as a CloudFormation custom
@@ -1228,7 +1236,7 @@ Resources:
     Type: AWS::Serverless::StateMachine
     Condition: DeployStepFunctions
     Properties:
-      Name: !Sub expertise-rag-ingestion-${Environment}
+      Name: !Sub contextweave-rag-ingestion-${Environment}
       Type: STANDARD
       Role: !GetAtt StepFunctionsRole.Arn
       Logging:
