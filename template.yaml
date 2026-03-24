@@ -223,22 +223,6 @@ Resources:
         - Key: Name
           Value: !Sub expertise-rag-private-2-${Environment}
 
-  # NAT Gateway (in public subnet, for Lambda/EC2 outbound internet)
-  NatEIP:
-    Type: AWS::EC2::EIP
-    DependsOn: VPCGatewayAttachment
-    Properties:
-      Domain: vpc
-
-  NatGateway:
-    Type: AWS::EC2::NatGateway
-    Properties:
-      AllocationId: !GetAtt NatEIP.AllocationId
-      SubnetId: !Ref PublicSubnet1
-      Tags:
-        - Key: Name
-          Value: !Sub expertise-rag-nat-${Environment}
-
   # Route tables
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -269,13 +253,9 @@ Resources:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref VPC
-
-  PrivateRoute:
-    Type: AWS::EC2::Route
-    Properties:
-      RouteTableId: !Ref PrivateRouteTable
-      DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !Ref NatGateway
+    # No default route — Lambda only needs VPC-local routing + VPC endpoints.
+    # Internet-bound traffic (e.g. Docker pull) goes through Memgraph EC2 in
+    # the public subnet via the IGW route table instead.
 
   PrivateSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
@@ -289,7 +269,8 @@ Resources:
       SubnetId: !Ref PrivateSubnet2
       RouteTableId: !Ref PrivateRouteTable
 
-  # S3 VPC Gateway Endpoint (Lambda + EC2 → S3 without NAT)
+  # S3 VPC Gateway Endpoint (free; Lambda → S3 via private route table,
+  #                           EC2 → S3 via public route table)
   S3VPCEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
@@ -298,23 +279,49 @@ Resources:
       VpcEndpointType: Gateway
       RouteTableIds:
         - !Ref PrivateRouteTable
+        - !Ref PublicRouteTable
 
-  # SSM Interface Endpoints – allow Session Manager on private EC2 (no internet needed)
-  SSMEndpointSG:
+  # VPC Interface Endpoints – Lambda (no internet route) → AWS services
+  VPCEndpointSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: HTTPS from within VPC for SSM interface endpoints
+      GroupDescription: HTTPS from within VPC for interface endpoints
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
           CidrIp: !Ref VpcCidr
-          Description: HTTPS from VPC for SSM agent
+          Description: HTTPS from VPC
       Tags:
         - Key: Name
-          Value: !Sub expertise-rag-ssm-endpoint-sg-${Environment}
+          Value: !Sub expertise-rag-vpce-sg-${Environment}
 
+  BedrockRuntimeEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.bedrock-runtime
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1
+      SecurityGroupIds:
+        - !Ref VPCEndpointSG
+      PrivateDnsEnabled: true
+
+  SecretsManagerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.secretsmanager
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1
+      SecurityGroupIds:
+        - !Ref VPCEndpointSG
+      PrivateDnsEnabled: true
+
+  # SSM Interface Endpoints – allow Session Manager on EC2 (uses VPCEndpointSG)
   SSMEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
@@ -324,7 +331,7 @@ Resources:
       SubnetIds:
         - !Ref PrivateSubnet1
       SecurityGroupIds:
-        - !Ref SSMEndpointSG
+        - !Ref VPCEndpointSG
       PrivateDnsEnabled: true
 
   SSMMessagesEndpoint:
@@ -336,7 +343,7 @@ Resources:
       SubnetIds:
         - !Ref PrivateSubnet1
       SecurityGroupIds:
-        - !Ref SSMEndpointSG
+        - !Ref VPCEndpointSG
       PrivateDnsEnabled: true
 
   EC2MessagesEndpoint:
@@ -348,7 +355,7 @@ Resources:
       SubnetIds:
         - !Ref PrivateSubnet1
       SecurityGroupIds:
-        - !Ref SSMEndpointSG
+        - !Ref VPCEndpointSG
       PrivateDnsEnabled: true
 
   # ───────────────────────────────────────────
@@ -507,7 +514,7 @@ Resources:
         - MemgraphIsGraviton
         - '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}'
         - '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
-      SubnetId: !Ref PrivateSubnet1
+      SubnetId: !Ref PublicSubnet1
       SecurityGroupIds:
         - !Ref MemgraphSG
       IamInstanceProfile: !Ref MemgraphInstanceProfile
