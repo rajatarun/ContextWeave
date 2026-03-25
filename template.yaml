@@ -470,7 +470,6 @@ Resources:
   MemgraphSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub contextweave-rag-memgraph-${Environment}
       Description: Memgraph EC2 connection info for ExpertiseRAG
       # EC2 private IP is injected at deploy time via !Sub ${MemgraphEC2.PrivateIp}
       # Username/password are empty (Memgraph CE has no auth by default)
@@ -495,7 +494,6 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      Name: !Sub contextweave-rag-postgres-${Environment}
       Description: PostgreSQL credentials for ExpertiseRAG pgvector
       GenerateSecretString:
         SecretStringTemplate: !Sub |
