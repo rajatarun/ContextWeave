@@ -158,8 +158,11 @@ Resources:
   #
   # Cost model:
   #   IGW   – free (EC2 outbound IPv4/IPv6)
-  #   EIGW  – free (Lambda outbound IPv6 only; blocks inbound)
-  #   No NAT Gateway, no VPC Interface Endpoints
+  #   EIGW  – free (blocks inbound; retained for any future IPv6-native traffic)
+  #   No NAT Gateway
+  #   VPC Interface Endpoints (Secrets Manager, Bedrock Runtime, Neptune Graph)
+  #     replaces NAT: Lambda in private subnet reaches AWS APIs without IPv4
+  #     internet access; ~$0.01/hr/AZ each, cheaper than NAT Gateway
   # ───────────────────────────────────────────
   VPC:
     Type: AWS::EC2::VPC
@@ -331,11 +334,57 @@ Resources:
         - !Ref PrivateRouteTable
         - !Ref PublicRouteTable
 
+  # VPC Interface Endpoints – Lambda lives in private subnets with no NAT
+  # Gateway, so it cannot reach AWS service APIs over the public internet.
+  # Interface endpoints inject private IPs into the VPC; PrivateDnsEnabled
+  # means the standard hostname (e.g. secretsmanager.us-east-1.amazonaws.com)
+  # resolves to those private IPs, so boto3 needs no code changes.
+  SecretsManagerVPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.secretsmanager
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      SecurityGroupIds:
+        - !Ref VPCEndpointSG
+      PrivateDnsEnabled: true
+
+  BedrockRuntimeVPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.bedrock-runtime
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      SecurityGroupIds:
+        - !Ref VPCEndpointSG
+      PrivateDnsEnabled: true
+
+  NeptuneGraphVPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.neptune-graph
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      SecurityGroupIds:
+        - !Ref VPCEndpointSG
+      PrivateDnsEnabled: true
+
   # ───────────────────────────────────────────
   # Security Groups
   # ───────────────────────────────────────────
 
-  # Lambda functions SG – outbound only (IPv4 for VPC-local, IPv6 for internet via EIGW)
+  # Lambda functions SG – outbound only
+  # IPv4: VPC-local (RDS, Memgraph EC2) + VPC Interface Endpoints (443)
+  # IPv6: retained for future use (EIGW blocks inbound)
   LambdaSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -344,13 +393,31 @@ Resources:
       SecurityGroupEgress:
         - IpProtocol: '-1'
           CidrIp: 0.0.0.0/0
-          Description: "IPv4 egress (VPC-local: RDS, Memgraph EC2)"
+          Description: "IPv4 egress (VPC-local + VPC Interface Endpoints)"
         - IpProtocol: '-1'
           CidrIpv6: ::/0
-          Description: "IPv6 egress via EIGW (AWS APIs: Bedrock, Secrets Manager)"
+          Description: "IPv6 egress (future use)"
       Tags:
         - Key: Name
           Value: !Sub contextweave-rag-lambda-sg-${Environment}
+
+  # VPC Interface Endpoint SG – HTTPS (443) inbound from Lambda only
+  VPCEndpointSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ExpertiseRAG VPC Interface Endpoints - HTTPS from Lambda
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref LambdaSG
+          Description: HTTPS from Lambda functions
+      Tags:
+        - Key: Name
+          Value: !Sub contextweave-rag-vpce-sg-${Environment}
+        - Key: Project
+          Value: ExpertiseRAG
 
   # Memgraph EC2 SG – bolt (7687) from Lambda, SSH from admin CIDR
   MemgraphSG:
@@ -1192,6 +1259,7 @@ Resources:
     DependsOn:
       - PostgresSecretAttachment
       - MemgraphEC2
+      - SecretsManagerVPCEndpoint
     Properties:
       ServiceToken: !GetAtt DBInitFunction.Arn
       TriggerReason: post-deployment
