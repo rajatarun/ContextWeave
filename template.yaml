@@ -1153,7 +1153,12 @@ Resources:
         Variables:
           DERIVED_PREFIX: derived
           RAW_PREFIX: raw
-          AWS_ENDPOINT_URL_BEDROCK_RUNTIME: !Sub "https://bedrock-runtime.${AWS::Region}.amazonaws.com"
+          # Use the VPC endpoint's own DNS name (bypasses private-DNS resolution,
+          # which was returning the public IP instead of the ENI private IP).
+          # !GetAtt DnsEntries format: "{hosted-zone-id}:{dns-name}" → take index 1 after split.
+          AWS_ENDPOINT_URL_BEDROCK_RUNTIME: !Sub
+            - "https://${DnsName}"
+            - DnsName: !Select [1, !Split [":", !Select [0, !GetAtt BedrockRuntimeVPCEndpoint.DnsEntries]]]
       Events:
         StepFunctionsTrigger:
           Type: EventBridgeRule
@@ -1192,11 +1197,12 @@ Resources:
           LOG_LEVEL: DEBUG
           CACHE_SIMILARITY_THRESHOLD: "0.95"
           CACHE_TTL_DAYS: "7"
-          # Force boto3 to use the amazonaws.com VPC endpoint hostname.
-          # Without this, newer botocore resolves to bedrock-runtime.<region>.api.aws
-          # which is NOT covered by the VPC Interface Endpoint's private DNS,
-          # causing EndpointConnectionError in private subnets without NAT.
-          AWS_ENDPOINT_URL_BEDROCK_RUNTIME: !Sub "https://bedrock-runtime.${AWS::Region}.amazonaws.com"
+          # Use the VPC endpoint's own DNS name (bypasses private-DNS resolution,
+          # which was returning the public IP instead of the ENI private IP).
+          # !GetAtt DnsEntries format: "{hosted-zone-id}:{dns-name}" → take index 1 after split.
+          AWS_ENDPOINT_URL_BEDROCK_RUNTIME: !Sub
+            - "https://${DnsName}"
+            - DnsName: !Select [1, !Split [":", !Select [0, !GetAtt BedrockRuntimeVPCEndpoint.DnsEntries]]]
       Events:
         QueryExpertise:
           Type: HttpApi
