@@ -1007,8 +1007,12 @@ Resources:
                   - bedrock:InvokeModel
                   - bedrock:InvokeModelWithResponseStream
                 Resource:
-                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-pro-v1:0
+                  # Cross-region inference profile – wildcard region required because
+                  # us.amazon.nova-pro-v1:0 may route to us-east-1, us-east-2, or us-west-2
+                  - arn:aws:bedrock:*::foundation-model/amazon.nova-pro-v1:0
                   - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.amazon.nova-pro-v1:0
+                  # Nova Micro used for question classification (regional, no inference profile)
+                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-micro-v1:0
                   - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0
         - PolicyName: S3ReadDerived
           PolicyDocument:
