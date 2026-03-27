@@ -55,12 +55,12 @@ Parameters:
     Description: >
       AZ-1 public subnet from the shared infrastructure stack (used by Memgraph EC2).
 
-  SharedBedrockRuntimeVpcEndpointUrl:
+  SharedBedrockRuntimeVpcEndpointId:
     Type: String
     Description: >
-      Bedrock Runtime VPC endpoint URL from the shared infrastructure stack
-      (for example https://vpce-abc123-xyz.bedrock-runtime.us-east-1.vpce.amazonaws.com).
-      Must be a full DNS name from the endpoint DnsEntries list, not just the endpoint ID.
+      Bedrock Runtime VPC endpoint ID from the shared infrastructure stack
+      (e.g. vpce-063909e854775e0d9).  Used to construct the private DNS name
+      for boto3 so Lambda routes Bedrock calls through the existing endpoint.
 
   AdminCidr:
     Type: String
@@ -946,7 +946,9 @@ Resources:
           AWS_ENDPOINT_URL_SECRETSMANAGER: !Sub "https://secretsmanager.${AWS::Region}.api.aws"
           # Explicitly target the shared-stack Bedrock Runtime VPC endpoint so
           # boto3 routes to the private ENI rather than the public endpoint.
-          AWS_ENDPOINT_URL_BEDROCK_RUNTIME: !Ref SharedBedrockRuntimeVpcEndpointUrl
+          AWS_ENDPOINT_URL_BEDROCK_RUNTIME: !Sub
+            - "https://${EndpointId}.bedrock-runtime.${AWS::Region}.vpce.amazonaws.com"
+            - EndpointId: !Ref SharedBedrockRuntimeVpcEndpointId
       Events:
         StepFunctionsTrigger:
           Type: EventBridgeRule
@@ -989,7 +991,9 @@ Resources:
           AWS_ENDPOINT_URL_SECRETSMANAGER: !Sub "https://secretsmanager.${AWS::Region}.api.aws"
           # Explicitly target the shared-stack Bedrock Runtime VPC endpoint so
           # boto3 routes to the private ENI rather than the public endpoint.
-          AWS_ENDPOINT_URL_BEDROCK_RUNTIME: !Ref SharedBedrockRuntimeVpcEndpointUrl
+          AWS_ENDPOINT_URL_BEDROCK_RUNTIME: !Sub
+            - "https://${EndpointId}.bedrock-runtime.${AWS::Region}.vpce.amazonaws.com"
+            - EndpointId: !Ref SharedBedrockRuntimeVpcEndpointId
       Events:
         QueryExpertise:
           Type: HttpApi
