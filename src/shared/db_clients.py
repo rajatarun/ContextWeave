@@ -34,6 +34,7 @@ def _get_secret(secret_arn: str) -> dict:
     client = boto3.client(
         "secretsmanager",
         region_name=os.environ.get("AWS_REGION", "us-east-1"),
+        endpoint_url=os.environ.get("AWS_ENDPOINT_URL_SECRETSMANAGER"),
         config=Config(connect_timeout=5, retries={"max_attempts": 2}),
     )
     response = client.get_secret_value(SecretId=secret_arn)
