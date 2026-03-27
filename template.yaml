@@ -938,16 +938,13 @@ Resources:
         SubnetIds:
           - !Ref SharedLambdaSubnetAz1Id
           - !Ref SharedLambdaSubnetAz2Id
+        Ipv6AllowedForDualStack: true
       Environment:
         Variables:
           DERIVED_PREFIX: derived
           RAW_PREFIX: raw
-          # Route non-Bedrock AWS API calls (Secrets Manager, S3) over IPv6
-          # via the shared VPC EIGW using dual-stack service endpoints.
-          AWS_USE_DUALSTACK_ENDPOINT: "true"
           # Explicitly target the shared-stack Bedrock Runtime VPC endpoint so
           # boto3 routes to the private ENI rather than the public endpoint.
-          # This overrides the dual-stack setting for bedrock-runtime only.
           AWS_ENDPOINT_URL_BEDROCK_RUNTIME: !Sub
             - "https://${EndpointId}.bedrock-runtime.${AWS::Region}.vpce.amazonaws.com"
             - EndpointId: !Ref SharedBedrockRuntimeVpcEndpointId
@@ -982,6 +979,7 @@ Resources:
         SubnetIds:
           - !Ref SharedLambdaSubnetAz1Id
           - !Ref SharedLambdaSubnetAz2Id
+        Ipv6AllowedForDualStack: true
       Environment:
         Variables:
           GENERATION_MODEL_ID: !Ref GenerationModelId
@@ -989,12 +987,8 @@ Resources:
           LOG_LEVEL: DEBUG
           CACHE_SIMILARITY_THRESHOLD: "0.95"
           CACHE_TTL_DAYS: "7"
-          # Route non-Bedrock AWS API calls (Secrets Manager, S3) over IPv6
-          # via the shared VPC EIGW using dual-stack service endpoints.
-          AWS_USE_DUALSTACK_ENDPOINT: "true"
           # Explicitly target the shared-stack Bedrock Runtime VPC endpoint so
           # boto3 routes to the private ENI rather than the public endpoint.
-          # This overrides the dual-stack setting for bedrock-runtime only.
           AWS_ENDPOINT_URL_BEDROCK_RUNTIME: !Sub
             - "https://${EndpointId}.bedrock-runtime.${AWS::Region}.vpce.amazonaws.com"
             - EndpointId: !Ref SharedBedrockRuntimeVpcEndpointId
@@ -1040,10 +1034,7 @@ Resources:
         SubnetIds:
           - !Ref SharedLambdaSubnetAz1Id
           - !Ref SharedLambdaSubnetAz2Id
-      Environment:
-        Variables:
-          # Route Secrets Manager calls over IPv6 via the shared VPC EIGW.
-          AWS_USE_DUALSTACK_ENDPOINT: "true"
+        Ipv6AllowedForDualStack: true
 
   # ───────────────────────────────────────────
   # Attach RDS instance to secret so AWS injects host/port/engine
