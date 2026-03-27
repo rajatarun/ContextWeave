@@ -938,7 +938,7 @@ Resources:
         SubnetIds:
           - !Ref SharedLambdaSubnetAz1Id
           - !Ref SharedLambdaSubnetAz2Id
-        Ipv6AllowedForDualStack: true
+        Ipv6AllowedForDualStack: false
       Environment:
         Variables:
           DERIVED_PREFIX: derived
@@ -979,7 +979,7 @@ Resources:
         SubnetIds:
           - !Ref SharedLambdaSubnetAz1Id
           - !Ref SharedLambdaSubnetAz2Id
-        Ipv6AllowedForDualStack: true
+        Ipv6AllowedForDualStack: false
       Environment:
         Variables:
           GENERATION_MODEL_ID: !Ref GenerationModelId
@@ -1034,7 +1034,7 @@ Resources:
         SubnetIds:
           - !Ref SharedLambdaSubnetAz1Id
           - !Ref SharedLambdaSubnetAz2Id
-        Ipv6AllowedForDualStack: true
+        Ipv6AllowedForDualStack: false
 
   # ───────────────────────────────────────────
   # Attach RDS instance to secret so AWS injects host/port/engine
