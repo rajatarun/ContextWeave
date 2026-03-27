@@ -222,6 +222,36 @@ jobs:
       - name: SAM build
         run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel
 
+      - name: Fetch shared infrastructure outputs
+        id: shared-infra
+        run: |
+          SHARED_STACK="tarun-teamweave-shared"
+
+          get_output() {
+            aws cloudformation describe-stacks \
+              --stack-name "$SHARED_STACK" \
+              --region ${{ env.AWS_REGION }} \
+              --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+              --output text
+          }
+
+          VPC_ID=$(get_output VpcId)
+          SUBNET_AZ1=$(get_output LambdaSubnetAz1Id)
+          SUBNET_AZ2=$(get_output LambdaSubnetAz2Id)
+          PUBLIC_SUBNET=$(get_output PublicSubnetAz1Id)
+          BEDROCK_ENDPOINT=$(get_output BedrockRuntimeVpcEndpointId)
+
+          echo "vpc_id=$VPC_ID"                       >> "$GITHUB_OUTPUT"
+          echo "lambda_subnet_az1=$SUBNET_AZ1"        >> "$GITHUB_OUTPUT"
+          echo "lambda_subnet_az2=$SUBNET_AZ2"        >> "$GITHUB_OUTPUT"
+          echo "public_subnet_az1=$PUBLIC_SUBNET"     >> "$GITHUB_OUTPUT"
+          echo "bedrock_endpoint_id=$BEDROCK_ENDPOINT" >> "$GITHUB_OUTPUT"
+
+          echo "### Shared Infrastructure" >> "$GITHUB_STEP_SUMMARY"
+          echo "- VPC: \`$VPC_ID\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Lambda subnets: \`$SUBNET_AZ1\`, \`$SUBNET_AZ2\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Bedrock endpoint: \`$BEDROCK_ENDPOINT\`" >> "$GITHUB_STEP_SUMMARY"
+
       - name: SAM deploy – prod
         run: |
           sam deploy \
@@ -236,6 +266,11 @@ jobs:
               Environment=prod \
               LogRetentionDays=365 \
               GenerationModelId=us.amazon.nova-pro-v1:0 \
+              SharedVpcId=${{ steps.shared-infra.outputs.vpc_id }} \
+              SharedLambdaSubnetAz1Id=${{ steps.shared-infra.outputs.lambda_subnet_az1 }} \
+              SharedLambdaSubnetAz2Id=${{ steps.shared-infra.outputs.lambda_subnet_az2 }} \
+              SharedPublicSubnetAz1Id=${{ steps.shared-infra.outputs.public_subnet_az1 }} \
+              SharedBedrockRuntimeVpcEndpointId=${{ steps.shared-infra.outputs.bedrock_endpoint_id }} \
             --tags \
               Project=ExpertiseRAG \
               Environment=prod \

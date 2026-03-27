@@ -33,14 +33,34 @@ Parameters:
     AllowedValues: ['true', 'false']
     Description: Deploy Step Functions ingestion orchestration state machine
 
-  # ── Networking ─────────────────────────────────────────────────────────────
-  SharedInfraStackName:
-    Type: String
-    Default: tarun-teamweave-shared
+  # ── Networking (resolved from tarun-teamweave-shared at deploy time) ────────
+  SharedVpcId:
+    Type: AWS::EC2::VPC::Id
     Description: >
-      Name of the shared infrastructure CloudFormation stack that exports VPC
-      resources (VpcId, LambdaSubnetAz1Id, LambdaSubnetAz2Id,
-      PublicSubnetAz1Id, BedrockRuntimeVpcEndpointId).
+      VPC ID from the shared infrastructure stack (tarun-teamweave-shared).
+      Resolved and passed as a parameter-override during deployment.
+
+  SharedLambdaSubnetAz1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: >
+      AZ-1 Lambda private subnet from the shared infrastructure stack.
+
+  SharedLambdaSubnetAz2Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: >
+      AZ-2 Lambda private subnet from the shared infrastructure stack.
+
+  SharedPublicSubnetAz1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: >
+      AZ-1 public subnet from the shared infrastructure stack (used by Memgraph EC2).
+
+  SharedBedrockRuntimeVpcEndpointId:
+    Type: String
+    Description: >
+      Bedrock Runtime VPC endpoint ID from the shared infrastructure stack
+      (e.g. vpce-063909e854775e0d9).  Used to construct the private DNS name
+      for boto3 so Lambda routes Bedrock calls through the existing endpoint.
 
   AdminCidr:
     Type: String
@@ -161,15 +181,12 @@ Resources:
   SecretsManagerVPCEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
-      VpcId: !ImportValue
-        Fn::Sub: "${SharedInfraStackName}-VpcId"
+      VpcId: !Ref SharedVpcId
       ServiceName: !Sub com.amazonaws.${AWS::Region}.secretsmanager
       VpcEndpointType: Interface
       SubnetIds:
-        - !ImportValue
-          Fn::Sub: "${SharedInfraStackName}-LambdaSubnetAz1Id"
-        - !ImportValue
-          Fn::Sub: "${SharedInfraStackName}-LambdaSubnetAz2Id"
+        - !Ref SharedLambdaSubnetAz1Id
+        - !Ref SharedLambdaSubnetAz2Id
       SecurityGroupIds:
         - !Ref VPCEndpointSG
       PrivateDnsEnabled: true
@@ -184,8 +201,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: ExpertiseRAG Lambda functions - egress only
-      VpcId: !ImportValue
-        Fn::Sub: "${SharedInfraStackName}-VpcId"
+      VpcId: !Ref SharedVpcId
       SecurityGroupEgress:
         - IpProtocol: '-1'
           CidrIp: 0.0.0.0/0
@@ -202,8 +218,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: ExpertiseRAG VPC Interface Endpoints - HTTPS from Lambda
-      VpcId: !ImportValue
-        Fn::Sub: "${SharedInfraStackName}-VpcId"
+      VpcId: !Ref SharedVpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 443
@@ -221,8 +236,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: ExpertiseRAG Memgraph EC2 instance
-      VpcId: !ImportValue
-        Fn::Sub: "${SharedInfraStackName}-VpcId"
+      VpcId: !Ref SharedVpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 7687
@@ -246,8 +260,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: ExpertiseRAG RDS PostgreSQL
-      VpcId: !ImportValue
-        Fn::Sub: "${SharedInfraStackName}-VpcId"
+      VpcId: !Ref SharedVpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 5432
@@ -374,8 +387,7 @@ Resources:
         - MemgraphIsGraviton
         - '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}'
         - '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
-      SubnetId: !ImportValue
-        Fn::Sub: "${SharedInfraStackName}-PublicSubnetAz1Id"
+      SubnetId: !Ref SharedPublicSubnetAz1Id
       SecurityGroupIds:
         - !Ref MemgraphSG
       IamInstanceProfile: !Ref MemgraphInstanceProfile
@@ -498,10 +510,8 @@ Resources:
     Properties:
       DBSubnetGroupDescription: ExpertiseRAG PostgreSQL subnet group
       SubnetIds:
-        - !ImportValue
-          Fn::Sub: "${SharedInfraStackName}-LambdaSubnetAz1Id"
-        - !ImportValue
-          Fn::Sub: "${SharedInfraStackName}-LambdaSubnetAz2Id"
+        - !Ref SharedLambdaSubnetAz1Id
+        - !Ref SharedLambdaSubnetAz2Id
       Tags:
         - Key: Project
           Value: ExpertiseRAG
@@ -953,10 +963,8 @@ Resources:
         SecurityGroupIds:
           - !Ref LambdaSG
         SubnetIds:
-          - !ImportValue
-            Fn::Sub: "${SharedInfraStackName}-LambdaSubnetAz1Id"
-          - !ImportValue
-            Fn::Sub: "${SharedInfraStackName}-LambdaSubnetAz2Id"
+          - !Ref SharedLambdaSubnetAz1Id
+          - !Ref SharedLambdaSubnetAz2Id
       Environment:
         Variables:
           DERIVED_PREFIX: derived
@@ -965,8 +973,7 @@ Resources:
           # boto3 routes to the private ENI rather than the public endpoint.
           AWS_ENDPOINT_URL_BEDROCK_RUNTIME: !Sub
             - "https://${EndpointId}.bedrock-runtime.${AWS::Region}.vpce.amazonaws.com"
-            - EndpointId: !ImportValue
-                Fn::Sub: "${SharedInfraStackName}-BedrockRuntimeVpcEndpointId"
+            - EndpointId: !Ref SharedBedrockRuntimeVpcEndpointId
       Events:
         StepFunctionsTrigger:
           Type: EventBridgeRule
@@ -996,10 +1003,8 @@ Resources:
         SecurityGroupIds:
           - !Ref LambdaSG
         SubnetIds:
-          - !ImportValue
-            Fn::Sub: "${SharedInfraStackName}-LambdaSubnetAz1Id"
-          - !ImportValue
-            Fn::Sub: "${SharedInfraStackName}-LambdaSubnetAz2Id"
+          - !Ref SharedLambdaSubnetAz1Id
+          - !Ref SharedLambdaSubnetAz2Id
       Environment:
         Variables:
           GENERATION_MODEL_ID: !Ref GenerationModelId
@@ -1011,8 +1016,7 @@ Resources:
           # boto3 routes to the private ENI rather than the public endpoint.
           AWS_ENDPOINT_URL_BEDROCK_RUNTIME: !Sub
             - "https://${EndpointId}.bedrock-runtime.${AWS::Region}.vpce.amazonaws.com"
-            - EndpointId: !ImportValue
-                Fn::Sub: "${SharedInfraStackName}-BedrockRuntimeVpcEndpointId"
+            - EndpointId: !Ref SharedBedrockRuntimeVpcEndpointId
       Events:
         QueryExpertise:
           Type: HttpApi
@@ -1053,10 +1057,8 @@ Resources:
         SecurityGroupIds:
           - !Ref LambdaSG
         SubnetIds:
-          - !ImportValue
-            Fn::Sub: "${SharedInfraStackName}-LambdaSubnetAz1Id"
-          - !ImportValue
-            Fn::Sub: "${SharedInfraStackName}-LambdaSubnetAz2Id"
+          - !Ref SharedLambdaSubnetAz1Id
+          - !Ref SharedLambdaSubnetAz2Id
 
   # ───────────────────────────────────────────
   # Attach RDS instance to secret so AWS injects host/port/engine
