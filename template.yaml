@@ -174,21 +174,6 @@ Resources:
         - !Ref VPCEndpointSG
       PrivateDnsEnabled: true
 
-  NeptuneGraphVPCEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !ImportValue
-        Fn::Sub: "${SharedInfraStackName}-VpcId"
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.neptune-graph
-      VpcEndpointType: Interface
-      SubnetIds:
-        - !ImportValue
-          Fn::Sub: "${SharedInfraStackName}-LambdaSubnetAz1Id"
-        - !ImportValue
-          Fn::Sub: "${SharedInfraStackName}-LambdaSubnetAz2Id"
-      SecurityGroupIds:
-        - !Ref VPCEndpointSG
-      PrivateDnsEnabled: true
 
   # ───────────────────────────────────────────
   # Security Groups
