@@ -178,25 +178,14 @@ Resources:
   # omitted here because the shared stack (tarun-teamweave-shared) already
   # provides that endpoint; we import its ID instead of creating a duplicate.
   # ───────────────────────────────────────────
-  SecretsManagerVPCEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref SharedVpcId
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.secretsmanager
-      VpcEndpointType: Interface
-      SubnetIds:
-        - !Ref SharedLambdaSubnetAz1Id
-        - !Ref SharedLambdaSubnetAz2Id
-      SecurityGroupIds:
-        - !Ref VPCEndpointSG
-      PrivateDnsEnabled: true
-
-
   # ───────────────────────────────────────────
   # Security Groups
   # ───────────────────────────────────────────
 
-  # Lambda functions SG – outbound only (in shared VPC)
+  # Lambda functions SG – outbound only (in shared VPC).
+  # IPv4 egress covers VPC-local traffic (RDS, Memgraph, Bedrock VPCE).
+  # IPv6 egress routes AWS API calls (Secrets Manager, S3, etc.) through the
+  # shared VPC Egress-Only Internet Gateway using dual-stack endpoints.
   LambdaSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -205,31 +194,13 @@ Resources:
       SecurityGroupEgress:
         - IpProtocol: '-1'
           CidrIp: 0.0.0.0/0
-          Description: "IPv4 egress (VPC-local + VPC Interface Endpoints)"
+          Description: "IPv4 egress (VPC-local: RDS, Memgraph, Bedrock VPCE)"
         - IpProtocol: '-1'
           CidrIpv6: ::/0
-          Description: "IPv6 egress (future use)"
+          Description: "IPv6 egress via EIGW (Secrets Manager, S3 dual-stack)"
       Tags:
         - Key: Name
           Value: !Sub contextweave-rag-lambda-sg-${Environment}
-
-  # VPC Interface Endpoint SG – HTTPS (443) inbound from Lambda only (in shared VPC)
-  VPCEndpointSG:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: ExpertiseRAG VPC Interface Endpoints - HTTPS from Lambda
-      VpcId: !Ref SharedVpcId
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          SourceSecurityGroupId: !Ref LambdaSG
-          Description: HTTPS from Lambda functions
-      Tags:
-        - Key: Name
-          Value: !Sub contextweave-rag-vpce-sg-${Environment}
-        - Key: Project
-          Value: ExpertiseRAG
 
   # Memgraph EC2 SG – bolt (7687) from Lambda, SSH from admin CIDR (in shared VPC)
   MemgraphSG:
@@ -971,8 +942,12 @@ Resources:
         Variables:
           DERIVED_PREFIX: derived
           RAW_PREFIX: raw
+          # Route non-Bedrock AWS API calls (Secrets Manager, S3) over IPv6
+          # via the shared VPC EIGW using dual-stack service endpoints.
+          AWS_USE_DUALSTACK_ENDPOINT: "true"
           # Explicitly target the shared-stack Bedrock Runtime VPC endpoint so
           # boto3 routes to the private ENI rather than the public endpoint.
+          # This overrides the dual-stack setting for bedrock-runtime only.
           AWS_ENDPOINT_URL_BEDROCK_RUNTIME: !Sub
             - "https://${EndpointId}.bedrock-runtime.${AWS::Region}.vpce.amazonaws.com"
             - EndpointId: !Ref SharedBedrockRuntimeVpcEndpointId
@@ -1014,8 +989,12 @@ Resources:
           LOG_LEVEL: DEBUG
           CACHE_SIMILARITY_THRESHOLD: "0.95"
           CACHE_TTL_DAYS: "7"
+          # Route non-Bedrock AWS API calls (Secrets Manager, S3) over IPv6
+          # via the shared VPC EIGW using dual-stack service endpoints.
+          AWS_USE_DUALSTACK_ENDPOINT: "true"
           # Explicitly target the shared-stack Bedrock Runtime VPC endpoint so
           # boto3 routes to the private ENI rather than the public endpoint.
+          # This overrides the dual-stack setting for bedrock-runtime only.
           AWS_ENDPOINT_URL_BEDROCK_RUNTIME: !Sub
             - "https://${EndpointId}.bedrock-runtime.${AWS::Region}.vpce.amazonaws.com"
             - EndpointId: !Ref SharedBedrockRuntimeVpcEndpointId
@@ -1061,6 +1040,10 @@ Resources:
         SubnetIds:
           - !Ref SharedLambdaSubnetAz1Id
           - !Ref SharedLambdaSubnetAz2Id
+      Environment:
+        Variables:
+          # Route Secrets Manager calls over IPv6 via the shared VPC EIGW.
+          AWS_USE_DUALSTACK_ENDPOINT: "true"
 
   # ───────────────────────────────────────────
   # Attach RDS instance to secret so AWS injects host/port/engine
@@ -1087,7 +1070,6 @@ Resources:
     DependsOn:
       - PostgresSecretAttachment
       - MemgraphEC2
-      - SecretsManagerVPCEndpoint
     Properties:
       ServiceToken: !GetAtt DBInitFunction.Arn
       TriggerReason: post-deployment
