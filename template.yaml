@@ -55,13 +55,6 @@ Parameters:
     Description: >
       AZ-1 public subnet from the shared infrastructure stack (used by Memgraph EC2).
 
-  SharedBedrockRuntimeVpcEndpointId:
-    Type: String
-    Description: >
-      Bedrock Runtime VPC endpoint ID from the shared infrastructure stack
-      (e.g. vpce-063909e854775e0d9).  Used to construct the private DNS name
-      for boto3 so Lambda routes Bedrock calls through the existing endpoint.
-
   AdminCidr:
     Type: String
     Default: 10.0.0.0/8
@@ -938,16 +931,11 @@ Resources:
         SubnetIds:
           - !Ref SharedLambdaSubnetAz1Id
           - !Ref SharedLambdaSubnetAz2Id
-        Ipv6AllowedForDualStack: false
+        Ipv6AllowedForDualStack: true
       Environment:
         Variables:
           DERIVED_PREFIX: derived
           RAW_PREFIX: raw
-          # Explicitly target the shared-stack Bedrock Runtime VPC endpoint so
-          # boto3 routes to the private ENI rather than the public endpoint.
-          AWS_ENDPOINT_URL_BEDROCK_RUNTIME: !Sub
-            - "https://${EndpointId}.bedrock-runtime.${AWS::Region}.vpce.amazonaws.com"
-            - EndpointId: !Ref SharedBedrockRuntimeVpcEndpointId
       Events:
         StepFunctionsTrigger:
           Type: EventBridgeRule
@@ -979,7 +967,7 @@ Resources:
         SubnetIds:
           - !Ref SharedLambdaSubnetAz1Id
           - !Ref SharedLambdaSubnetAz2Id
-        Ipv6AllowedForDualStack: false
+        Ipv6AllowedForDualStack: true
       Environment:
         Variables:
           GENERATION_MODEL_ID: !Ref GenerationModelId
@@ -987,11 +975,6 @@ Resources:
           LOG_LEVEL: DEBUG
           CACHE_SIMILARITY_THRESHOLD: "0.95"
           CACHE_TTL_DAYS: "7"
-          # Explicitly target the shared-stack Bedrock Runtime VPC endpoint so
-          # boto3 routes to the private ENI rather than the public endpoint.
-          AWS_ENDPOINT_URL_BEDROCK_RUNTIME: !Sub
-            - "https://${EndpointId}.bedrock-runtime.${AWS::Region}.vpce.amazonaws.com"
-            - EndpointId: !Ref SharedBedrockRuntimeVpcEndpointId
       Events:
         QueryExpertise:
           Type: HttpApi
@@ -1034,7 +1017,7 @@ Resources:
         SubnetIds:
           - !Ref SharedLambdaSubnetAz1Id
           - !Ref SharedLambdaSubnetAz2Id
-        Ipv6AllowedForDualStack: false
+        Ipv6AllowedForDualStack: true
 
   # ───────────────────────────────────────────
   # Attach RDS instance to secret so AWS injects host/port/engine

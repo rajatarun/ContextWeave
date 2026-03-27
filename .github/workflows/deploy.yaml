@@ -239,7 +239,6 @@ jobs:
           # These keys are directly exported by the shared stack
           SUBNET_AZ1=$(get_output LambdaSubnetAz1Id)
           SUBNET_AZ2=$(get_output LambdaSubnetAz2Id)
-          BEDROCK_ENDPOINT=$(get_output BedrockRuntimeVpcEndpointId)
 
           # VpcId is not exported – derive it from one of the Lambda subnets
           VPC_ID=$(aws ec2 describe-subnets \
@@ -258,7 +257,7 @@ jobs:
             --output text)
 
           # Fail fast if any required value is empty
-          for VAR_NAME in VPC_ID SUBNET_AZ1 SUBNET_AZ2 PUBLIC_SUBNET BEDROCK_ENDPOINT; do
+          for VAR_NAME in VPC_ID SUBNET_AZ1 SUBNET_AZ2 PUBLIC_SUBNET; do
             VAL="${!VAR_NAME}"
             if [ -z "$VAL" ] || [ "$VAL" = "None" ]; then
               echo "ERROR: $VAR_NAME is empty – check tarun-teamweave-shared outputs"
@@ -266,17 +265,15 @@ jobs:
             fi
           done
 
-          echo "vpc_id=$VPC_ID"                        >> "$GITHUB_OUTPUT"
-          echo "lambda_subnet_az1=$SUBNET_AZ1"         >> "$GITHUB_OUTPUT"
-          echo "lambda_subnet_az2=$SUBNET_AZ2"         >> "$GITHUB_OUTPUT"
-          echo "public_subnet_az1=$PUBLIC_SUBNET"      >> "$GITHUB_OUTPUT"
-          echo "bedrock_endpoint_id=$BEDROCK_ENDPOINT" >> "$GITHUB_OUTPUT"
+          echo "vpc_id=$VPC_ID"                   >> "$GITHUB_OUTPUT"
+          echo "lambda_subnet_az1=$SUBNET_AZ1"  >> "$GITHUB_OUTPUT"
+          echo "lambda_subnet_az2=$SUBNET_AZ2"  >> "$GITHUB_OUTPUT"
+          echo "public_subnet_az1=$PUBLIC_SUBNET" >> "$GITHUB_OUTPUT"
 
           echo "### Shared Infrastructure" >> "$GITHUB_STEP_SUMMARY"
           echo "- VPC: \`$VPC_ID\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Lambda subnets: \`$SUBNET_AZ1\`, \`$SUBNET_AZ2\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Public subnet (Memgraph): \`$PUBLIC_SUBNET\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Bedrock endpoint: \`$BEDROCK_ENDPOINT\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: SAM deploy – prod
         run: |
@@ -296,7 +293,6 @@ jobs:
               SharedLambdaSubnetAz1Id=${{ steps.shared-infra.outputs.lambda_subnet_az1 }} \
               SharedLambdaSubnetAz2Id=${{ steps.shared-infra.outputs.lambda_subnet_az2 }} \
               SharedPublicSubnetAz1Id=${{ steps.shared-infra.outputs.public_subnet_az1 }} \
-              SharedBedrockRuntimeVpcEndpointId=${{ steps.shared-infra.outputs.bedrock_endpoint_id }} \
             --tags \
               Project=ExpertiseRAG \
               Environment=prod \
