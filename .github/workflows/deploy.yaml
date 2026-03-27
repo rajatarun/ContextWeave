@@ -226,30 +226,56 @@ jobs:
         id: shared-infra
         run: |
           SHARED_STACK="tarun-teamweave-shared"
+          REGION="${{ env.AWS_REGION }}"
 
           get_output() {
             aws cloudformation describe-stacks \
               --stack-name "$SHARED_STACK" \
-              --region ${{ env.AWS_REGION }} \
+              --region "$REGION" \
               --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
               --output text
           }
 
-          VPC_ID=$(get_output VpcId)
+          # These keys are directly exported by the shared stack
           SUBNET_AZ1=$(get_output LambdaSubnetAz1Id)
           SUBNET_AZ2=$(get_output LambdaSubnetAz2Id)
-          PUBLIC_SUBNET=$(get_output PublicSubnetAz1Id)
           BEDROCK_ENDPOINT=$(get_output BedrockRuntimeVpcEndpointId)
 
-          echo "vpc_id=$VPC_ID"                       >> "$GITHUB_OUTPUT"
-          echo "lambda_subnet_az1=$SUBNET_AZ1"        >> "$GITHUB_OUTPUT"
-          echo "lambda_subnet_az2=$SUBNET_AZ2"        >> "$GITHUB_OUTPUT"
-          echo "public_subnet_az1=$PUBLIC_SUBNET"     >> "$GITHUB_OUTPUT"
+          # VpcId is not exported – derive it from one of the Lambda subnets
+          VPC_ID=$(aws ec2 describe-subnets \
+            --subnet-ids "$SUBNET_AZ1" \
+            --region "$REGION" \
+            --query "Subnets[0].VpcId" \
+            --output text)
+
+          # PublicSubnetAz1Id is not exported – find the first public subnet in the VPC
+          PUBLIC_SUBNET=$(aws ec2 describe-subnets \
+            --filters \
+              "Name=vpc-id,Values=$VPC_ID" \
+              "Name=map-public-ip-on-launch,Values=true" \
+            --region "$REGION" \
+            --query "Subnets[0].SubnetId" \
+            --output text)
+
+          # Fail fast if any required value is empty
+          for VAR_NAME in VPC_ID SUBNET_AZ1 SUBNET_AZ2 PUBLIC_SUBNET BEDROCK_ENDPOINT; do
+            VAL="${!VAR_NAME}"
+            if [ -z "$VAL" ] || [ "$VAL" = "None" ]; then
+              echo "ERROR: $VAR_NAME is empty – check tarun-teamweave-shared outputs"
+              exit 1
+            fi
+          done
+
+          echo "vpc_id=$VPC_ID"                        >> "$GITHUB_OUTPUT"
+          echo "lambda_subnet_az1=$SUBNET_AZ1"         >> "$GITHUB_OUTPUT"
+          echo "lambda_subnet_az2=$SUBNET_AZ2"         >> "$GITHUB_OUTPUT"
+          echo "public_subnet_az1=$PUBLIC_SUBNET"      >> "$GITHUB_OUTPUT"
           echo "bedrock_endpoint_id=$BEDROCK_ENDPOINT" >> "$GITHUB_OUTPUT"
 
           echo "### Shared Infrastructure" >> "$GITHUB_STEP_SUMMARY"
           echo "- VPC: \`$VPC_ID\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Lambda subnets: \`$SUBNET_AZ1\`, \`$SUBNET_AZ2\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Public subnet (Memgraph): \`$PUBLIC_SUBNET\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Bedrock endpoint: \`$BEDROCK_ENDPOINT\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: SAM deploy – prod
