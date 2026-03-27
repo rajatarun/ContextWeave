@@ -507,8 +507,11 @@ Resources:
   # ───────────────────────────────────────────
   PostgresSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       DBSubnetGroupDescription: ExpertiseRAG PostgreSQL subnet group
+      DBSubnetGroupName: !Sub "contextweave-rag-postgres-sg-${Environment}"
       SubnetIds:
         - !Ref SharedLambdaSubnetAz1Id
         - !Ref SharedLambdaSubnetAz2Id
@@ -521,7 +524,6 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      DBInstanceIdentifier: !Sub contextweave-rag-postgres-${Environment}
       DBInstanceClass: !Ref PostgresInstanceClass
       Engine: postgres
       EngineVersion: '16.6'
