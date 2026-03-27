@@ -33,11 +33,34 @@ Parameters:
     AllowedValues: ['true', 'false']
     Description: Deploy Step Functions ingestion orchestration state machine
 
-  # ── Networking ─────────────────────────────────────────────────────────────
-  VpcCidr:
+  # ── Networking (resolved from tarun-teamweave-shared at deploy time) ────────
+  SharedVpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: >
+      VPC ID from the shared infrastructure stack (tarun-teamweave-shared).
+      Resolved and passed as a parameter-override during deployment.
+
+  SharedLambdaSubnetAz1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: >
+      AZ-1 Lambda private subnet from the shared infrastructure stack.
+
+  SharedLambdaSubnetAz2Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: >
+      AZ-2 Lambda private subnet from the shared infrastructure stack.
+
+  SharedPublicSubnetAz1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: >
+      AZ-1 public subnet from the shared infrastructure stack (used by Memgraph EC2).
+
+  SharedBedrockRuntimeVpcEndpointId:
     Type: String
-    Default: 10.0.0.0/16
-    Description: CIDR block for the VPC
+    Description: >
+      Bedrock Runtime VPC endpoint ID from the shared infrastructure stack
+      (e.g. vpce-063909e854775e0d9).  Used to construct the private DNS name
+      for boto3 so Lambda routes Bedrock calls through the existing endpoint.
 
   AdminCidr:
     Type: String
@@ -107,10 +130,6 @@ Globals:
         POWERTOOLS_SERVICE_NAME: expertise-rag
         LOG_LEVEL: DEBUG
         ENVIRONMENT: !Ref Environment
-        # boto3/botocore: resolve AWS service endpoints to dual-stack (IPv6)
-        # addresses so Lambda can reach Bedrock, Secrets Manager, etc. via
-        # the Egress-Only Internet Gateway without VPC interface endpoints.
-        AWS_USE_DUALSTACK_ENDPOINT: 'true'
         ARTIFACTS_BUCKET: !Sub contextweave-rag-artifacts-${AWS::AccountId}-${Environment}
         MEMGRAPH_SECRET_ARN: !Ref MemgraphSecret
         POSTGRES_SECRET_ARN: !Ref PostgresSecret
@@ -154,242 +173,35 @@ Resources:
       TargetKeyId: !Ref ArtifactsKMSKey
 
   # ───────────────────────────────────────────
-  # VPC – dual-stack (IPv4 + IPv6), no NAT Gateway
-  #
-  # Cost model:
-  #   IGW   – free (EC2 outbound IPv4/IPv6)
-  #   EIGW  – free (blocks inbound; retained for any future IPv6-native traffic)
-  #   No NAT Gateway
-  #   VPC Interface Endpoints (Secrets Manager, Bedrock Runtime, Neptune Graph)
-  #     replaces NAT: Lambda in private subnet reaches AWS APIs without IPv4
-  #     internet access; ~$0.01/hr/AZ each, cheaper than NAT Gateway
+  # VPC Interface Endpoints – created in the shared VPC so Lambda can reach
+  # Secrets Manager and Neptune without a NAT Gateway.  Bedrock Runtime is
+  # omitted here because the shared stack (tarun-teamweave-shared) already
+  # provides that endpoint; we import its ID instead of creating a duplicate.
   # ───────────────────────────────────────────
-  VPC:
-    Type: AWS::EC2::VPC
-    Properties:
-      CidrBlock: !Ref VpcCidr
-      EnableDnsSupport: true
-      EnableDnsHostnames: true
-      Tags:
-        - Key: Name
-          Value: !Sub contextweave-rag-vpc-${Environment}
-        - Key: Project
-          Value: ExpertiseRAG
-
-  # Amazon-provided /56 IPv6 CIDR attached to the VPC
-  VPCIpv6CidrBlock:
-    Type: AWS::EC2::VPCCidrBlock
-    Properties:
-      VpcId: !Ref VPC
-      AmazonProvidedIpv6CidrBlock: true
-
-  InternetGateway:
-    Type: AWS::EC2::InternetGateway
-    Properties:
-      Tags:
-        - Key: Name
-          Value: !Sub contextweave-rag-igw-${Environment}
-
-  VPCGatewayAttachment:
-    Type: AWS::EC2::VPCGatewayAttachment
-    Properties:
-      VpcId: !Ref VPC
-      InternetGatewayId: !Ref InternetGateway
-
-  # Egress-Only Internet Gateway – free; allows Lambda → internet (IPv6),
-  # blocks all inbound connections from internet → Lambda
-  EgressOnlyInternetGateway:
-    Type: AWS::EC2::EgressOnlyInternetGateway
-    Properties:
-      VpcId: !Ref VPC
-
-  # Public subnets – Memgraph EC2 (dual-stack, public IPv4 + IPv6 via IGW)
-  PublicSubnet1:
-    Type: AWS::EC2::Subnet
-    DependsOn: VPCIpv6CidrBlock
-    Properties:
-      VpcId: !Ref VPC
-      CidrBlock: !Select [0, !Cidr [!Ref VpcCidr, 8, 8]]
-      Ipv6CidrBlock: !Select [0, !Cidr [!Select [0, !GetAtt VPC.Ipv6CidrBlocks], 8, 64]]
-      AvailabilityZone: !Select [0, !GetAZs '']
-      MapPublicIpOnLaunch: true
-      AssignIpv6AddressOnCreation: true
-      Tags:
-        - Key: Name
-          Value: !Sub contextweave-rag-public-1-${Environment}
-
-  PublicSubnet2:
-    Type: AWS::EC2::Subnet
-    DependsOn: VPCIpv6CidrBlock
-    Properties:
-      VpcId: !Ref VPC
-      CidrBlock: !Select [1, !Cidr [!Ref VpcCidr, 8, 8]]
-      Ipv6CidrBlock: !Select [1, !Cidr [!Select [0, !GetAtt VPC.Ipv6CidrBlocks], 8, 64]]
-      AvailabilityZone: !Select [1, !GetAZs '']
-      MapPublicIpOnLaunch: true
-      AssignIpv6AddressOnCreation: true
-      Tags:
-        - Key: Name
-          Value: !Sub contextweave-rag-public-2-${Environment}
-
-  # Private subnets – Lambda + RDS (dual-stack; IPv4 for VPC-local, IPv6 via EIGW)
-  PrivateSubnet1:
-    Type: AWS::EC2::Subnet
-    DependsOn: VPCIpv6CidrBlock
-    Properties:
-      VpcId: !Ref VPC
-      CidrBlock: !Select [2, !Cidr [!Ref VpcCidr, 8, 8]]
-      Ipv6CidrBlock: !Select [2, !Cidr [!Select [0, !GetAtt VPC.Ipv6CidrBlocks], 8, 64]]
-      AvailabilityZone: !Select [0, !GetAZs '']
-      MapPublicIpOnLaunch: false
-      AssignIpv6AddressOnCreation: true
-      Tags:
-        - Key: Name
-          Value: !Sub contextweave-rag-private-1-${Environment}
-
-  PrivateSubnet2:
-    Type: AWS::EC2::Subnet
-    DependsOn: VPCIpv6CidrBlock
-    Properties:
-      VpcId: !Ref VPC
-      CidrBlock: !Select [3, !Cidr [!Ref VpcCidr, 8, 8]]
-      Ipv6CidrBlock: !Select [3, !Cidr [!Select [0, !GetAtt VPC.Ipv6CidrBlocks], 8, 64]]
-      AvailabilityZone: !Select [1, !GetAZs '']
-      MapPublicIpOnLaunch: false
-      AssignIpv6AddressOnCreation: true
-      Tags:
-        - Key: Name
-          Value: !Sub contextweave-rag-private-2-${Environment}
-
-  # ── Route tables ────────────────────────────────────────────────────────────
-
-  # Public route table: IPv4 + IPv6 → IGW (for Memgraph EC2)
-  PublicRouteTable:
-    Type: AWS::EC2::RouteTable
-    Properties:
-      VpcId: !Ref VPC
-
-  PublicRoute:
-    Type: AWS::EC2::Route
-    DependsOn: VPCGatewayAttachment
-    Properties:
-      RouteTableId: !Ref PublicRouteTable
-      DestinationCidrBlock: 0.0.0.0/0
-      GatewayId: !Ref InternetGateway
-
-  PublicRouteIPv6:
-    Type: AWS::EC2::Route
-    DependsOn: VPCGatewayAttachment
-    Properties:
-      RouteTableId: !Ref PublicRouteTable
-      DestinationIpv6CidrBlock: ::/0
-      GatewayId: !Ref InternetGateway
-
-  PublicSubnet1RouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      SubnetId: !Ref PublicSubnet1
-      RouteTableId: !Ref PublicRouteTable
-
-  PublicSubnet2RouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      SubnetId: !Ref PublicSubnet2
-      RouteTableId: !Ref PublicRouteTable
-
-  # Private route table: no IPv4 default route (VPC-local only),
-  #                      IPv6 ::/0 → EIGW (Lambda → AWS APIs over IPv6)
-  PrivateRouteTable:
-    Type: AWS::EC2::RouteTable
-    Properties:
-      VpcId: !Ref VPC
-
-  PrivateRouteIPv6:
-    Type: AWS::EC2::Route
-    Properties:
-      RouteTableId: !Ref PrivateRouteTable
-      DestinationIpv6CidrBlock: ::/0
-      EgressOnlyInternetGatewayId: !Ref EgressOnlyInternetGateway
-
-  PrivateSubnet1RouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      SubnetId: !Ref PrivateSubnet1
-      RouteTableId: !Ref PrivateRouteTable
-
-  PrivateSubnet2RouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      SubnetId: !Ref PrivateSubnet2
-      RouteTableId: !Ref PrivateRouteTable
-
-  # S3 VPC Gateway Endpoint – free; keeps S3 traffic off the internet
-  S3VPCEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref VPC
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
-      VpcEndpointType: Gateway
-      RouteTableIds:
-        - !Ref PrivateRouteTable
-        - !Ref PublicRouteTable
-
-  # VPC Interface Endpoints – Lambda lives in private subnets with no NAT
-  # Gateway, so it cannot reach AWS service APIs over the public internet.
-  # Interface endpoints inject private IPs into the VPC; PrivateDnsEnabled
-  # means the standard hostname (e.g. secretsmanager.us-east-1.amazonaws.com)
-  # resolves to those private IPs, so boto3 needs no code changes.
   SecretsManagerVPCEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
-      VpcId: !Ref VPC
+      VpcId: !Ref SharedVpcId
       ServiceName: !Sub com.amazonaws.${AWS::Region}.secretsmanager
       VpcEndpointType: Interface
       SubnetIds:
-        - !Ref PrivateSubnet1
-        - !Ref PrivateSubnet2
+        - !Ref SharedLambdaSubnetAz1Id
+        - !Ref SharedLambdaSubnetAz2Id
       SecurityGroupIds:
         - !Ref VPCEndpointSG
       PrivateDnsEnabled: true
 
-  BedrockRuntimeVPCEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref VPC
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.bedrock-runtime
-      VpcEndpointType: Interface
-      SubnetIds:
-        - !Ref PrivateSubnet1
-        - !Ref PrivateSubnet2
-      SecurityGroupIds:
-        - !Ref VPCEndpointSG
-      PrivateDnsEnabled: true
-
-  NeptuneGraphVPCEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref VPC
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.neptune-graph
-      VpcEndpointType: Interface
-      SubnetIds:
-        - !Ref PrivateSubnet1
-        - !Ref PrivateSubnet2
-      SecurityGroupIds:
-        - !Ref VPCEndpointSG
-      PrivateDnsEnabled: true
 
   # ───────────────────────────────────────────
   # Security Groups
   # ───────────────────────────────────────────
 
-  # Lambda functions SG – outbound only
-  # IPv4: VPC-local (RDS, Memgraph EC2) + VPC Interface Endpoints (443)
-  # IPv6: retained for future use (EIGW blocks inbound)
+  # Lambda functions SG – outbound only (in shared VPC)
   LambdaSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: ExpertiseRAG Lambda functions - egress only
-      VpcId: !Ref VPC
+      VpcId: !Ref SharedVpcId
       SecurityGroupEgress:
         - IpProtocol: '-1'
           CidrIp: 0.0.0.0/0
@@ -401,12 +213,12 @@ Resources:
         - Key: Name
           Value: !Sub contextweave-rag-lambda-sg-${Environment}
 
-  # VPC Interface Endpoint SG – HTTPS (443) inbound from Lambda only
+  # VPC Interface Endpoint SG – HTTPS (443) inbound from Lambda only (in shared VPC)
   VPCEndpointSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: ExpertiseRAG VPC Interface Endpoints - HTTPS from Lambda
-      VpcId: !Ref VPC
+      VpcId: !Ref SharedVpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 443
@@ -419,12 +231,12 @@ Resources:
         - Key: Project
           Value: ExpertiseRAG
 
-  # Memgraph EC2 SG – bolt (7687) from Lambda, SSH from admin CIDR
+  # Memgraph EC2 SG – bolt (7687) from Lambda, SSH from admin CIDR (in shared VPC)
   MemgraphSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: ExpertiseRAG Memgraph EC2 instance
-      VpcId: !Ref VPC
+      VpcId: !Ref SharedVpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 7687
@@ -443,12 +255,12 @@ Resources:
         - Key: Name
           Value: !Sub contextweave-rag-memgraph-sg-${Environment}
 
-  # RDS PostgreSQL SG – port 5432 from Lambda
+  # RDS PostgreSQL SG – port 5432 from Lambda (in shared VPC)
   PostgresSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: ExpertiseRAG RDS PostgreSQL
-      VpcId: !Ref VPC
+      VpcId: !Ref SharedVpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 5432
@@ -575,7 +387,7 @@ Resources:
         - MemgraphIsGraviton
         - '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}'
         - '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
-      SubnetId: !Ref PublicSubnet1
+      SubnetId: !Ref SharedPublicSubnetAz1Id
       SecurityGroupIds:
         - !Ref MemgraphSG
       IamInstanceProfile: !Ref MemgraphInstanceProfile
@@ -698,8 +510,8 @@ Resources:
     Properties:
       DBSubnetGroupDescription: ExpertiseRAG PostgreSQL subnet group
       SubnetIds:
-        - !Ref PrivateSubnet1
-        - !Ref PrivateSubnet2
+        - !Ref SharedLambdaSubnetAz1Id
+        - !Ref SharedLambdaSubnetAz2Id
       Tags:
         - Key: Project
           Value: ExpertiseRAG
@@ -1151,18 +963,17 @@ Resources:
         SecurityGroupIds:
           - !Ref LambdaSG
         SubnetIds:
-          - !Ref PrivateSubnet1
-          - !Ref PrivateSubnet2
+          - !Ref SharedLambdaSubnetAz1Id
+          - !Ref SharedLambdaSubnetAz2Id
       Environment:
         Variables:
           DERIVED_PREFIX: derived
           RAW_PREFIX: raw
-          # Use the VPC endpoint's own DNS name (bypasses private-DNS resolution,
-          # which was returning the public IP instead of the ENI private IP).
-          # !GetAtt DnsEntries format: "{hosted-zone-id}:{dns-name}" → take index 1 after split.
+          # Explicitly target the shared-stack Bedrock Runtime VPC endpoint so
+          # boto3 routes to the private ENI rather than the public endpoint.
           AWS_ENDPOINT_URL_BEDROCK_RUNTIME: !Sub
-            - "https://${DnsName}"
-            - DnsName: !Select [1, !Split [":", !Select [0, !GetAtt BedrockRuntimeVPCEndpoint.DnsEntries]]]
+            - "https://${EndpointId}.bedrock-runtime.${AWS::Region}.vpce.amazonaws.com"
+            - EndpointId: !Ref SharedBedrockRuntimeVpcEndpointId
       Events:
         StepFunctionsTrigger:
           Type: EventBridgeRule
@@ -1192,8 +1003,8 @@ Resources:
         SecurityGroupIds:
           - !Ref LambdaSG
         SubnetIds:
-          - !Ref PrivateSubnet1
-          - !Ref PrivateSubnet2
+          - !Ref SharedLambdaSubnetAz1Id
+          - !Ref SharedLambdaSubnetAz2Id
       Environment:
         Variables:
           GENERATION_MODEL_ID: !Ref GenerationModelId
@@ -1201,12 +1012,11 @@ Resources:
           LOG_LEVEL: DEBUG
           CACHE_SIMILARITY_THRESHOLD: "0.95"
           CACHE_TTL_DAYS: "7"
-          # Use the VPC endpoint's own DNS name (bypasses private-DNS resolution,
-          # which was returning the public IP instead of the ENI private IP).
-          # !GetAtt DnsEntries format: "{hosted-zone-id}:{dns-name}" → take index 1 after split.
+          # Explicitly target the shared-stack Bedrock Runtime VPC endpoint so
+          # boto3 routes to the private ENI rather than the public endpoint.
           AWS_ENDPOINT_URL_BEDROCK_RUNTIME: !Sub
-            - "https://${DnsName}"
-            - DnsName: !Select [1, !Split [":", !Select [0, !GetAtt BedrockRuntimeVPCEndpoint.DnsEntries]]]
+            - "https://${EndpointId}.bedrock-runtime.${AWS::Region}.vpce.amazonaws.com"
+            - EndpointId: !Ref SharedBedrockRuntimeVpcEndpointId
       Events:
         QueryExpertise:
           Type: HttpApi
@@ -1247,8 +1057,8 @@ Resources:
         SecurityGroupIds:
           - !Ref LambdaSG
         SubnetIds:
-          - !Ref PrivateSubnet1
-          - !Ref PrivateSubnet2
+          - !Ref SharedLambdaSubnetAz1Id
+          - !Ref SharedLambdaSubnetAz2Id
 
   # ───────────────────────────────────────────
   # Attach RDS instance to secret so AWS injects host/port/engine
@@ -1419,12 +1229,6 @@ Outputs:
     Value: !Ref PostgresSecret
     Export:
       Name: !Sub ${AWS::StackName}-PostgresSecretArn
-
-  VpcId:
-    Description: VPC ID
-    Value: !Ref VPC
-    Export:
-      Name: !Sub ${AWS::StackName}-VpcId
 
   IngestionStateMachineArn:
     Description: Step Functions ingestion state machine ARN

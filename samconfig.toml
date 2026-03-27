@@ -27,13 +27,22 @@ disable_rollback     = false
 # TODO: Replace 'your-sam-deployment-bucket' with your SAM artifacts bucket
 # or let SAM create a managed bucket by omitting s3_bucket.
 # s3_bucket          = "your-sam-deployment-bucket"
+# Shared-infra values are resolved from the tarun-teamweave-shared stack at
+# deploy time by the GitHub Actions workflow (Fetch shared infrastructure
+# outputs step).  For local deploys, populate the five Shared* overrides
+# by running:
+#   aws cloudformation describe-stacks --stack-name tarun-teamweave-shared \
+#     --query "Stacks[0].Outputs"
 parameter_overrides  = [
     "Environment=dev",
-    "NeptuneVectorDimension=1024",
-    "NeptuneProvisionedMemory=16",
     "LogRetentionDays=30",
     "EnableStepFunctions=true",
     "GenerationModelId=us.amazon.nova-pro-v1:0",
+    "SharedVpcId=<VpcId from tarun-teamweave-shared>",
+    "SharedLambdaSubnetAz1Id=<LambdaSubnetAz1Id from tarun-teamweave-shared>",
+    "SharedLambdaSubnetAz2Id=<LambdaSubnetAz2Id from tarun-teamweave-shared>",
+    "SharedPublicSubnetAz1Id=<PublicSubnetAz1Id from tarun-teamweave-shared>",
+    "SharedBedrockRuntimeVpcEndpointId=<BedrockRuntimeVpcEndpointId from tarun-teamweave-shared>",
 ]
 tags = [
     "Project=ExpertiseRAG",
@@ -53,10 +62,13 @@ confirm_changeset    = true
 capabilities         = "CAPABILITY_NAMED_IAM"
 parameter_overrides  = [
     "Environment=staging",
-    "NeptuneVectorDimension=1024",
-    "NeptuneProvisionedMemory=16",
     "LogRetentionDays=60",
     "EnableStepFunctions=true",
+    "SharedVpcId=<VpcId from tarun-teamweave-shared>",
+    "SharedLambdaSubnetAz1Id=<LambdaSubnetAz1Id from tarun-teamweave-shared>",
+    "SharedLambdaSubnetAz2Id=<LambdaSubnetAz2Id from tarun-teamweave-shared>",
+    "SharedPublicSubnetAz1Id=<PublicSubnetAz1Id from tarun-teamweave-shared>",
+    "SharedBedrockRuntimeVpcEndpointId=<BedrockRuntimeVpcEndpointId from tarun-teamweave-shared>",
 ]
 tags = [
     "Project=ExpertiseRAG",
@@ -77,10 +89,13 @@ capabilities         = "CAPABILITY_NAMED_IAM"
 disable_rollback     = false
 parameter_overrides  = [
     "Environment=prod",
-    "NeptuneVectorDimension=1024",
-    "NeptuneProvisionedMemory=16",
     "LogRetentionDays=365",
     "EnableStepFunctions=true",
+    "SharedVpcId=<VpcId from tarun-teamweave-shared>",
+    "SharedLambdaSubnetAz1Id=<LambdaSubnetAz1Id from tarun-teamweave-shared>",
+    "SharedLambdaSubnetAz2Id=<LambdaSubnetAz2Id from tarun-teamweave-shared>",
+    "SharedPublicSubnetAz1Id=<PublicSubnetAz1Id from tarun-teamweave-shared>",
+    "SharedBedrockRuntimeVpcEndpointId=<BedrockRuntimeVpcEndpointId from tarun-teamweave-shared>",
 ]
 tags = [
     "Project=ExpertiseRAG",
