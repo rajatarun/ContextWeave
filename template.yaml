@@ -68,8 +68,8 @@ Parameters:
   # ── Memgraph EC2 ──────────────────────────────────────────────────────────
   MemgraphInstanceType:
     Type: String
-    Default: t4g.small
-    AllowedValues: [t4g.small, t4g.medium, t4g.large, t3.medium, t3.large, t3.xlarge, m6i.large, m6i.xlarge, m7g.medium, m7g.large]
+    Default: t4g.nano
+    AllowedValues: [t4g.nano, t4g.small, t4g.medium, t4g.large, t3.medium, t3.large, t3.xlarge, m6i.large, m6i.xlarge, m7g.medium, m7g.large]
     Description: EC2 instance type for Memgraph (t4g = Graviton2 arm64, recommended for cost)
 
   MemgraphEBSSizeGB:
@@ -415,10 +415,10 @@ Resources:
           log "Docker started"
 
           # --- Pull image with exponential-backoff retries ---
-          log "Pulling memgraph/memgraph:3.8.1..."
+          log "Pulling memgraph/memgraph:3.8.1 (linux/arm64)..."
           pulled=false
           for attempt in 1 2 3 4 5; do
-            if docker pull memgraph/memgraph:3.8.1; then
+            if docker pull --platform linux/arm64 memgraph/memgraph:3.8.1; then
               pulled=true
               break
             fi
@@ -434,6 +434,7 @@ Resources:
           docker run -d \
             --name memgraph \
             --restart=unless-stopped \
+            --platform linux/arm64 \
             -p 7687:7687 \
             -v /var/lib/memgraph:/var/lib/memgraph \
             memgraph/memgraph:3.8.1 \
