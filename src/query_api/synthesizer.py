@@ -26,6 +26,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from models import QueryResponse, RetrievedChunk
+from shared.mcp_observatory import observe_converse_request
 
 logger = logging.getLogger(__name__)
 
@@ -95,10 +96,17 @@ def _classify_with_model(question: str) -> str | None:
             "[CLASSIFIER:MODEL] Invoking %s to classify question: %s",
             CLASSIFICATION_MODEL_ID, question[:120],
         )
-        resp = client.converse(
-            modelId=CLASSIFICATION_MODEL_ID,
-            messages=[{"role": "user", "content": [{"text": _CLASSIFICATION_PROMPT.format(question=question)}]}],
-            inferenceConfig={"maxTokens": 10, "temperature": 0},
+        request_body = {
+            "messages": [{"role": "user", "content": [{"text": _CLASSIFICATION_PROMPT.format(question=question)}]}],
+            "inferenceConfig": {"maxTokens": 10, "temperature": 0},
+        }
+        resp = observe_converse_request(
+            runtime_client=client,
+            model_id=CLASSIFICATION_MODEL_ID,
+            prompt=question,
+            request_body=request_body,
+            source="classifier",
+            operation="classify_question",
         )
         answer = resp["output"]["message"]["content"][0]["text"].strip().lower().rstrip(".")
         usage = resp.get("usage", {})
@@ -312,9 +320,13 @@ def synthesize_answer(
 
     client = _get_bedrock_runtime()
     try:
-        response = client.converse(
-            modelId=effective_model,
-            **request_body,
+        response = observe_converse_request(
+            runtime_client=client,
+            model_id=effective_model,
+            prompt=user_message,
+            request_body=request_body,
+            source="synthesis",
+            operation="synthesize_answer",
         )
     except ClientError as exc:
         logger.error("Bedrock Converse failed: %s", exc)
