@@ -55,6 +55,14 @@ Parameters:
     Description: >
       AZ-1 public subnet from the shared infrastructure stack (used by Memgraph EC2).
 
+  SharedObservatoryMetricsTableName:
+    Type: String
+    Description: Observatory metrics DynamoDB table name from the shared infrastructure stack
+
+  SharedObservatoryMetricsTableArn:
+    Type: String
+    Description: Observatory metrics DynamoDB table ARN from the shared infrastructure stack
+
   AdminCidr:
     Type: String
     Default: 10.0.0.0/8
@@ -126,6 +134,7 @@ Globals:
         ARTIFACTS_BUCKET: !Sub contextweave-rag-artifacts-${AWS::AccountId}-${Environment}
         MEMGRAPH_SECRET_ARN: !Ref MemgraphSecret
         POSTGRES_SECRET_ARN: !Ref PostgresSecret
+        OBSERVATORY_METRICS_TABLE: !Ref SharedObservatoryMetricsTableName
     Tags:
       Project: ExpertiseRAG
       Environment: !Ref Environment
@@ -639,6 +648,7 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+
   ApiGatewayLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -751,6 +761,14 @@ Resources:
                   - kms:Decrypt
                   - kms:GenerateDataKey
                 Resource: !GetAtt ArtifactsKMSKey.Arn
+        - PolicyName: ObservatoryMetricsWrite
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !Ref SharedObservatoryMetricsTableArn
       Tags:
         - Key: Project
           Value: ExpertiseRAG
@@ -809,6 +827,14 @@ Resources:
                 Action:
                   - kms:Decrypt
                 Resource: !GetAtt ArtifactsKMSKey.Arn
+        - PolicyName: ObservatoryMetricsWrite
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !Ref SharedObservatoryMetricsTableArn
       Tags:
         - Key: Project
           Value: ExpertiseRAG
@@ -1195,6 +1221,7 @@ Outputs:
     Value: !Ref IngestionStateMachine
     Export:
       Name: !Sub ${AWS::StackName}-IngestionStateMachine
+
 
   KMSKeyArn:
     Description: KMS key ARN for artifact encryption

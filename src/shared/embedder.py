@@ -14,6 +14,8 @@ import logging
 import os
 from typing import Any
 
+from .mcp_observatory import observe_model_request
+
 logger = logging.getLogger(__name__)
 
 _BEDROCK_RUNTIME: Any = None
@@ -52,11 +54,12 @@ def embed_text(text: str) -> list[float] | None:
             "dimensions": _DIMENSIONS,
             "normalize": True,
         })
-        response = client.invoke_model(
-            modelId=_MODEL_ID,
-            contentType="application/json",
-            accept="application/json",
+        response = observe_model_request(
+            runtime_client=client,
+            model_id=_MODEL_ID,
             body=body,
+            content_type="application/json",
+            accept="application/json",
         )
         result = json.loads(response["body"].read())
         return result["embedding"]
