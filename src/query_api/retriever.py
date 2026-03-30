@@ -27,11 +27,11 @@ logger = logging.getLogger(__name__)
 
 
 def _get_shared_module(name: str):
-    shared_dir = os.path.join(os.path.dirname(__file__), "..", "shared")
-    if shared_dir not in sys.path:
-        sys.path.insert(0, shared_dir)
+    src_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    if src_root not in sys.path:
+        sys.path.insert(0, src_root)
     import importlib
-    return importlib.import_module(name)
+    return importlib.import_module(f"shared.{name}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
