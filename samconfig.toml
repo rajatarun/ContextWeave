@@ -42,7 +42,8 @@ parameter_overrides  = [
     "SharedLambdaSubnetAz1Id=<LambdaSubnetAz1Id from tarun-teamweave-shared>",
     "SharedLambdaSubnetAz2Id=<LambdaSubnetAz2Id from tarun-teamweave-shared>",
     "SharedPublicSubnetAz1Id=<PublicSubnetAz1Id from tarun-teamweave-shared>",
-    "SharedBedrockRuntimeVpcEndpointId=<BedrockRuntimeVpcEndpointId from tarun-teamweave-shared>",
+    "SharedObservatoryMetricsTableName=<ObservatoryMetricsTableName from tarun-teamweave-shared>",
+    "SharedObservatoryMetricsTableArn=<ObservatoryMetricsTableArn from tarun-teamweave-shared>",
 ]
 tags = [
     "Project=ExpertiseRAG",
@@ -68,7 +69,8 @@ parameter_overrides  = [
     "SharedLambdaSubnetAz1Id=<LambdaSubnetAz1Id from tarun-teamweave-shared>",
     "SharedLambdaSubnetAz2Id=<LambdaSubnetAz2Id from tarun-teamweave-shared>",
     "SharedPublicSubnetAz1Id=<PublicSubnetAz1Id from tarun-teamweave-shared>",
-    "SharedBedrockRuntimeVpcEndpointId=<BedrockRuntimeVpcEndpointId from tarun-teamweave-shared>",
+    "SharedObservatoryMetricsTableName=<ObservatoryMetricsTableName from tarun-teamweave-shared>",
+    "SharedObservatoryMetricsTableArn=<ObservatoryMetricsTableArn from tarun-teamweave-shared>",
 ]
 tags = [
     "Project=ExpertiseRAG",
@@ -95,7 +97,8 @@ parameter_overrides  = [
     "SharedLambdaSubnetAz1Id=<LambdaSubnetAz1Id from tarun-teamweave-shared>",
     "SharedLambdaSubnetAz2Id=<LambdaSubnetAz2Id from tarun-teamweave-shared>",
     "SharedPublicSubnetAz1Id=<PublicSubnetAz1Id from tarun-teamweave-shared>",
-    "SharedBedrockRuntimeVpcEndpointId=<BedrockRuntimeVpcEndpointId from tarun-teamweave-shared>",
+    "SharedObservatoryMetricsTableName=<ObservatoryMetricsTableName from tarun-teamweave-shared>",
+    "SharedObservatoryMetricsTableArn=<ObservatoryMetricsTableArn from tarun-teamweave-shared>",
 ]
 tags = [
     "Project=ExpertiseRAG",
