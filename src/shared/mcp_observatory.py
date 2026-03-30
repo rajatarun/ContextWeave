@@ -58,6 +58,14 @@ def _push_metric(operation: str, span: Any, decision: Any, extra: dict[str, Any]
             "cost_usd": _to_decimal(getattr(span, "cost_usd", 0.0)),
             "decision": getattr(decision, "action", "unknown"),
             "decision_reason": getattr(decision, "reason", None) or "none",
+            # Hallucination metrics
+            "hallucination_risk_score": _to_decimal(getattr(span, "hallucination_risk_score", None)),
+            "hallucination_risk_level": str(getattr(span, "hallucination_risk_level", None) or "unknown"),
+            # Composite risk metrics
+            "composite_risk_score": _to_decimal(getattr(span, "composite_risk_score", None)),
+            "composite_risk_level": str(getattr(span, "composite_risk_level", None) or "unknown"),
+            # Policy gate
+            "policy_gate": str(getattr(span, "policy_decision", None) or "unknown"),
             "ttl": Decimal(expiry),
         }
 
@@ -99,6 +107,11 @@ def _run_observed_call(
             "cost_usd": result.span.cost_usd,
             "decision": result.decision.action,
             "decision_reason": result.decision.reason,
+            "hallucination_risk_score": getattr(result.span, "hallucination_risk_score", None),
+            "hallucination_risk_level": getattr(result.span, "hallucination_risk_level", None),
+            "composite_risk_score": getattr(result.span, "composite_risk_score", None),
+            "composite_risk_level": getattr(result.span, "composite_risk_level", None),
+            "policy_gate": getattr(result.span, "policy_decision", None),
         },
     )
 
