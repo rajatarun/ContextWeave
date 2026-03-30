@@ -42,6 +42,7 @@ from extractors import extract
 from graph_builder import build_graph_from_extractions, GraphBuilder
 from models import DerivedArtifact, get_source_weight
 from routing_analyzer import analyze_document
+from shared.demo_logging import resolve_log_level
 
 # Shared utilities – imported lazily so the module loads even without
 # the DB drivers installed (unit-test environments)
@@ -53,7 +54,7 @@ def _get_shared_module(name: str):
     return importlib.import_module(name)
 
 logger = logging.getLogger()
-logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
+logger.setLevel(resolve_log_level(os.environ.get("LOG_LEVEL", "INFO")))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # AWS clients (instantiated once per Lambda container for connection reuse)

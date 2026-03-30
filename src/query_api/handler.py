@@ -49,9 +49,10 @@ from retriever import deduplicate_chunks, retrieve_chunks, retrieve_with_strateg
 from synthesizer import classify_question, synthesize_answer
 from models import QueryRequest, RAGStrategyLabel
 import cache as _cache
+from shared.demo_logging import demo_for, demo_if, demo_step, demo_strategy_choice, resolve_log_level
 
 logger = logging.getLogger()
-logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
+logger.setLevel(resolve_log_level(os.environ.get("LOG_LEVEL", "INFO")))
 
 # Retained for backward compatibility with existing callers that pass these
 # in the request; the retriever and router now use pgvector/Memgraph directly.
@@ -131,11 +132,14 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
       8. Return structured response with routingDecision field
     """
     start_time = time.monotonic()
+    demo_step(logger, "Starting adaptive query pipeline execution")
 
     # Step 0 – Semantic cache check (CAG)
     # Embed once here; retriever will embed again internally on a cache miss
     # (double embed cost ~$0.00002 — negligible vs synthesis savings).
-    if not _cache.is_time_sensitive(req.question):
+    cache_allowed = not _cache.is_time_sensitive(req.question)
+    demo_if(logger, "question is not time-sensitive (cache allowed)", cache_allowed)
+    if cache_allowed:
         try:
             import sys as _sys, os as _os
             shared_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "shared")
@@ -146,9 +150,13 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
             _db = importlib.import_module("db_clients")
 
             question_embedding = _embedder.embed_text(req.question)
-            if question_embedding is not None:
+            has_embedding = question_embedding is not None
+            demo_if(logger, "question embedding was generated", has_embedding)
+            if has_embedding:
                 cached = _cache.check_cache(question_embedding, _db.get_pg_connection())
-                if cached is not None:
+                cache_hit = cached is not None
+                demo_if(logger, "semantic cache returned a result", cache_hit)
+                if cache_hit:
                     elapsed_ms = int((time.monotonic() - start_time) * 1000)
                     logger.info("Cache HIT for question (%.0fms): %s", elapsed_ms, req.question[:80])
                     cached["cacheHit"] = True
@@ -162,10 +170,12 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
         question_embedding = None
 
     # Step 1 – Classify
+    demo_step(logger, "Classifying incoming question for routing type")
     question_type = req.question_type or classify_question(req.question)
     logger.info("Question type: %s | Question: %s", question_type, req.question[:100])
 
     # Step 2 – Route: pick best retrieval strategy from Neptune routing graph
+    demo_step(logger, "Selecting retrieval strategy from routing graph")
     retrieval_config = select_strategy(
         question_type=question_type,
         graph_id=NEPTUNE_GRAPH_ID or None,
@@ -178,8 +188,14 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
         retrieval_config.use_neptune_chunks,
         retrieval_config.strategy_confidence,
     )
+    demo_strategy_choice(
+        logger,
+        str(retrieval_config.strategy),
+        float(retrieval_config.strategy_confidence),
+    )
 
     # Step 3 – Retrieve with chosen strategy
+    demo_step(logger, "Retrieving chunks using selected strategy configuration")
     chunks = retrieve_with_strategy(
         question=req.question,
         knowledge_base_id=KNOWLEDGE_BASE_ID,
@@ -190,6 +206,7 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
     )
 
     # Step 4 – Dedup
+    demo_step(logger, "Deduplicating retrieved chunks for concise evidence set")
     chunks = deduplicate_chunks(chunks)
     logger.info("Retrieved %d unique chunks via strategy=%s", len(chunks), retrieval_config.strategy)
 
@@ -206,9 +223,18 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
         "graph_entities_used": [],
     }
 
-    if (req.include_graph_expansion or force_graph) and NEPTUNE_GRAPH_ID:
+    should_expand_graph = (req.include_graph_expansion or force_graph) and bool(NEPTUNE_GRAPH_ID)
+    demo_if(
+        logger,
+        "graph expansion requested/forced and NEPTUNE_GRAPH_ID is configured",
+        should_expand_graph,
+    )
+    if should_expand_graph:
         try:
-            snippet_texts = [c.content for c in chunks]
+            snippet_texts: list[str] = []
+            for index, chunk in enumerate(chunks, start=1):
+                demo_for(logger, "retrieved chunks for graph context snippets", index, len(chunks))
+                snippet_texts.append(chunk.content)
             graph_context = expand_graph_context(
                 retrieved_text_snippets=snippet_texts,
                 graph_id=NEPTUNE_GRAPH_ID,
@@ -222,6 +248,7 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
             logger.warning("Graph expansion failed (non-fatal): %s", exc)
 
     # Step 6 – Synthesize
+    demo_step(logger, "Synthesizing final answer from chunks and graph context")
     query_response = synthesize_answer(
         question=req.question,
         chunks=chunks,
@@ -230,9 +257,13 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
     )
 
     # Step 7 – Write to semantic cache (non-fatal; skip low-confidence answers)
-    if query_response.confidence >= 0.5:
+    should_cache_write = query_response.confidence >= 0.5
+    demo_if(logger, "response confidence >= 0.5 (eligible for cache write)", should_cache_write)
+    if should_cache_write:
         try:
-            if question_embedding is not None:
+            has_embedding = question_embedding is not None
+            demo_if(logger, "question embedding available for cache write", has_embedding)
+            if has_embedding:
                 import importlib, sys as _sys, os as _os
                 shared_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "shared")
                 if shared_dir not in _sys.path:
@@ -252,7 +283,10 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
         )
 
     # Step 8 – Routing feedback (learning loop)
-    if NEPTUNE_GRAPH_ID:
+    demo_step(logger, "Updating routing feedback weights after answer confidence assessment")
+    has_neptune_graph = bool(NEPTUNE_GRAPH_ID)
+    demo_if(logger, "NEPTUNE_GRAPH_ID configured for routing feedback update", has_neptune_graph)
+    if has_neptune_graph:
         try:
             update_feedback(
                 strategy=retrieval_config.strategy,
@@ -302,7 +336,9 @@ def lambda_handler(event: dict, context: Any) -> dict:
     logger.info("Request: %s %s", method, path)
 
     # ── Health check ──────────────────────────────────────────────────────────
-    if method == "GET" and "/health" in path:
+    is_health_request = method == "GET" and "/health" in path
+    demo_if(logger, "request targets GET /health", is_health_request)
+    if is_health_request:
         from graph_expander import get_document_type_distribution
         doc_type_dist = []
         if NEPTUNE_GRAPH_ID:
@@ -321,7 +357,9 @@ def lambda_handler(event: dict, context: Any) -> dict:
         })
 
     # ── POST /query-expertise ─────────────────────────────────────────────────
-    if method == "POST" and "/query-expertise" in path:
+    is_query_request = method == "POST" and "/query-expertise" in path
+    demo_if(logger, "request targets POST /query-expertise", is_query_request)
+    if is_query_request:
         req = _parse_request(event)
         if req is None:
             return _error(
@@ -348,7 +386,9 @@ def lambda_handler(event: dict, context: Any) -> dict:
             return _error(500, "Internal server error", str(exc))
 
     # ── CORS preflight ────────────────────────────────────────────────────────
-    if method == "OPTIONS":
+    is_options = method == "OPTIONS"
+    demo_if(logger, "request uses OPTIONS (CORS preflight)", is_options)
+    if is_options:
         return {"statusCode": 200, "headers": _CORS_HEADERS, "body": ""}
 
     # ── 404 ───────────────────────────────────────────────────────────────────

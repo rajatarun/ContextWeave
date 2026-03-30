@@ -23,8 +23,10 @@ import sys
 import urllib.request
 from typing import Any
 
+from shared.demo_logging import resolve_log_level
+
 logger = logging.getLogger()
-logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
+logger.setLevel(resolve_log_level(os.environ.get("LOG_LEVEL", "INFO")))
 
 
 def _get_shared_module(name: str):
