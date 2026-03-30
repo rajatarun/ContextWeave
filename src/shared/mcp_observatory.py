@@ -152,7 +152,7 @@ def observe_converse_request(
     operation: str,
 ) -> Any:
     return _run_observed_call(
-        operation=operation,
+        operation="invoke_model",
         source=source,
         model=model_id,
         prompt=prompt,
@@ -168,9 +168,11 @@ def observe_converse_request(
         log_extra={
             "model_id": model_id,
             "body_len": len(prompt),
+            "pipeline_operation": operation,
         },
         metric_extra={
             "model_id": model_id,
             "body_len": Decimal(len(prompt)),
+            "pipeline_operation": operation,
         },
     )

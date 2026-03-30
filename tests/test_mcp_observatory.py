@@ -151,7 +151,9 @@ def test_structured_log_and_metric_shape(monkeypatch):
     assert logged["decision_reason"] == "ok"
 
     item = table.items[0]
-    assert item["pk"] == "OBSERVATORY#synthesize_answer"
+    assert item["pk"] == "OBSERVATORY#invoke_model"
+    assert item["operation"] == "invoke_model"
+    assert item["pipeline_operation"] == "synthesize_answer"
     assert item["trace_id"] == "trace-123"
     assert item["decision"] == "allow"
     assert "#trace-123" in item["sk"]
