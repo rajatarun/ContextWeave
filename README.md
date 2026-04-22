@@ -10,7 +10,7 @@ a developer's professional expertise.
 A **semantic response cache (CAG)** short-circuits the full RAG pipeline for
 repeated or near-identical questions. An **agentic routing layer** classifies
 every document at ingestion time, recommends the best chunking strategy, and at
-query time consults a self-improving Neptune graph to pick the optimal retrieval
+query time consults a self-improving Memgraph routing graph to pick the optimal retrieval
 strategy.
 
 ```
@@ -19,7 +19,7 @@ POST /query-expertise
 
 → {
     "answer": "Based on architecture.md and CLAUDE.md (authoritative sources)...",
-    "inferredSkills": ["Amazon Bedrock", "Neptune Analytics", "AWS Lambda"],
+    "inferredSkills": ["Amazon Bedrock", "Memgraph", "AWS Lambda"],
     "repeatedPatterns": ["serverless", "event-driven", "infrastructure-as-code"],
     "confidence": 0.94,
     "routingDecision": {
@@ -66,11 +66,11 @@ the best **ChunkingStrategy** based on structural analysis:
 | `diagram_derived` | `.puml` extension / `@startuml` marker | `fixed_256` |
 
 DocumentType and ChunkingStrategy nodes — and their relationships to each
-Document node — are written directly into Neptune Analytics.
+Document node — are written directly into Memgraph.
 
 ### Self-improving routing feedback loop
 
-A **RAGRouter** agent reads `EFFECTIVE_FOR` edge weights from Neptune to select
+A **RAGRouter** agent reads `EFFECTIVE_FOR` edge weights from Memgraph to select
 the optimal retrieval strategy:
 
 | Strategy | When chosen | What it does |
@@ -80,7 +80,7 @@ the optimal retrieval strategy:
 | `keyword_boosted` | project, credential | pgvector + keyword-overlap reranking |
 | `semantic_search` | general | pgvector semantic search (baseline) |
 
-After every query, the router updates edge weights in Neptune:
+After every query, the router updates edge weights in Memgraph:
 - `confidence ≥ 0.70` → reinforce winning strategy (`+0.05`, cap 1.0)
 - `confidence < 0.40` → penalise winning strategy (`−0.02`, floor 0.1)
 
@@ -112,13 +112,13 @@ PostgreSQL + pgvector
 API Gateway → Query API Lambda
   0. embed question → check CAG cache (skip steps 1-8 on hit)
   1. classify_question()
-  2. RAGRouter.select_strategy()   ← reads Neptune EFFECTIVE_FOR edges
+  2. RAGRouter.select_strategy()   ← reads Memgraph EFFECTIVE_FOR edges
   3. retrieve_with_strategy()      ← pgvector ± Memgraph ± keyword boost
   4. deduplicate_chunks()
-  5. expand_graph_context()        ← Neptune openCypher traversal
+  5. expand_graph_context()        ← Memgraph openCypher traversal
   6. synthesize_answer()           ← Bedrock Converse
   7. write_cache()                 ← writes to query_cache if conf ≥ 0.5
-  8. RAGRouter.update_feedback()   ← writes confidence back to Neptune
+  8. RAGRouter.update_feedback()   ← writes confidence back to Memgraph
 ```
 
 | Layer | Service | Role |
@@ -128,7 +128,7 @@ API Gateway → Query API Lambda
 | Expertise Graph | Memgraph | openCypher graph database — skills, patterns, AWS services |
 | Vector Store | PostgreSQL + pgvector | Chunk embeddings (1024-dim) + CAG semantic response cache |
 | Embeddings | Amazon Titan Text Embeddings V2 | 1024-dimensional semantic embeddings |
-| Routing Graph | Amazon Neptune Analytics | EFFECTIVE_FOR routing weights + graph expansion |
+| Routing Graph | Memgraph (EC2) | EFFECTIVE_FOR routing weights + graph expansion |
 | Query API | AWS Lambda + API Gateway HTTP v2 | POST /query-expertise with CAG + adaptive routing |
 | Orchestration | AWS Step Functions | Preprocess → embed chunks → poll |
 | Encryption | AWS KMS | SSE-KMS on S3; key rotates annually |
@@ -181,13 +181,11 @@ sam deploy
 | `Stack Name` | `expertise-rag-dev` |
 | `AWS Region` | `us-east-1` |
 | `Environment` | `dev` |
-| `NeptuneVectorDimension` | `1024` (do not change) |
-| `NeptuneProvisionedMemory` | `16` (minimum) |
 | `LogRetentionDays` | `30` |
 | `EnableStepFunctions` | `true` |
 
 On first deploy the `DbInitFunction`:
-1. **Seeds the routing graph** in Neptune with initial prior weights
+1. **Seeds the routing graph** in Memgraph with initial prior weights
 2. **Initialises the pgvector schema** (`chunks` and `query_cache` tables)
 
 ### 3. Get Stack Outputs
@@ -203,7 +201,7 @@ aws cloudformation describe-stacks \
 |------------|-------------|
 | `ArtifactsBucketName` | S3 bucket for uploads |
 | `QueryExpertiseURL` | Full POST /query-expertise URL |
-| `NeptuneGraphIdentifier` | Neptune Analytics graph ID (routing graph) |
+| `MemgraphInstanceId` | Memgraph EC2 instance ID |
 
 ---
 
@@ -247,7 +245,7 @@ aws s3 cp docs/c4.puml        s3://$BUCKET/raw/$REPO/docs/c4.puml
 **Document type classification** (automatic at ingestion):
 
 Each uploaded file is classified by the `routing_analyzer` module. The chosen
-`ChunkingStrategy` is stored in Neptune and surfaced in `processing_manifest.json`
+`ChunkingStrategy` is stored in Memgraph and surfaced in `processing_manifest.json`
 under `routing_summary`.
 
 See `examples/repo_manifest_schema.json` for the `repo-signals.yaml` schema.
@@ -261,8 +259,7 @@ Preprocessing runs automatically on S3 upload. To trigger a full ingestion
 
 ```bash
 python scripts/start_ingestion.py \
-  --knowledge-base-id $KB_ID \
-  --data-source-id $DS_ID \
+  --stack-name expertise-rag-dev \
   --wait
 ```
 
@@ -271,14 +268,9 @@ python scripts/start_ingestion.py \
 If you need to (re)seed the routing graph with initial prior weights:
 
 ```bash
-GRAPH_ID=$(aws cloudformation describe-stacks \
-  --stack-name expertise-rag-dev \
-  --query 'Stacks[0].Outputs[?OutputKey==`NeptuneGraphIdentifier`].OutputValue' \
-  --output text)
-
 aws lambda invoke \
-  --function-name expertise-rag-db-init-dev \
-  --payload '{"action":"seed_routing","neptune_graph_id":"'$GRAPH_ID'"}' \
+  --function-name contextweave-rag-db-init-dev \
+  --payload '{"action":"seed_routing"}' \
   --cli-binary-format raw-in-base64-out \
   response.json && cat response.json
 ```
@@ -354,7 +346,7 @@ The response includes:
 curl -s $API_URL/../health | jq .routingGraph
 ```
 
-### Read EFFECTIVE_FOR weights directly from Neptune
+### Read EFFECTIVE_FOR weights directly from Memgraph
 
 ```cypher
 MATCH (r:RAGStrategy)-[e:EFFECTIVE_FOR]->(d:DocumentType)
@@ -390,7 +382,6 @@ sam local invoke PreprocessorFunction \
 sam local invoke QueryAPIFunction \
   --event events/api_query_event.json \
   --env-vars <(echo '{"QueryAPIFunction": {
-    "NEPTUNE_GRAPH_ID": "g-ABCDEF123456",
     "GENERATION_MODEL_ID": "anthropic.claude-3-5-sonnet-20241022-v2:0",
     "ARTIFACTS_BUCKET": "expertise-rag-artifacts-123456789012-dev",
     "POSTGRES_HOST": "localhost",
@@ -419,7 +410,7 @@ sam local invoke QueryAPIFunction \
 │   │   ├── retriever.py          # Multi-strategy retrieval (pgvector/Memgraph/keyword)
 │   │   ├── rag_router.py         # Routing agent: strategy selection + feedback
 │   │   ├── cache.py              # CAG: semantic response cache (pgvector)  ★ NEW
-│   │   ├── graph_expander.py     # Neptune Analytics graph expansion + routing queries
+│   │   ├── graph_expander.py     # Memgraph graph expansion + routing queries
 │   │   ├── synthesizer.py        # Bedrock Converse answer synthesis
 │   │   └── requirements.txt
 │   ├── ingestion_trigger/
@@ -434,7 +425,7 @@ sam local invoke QueryAPIFunction \
 ├── examples/                      # Sample graph/API inputs and outputs
 ├── scripts/
 │   ├── upload_repo.py            # Upload local repo to S3
-│   ├── start_ingestion.py        # Start + monitor Bedrock ingestion job
+│   ├── start_ingestion.py        # Start + monitor repo ingestion runs
 │   └── query_expertise.py        # Query via HTTP API
 └── docs/
     ├── architecture.md           # System architecture and design decisions
@@ -465,19 +456,17 @@ Manual deploys to `staging` or `prod` are triggered via `workflow_dispatch`.
 
 | Service | Cost driver | Notes |
 |---------|-------------|-------|
-| Neptune Analytics | Provisioned memory (min 16 GB) | Routing graph only (small); ~$0.50/GB-hr |
+| Memgraph (EC2) | EC2 instance type + EBS | Expertise + routing graph; Community Edition is free |
 | PostgreSQL | Instance type + storage | Chunk vectors + CAG cache; RDS or self-managed |
-| Memgraph | Instance type | Expertise graph; Community Edition is free |
 | Amazon Bedrock | Per input/output token (Converse) + per 1K tokens (Titan V2) | ~$0.0002/1K embed tokens |
 | AWS Lambda | Per invocation + duration | Typically cents |
 | Amazon S3 | Storage + requests | Minimal |
 
 **Estimated minimum monthly cost** (dev, light usage): ~$100–200/month
-(Neptune Analytics provisioned memory + PostgreSQL instance; Memgraph can run
-on a small EC2 or Fargate task)
+(Memgraph EC2 + PostgreSQL instance)
 
 To reduce costs in development:
-- Set `NeptuneProvisionedMemory` to `16` (minimum)
+- Use a smaller Memgraph EC2 type in dev (for example `t4g.nano`)
 - Set `EnableStepFunctions` to `false`
 - Use smaller generation models (Claude Haiku)
 - Use a single PostgreSQL instance for both pgvector and the CAG cache
@@ -489,7 +478,7 @@ To reduce costs in development:
 - All S3 data encrypted with a customer-managed KMS key (auto-rotates annually)
 - S3 bucket policy enforces SSL-only access; no public S3 access
 - All IAM roles are least-privilege
-- Neptune Analytics uses IAM authentication
+- Access to Memgraph and PostgreSQL is mediated by VPC security groups and Secrets Manager
 - Memgraph and PostgreSQL credentials stored in AWS Secrets Manager (never in env vars or code)
 - GitHub Actions deploys via OIDC — no long-lived access keys
 - CloudWatch logs retained per `LogRetentionDays` parameter
