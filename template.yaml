@@ -369,13 +369,23 @@ Resources:
                 Value: ExpertiseRAG
               - Key: Environment
                 Value: !Ref Environment
+          - ResourceType: volume
+            Tags:
+              - Key: memgraph
+                Value: "true"
+              - Key: Name
+                Value: !Sub contextweave-rag-memgraph-${Environment}
+              - Key: Project
+                Value: ExpertiseRAG
+              - Key: Environment
+                Value: !Ref Environment
 
   MemgraphEC2:
     Type: AWS::EC2::Instance
     Properties:
       LaunchTemplate:
         LaunchTemplateId: !Ref MemgraphLaunchTemplate
-        Version: !GetAtt MemgraphLaunchTemplate.LatestVersionNumber
+        Version: "$Default"
       InstanceType: !Ref MemgraphInstanceType
       ImageId: !If
         - MemgraphIsGraviton
@@ -386,6 +396,7 @@ Resources:
         - !Ref MemgraphSG
       IamInstanceProfile: !Ref MemgraphInstanceProfile
       KeyName: !If [HasEC2KeyPair, !Ref EC2KeyPairName, !Ref AWS::NoValue]
+      PropagateTagsToVolumeOnCreation: true
       # Data volume defined inline so it is always attached before UserData runs,
       # eliminating the race condition that occurs when a separate
       # AWS::EC2::VolumeAttachment is used during instance replacement.
