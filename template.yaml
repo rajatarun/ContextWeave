@@ -80,6 +80,22 @@ Parameters:
     AllowedValues: [t4g.nano, t4g.small, t4g.medium, t4g.large, t3.medium, t3.large, t3.xlarge, m6i.large, m6i.xlarge, m7g.medium, m7g.large]
     Description: EC2 instance type for Memgraph (t4g = Graviton2 arm64, recommended for cost)
 
+  MemgraphArmAMI:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Description: >
+      AL2023 arm64 AMI for Graviton Memgraph instances (t4g / m7g / c7g families).
+      Resolved from SSM on first deploy and pinned in the stack thereafter.
+      To update intentionally pass --parameter-overrides MemgraphArmAMI=ami-xxxxxxxx.
+
+  MemgraphX86AMI:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: >
+      AL2023 x86_64 AMI for non-Graviton Memgraph instances (t3 / m6i families).
+      Resolved from SSM on first deploy and pinned in the stack thereafter.
+      To update intentionally pass --parameter-overrides MemgraphX86AMI=ami-xxxxxxxx.
+
   MemgraphEBSSizeGB:
     Type: Number
     Default: 20
@@ -385,12 +401,9 @@ Resources:
     Properties:
       LaunchTemplate:
         LaunchTemplateId: !Ref MemgraphLaunchTemplate
-        Version: "$Default"
+        Version: !GetAtt MemgraphLaunchTemplate.LatestVersionNumber
       InstanceType: !Ref MemgraphInstanceType
-      ImageId: !If
-        - MemgraphIsGraviton
-        - '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}'
-        - '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+      ImageId: !If [MemgraphIsGraviton, !Ref MemgraphArmAMI, !Ref MemgraphX86AMI]
       SubnetId: !Ref SharedPublicSubnetAz1Id
       SecurityGroupIds:
         - !Ref MemgraphSG
