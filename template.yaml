@@ -348,6 +348,15 @@ Resources:
           SpotOptions:
             SpotInstanceType: persistent
             InstanceInterruptionBehavior: stop
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: memgraph
+                Value: "true"
+          - ResourceType: spot-instances-request
+            Tags:
+              - Key: memgraph
+                Value: "true"
 
   MemgraphEC2:
     Type: AWS::EC2::Instance
@@ -365,6 +374,9 @@ Resources:
         - !Ref MemgraphSG
       IamInstanceProfile: !Ref MemgraphInstanceProfile
       KeyName: !If [HasEC2KeyPair, !Ref EC2KeyPairName, !Ref AWS::NoValue]
+      Tags:
+        - Key: memgraph
+          Value: "true"
       # Data volume defined inline so it is always attached before UserData runs,
       # eliminating the race condition that occurs when a separate
       # AWS::EC2::VolumeAttachment is used during instance replacement.
