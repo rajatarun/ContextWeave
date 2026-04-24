@@ -353,10 +353,22 @@ Resources:
             Tags:
               - Key: memgraph
                 Value: "true"
+              - Key: Name
+                Value: !Sub contextweave-rag-memgraph-${Environment}
+              - Key: Project
+                Value: ExpertiseRAG
+              - Key: Environment
+                Value: !Ref Environment
           - ResourceType: spot-instances-request
             Tags:
               - Key: memgraph
                 Value: "true"
+              - Key: Name
+                Value: !Sub contextweave-rag-memgraph-${Environment}
+              - Key: Project
+                Value: ExpertiseRAG
+              - Key: Environment
+                Value: !Ref Environment
 
   MemgraphEC2:
     Type: AWS::EC2::Instance
@@ -374,9 +386,6 @@ Resources:
         - !Ref MemgraphSG
       IamInstanceProfile: !Ref MemgraphInstanceProfile
       KeyName: !If [HasEC2KeyPair, !Ref EC2KeyPairName, !Ref AWS::NoValue]
-      Tags:
-        - Key: memgraph
-          Value: "true"
       # Data volume defined inline so it is always attached before UserData runs,
       # eliminating the race condition that occurs when a separate
       # AWS::EC2::VolumeAttachment is used during instance replacement.
@@ -481,6 +490,8 @@ Resources:
 
           log "=== UserData complete ==="
       Tags:
+        - Key: memgraph
+          Value: "true"
         - Key: Name
           Value: !Sub contextweave-rag-memgraph-${Environment}
         - Key: Project
