@@ -5,32 +5,69 @@ Query-time agent that selects the best RAG retrieval strategy for a given
 question type by consulting the Memgraph routing graph.
 
 Decision logic:
-  1. Query Memgraph for EFFECTIVE_FOR edge weights connecting RAGStrategy nodes
+  1. Query Memgraph for the EFFECTIVE_FOR posterior connecting RAGStrategy nodes
      to the current question type (stored as a DocumentType proxy).
-  2. Pick the strategy with the highest weight (ties broken by priority order).
+  2. Draw one Thompson sample per strategy and pick the highest.
   3. Return a RetrievalConfig that configures the retriever accordingly.
 
 Feedback loop:
-  After each query, call update_feedback() to adjust edge weights in Memgraph
-  based on the synthesis confidence score. This is how the graph improves.
+  After each query, call update_feedback() to fold the synthesis confidence into
+  that strategy's Beta posterior.
+
+Why Thompson sampling rather than argmax over a scalar weight
+-------------------------------------------------------------
+The previous rule selected by ``argmax`` over a scalar weight and updated only
+the *selected* strategy's weight by a fixed step (+0.05 above confidence 0.70,
+-0.02 below 0.40, nothing in between). That is a bandit with no exploration, and
+it could demote a bad incumbent but never promote a challenger, because a
+challenger was never selected and so never evaluated. Simulating that rule over
+2000 queries: with an incumbent whose confidence lands in the [0.40, 0.70) dead
+zone -- 30% of the confidence range -- a strategy that would have answered at
+confidence 0.90 was selected *0 times*, and no weight in the graph ever moved.
+A router that has stopped learning and one that has converged emit identical
+logs, so the failure is silent in production.
+
+Four properties of this implementation fix that:
+
+  * **Exploration.** Selection draws from each strategy's posterior, so an arm is
+    tried in proportion to the probability that it is best. No epsilon schedule.
+  * **No dead zone.** Confidence enters as a fractional Bernoulli reward
+    (alpha += c, beta += 1 - c), so every observation is informative.
+  * **No ceiling.** alpha and beta are unbounded sufficient statistics, so
+    feedback never becomes a no-op the way a weight pinned at 1.0 did.
+  * **"Never tried" is representable.** Beta(1,1) is distinguishable from a
+    well-observed mediocre arm; a single scalar could not tell them apart.
+
+The scalar ``weight`` is still maintained on the edge as the posterior mean, so
+the routing policy remains readable as a small table and existing queries and
+dashboards keep working.
 """
 from __future__ import annotations
 
 import logging
 import os
+import random
 import sys
 
 from models import RAGStrategyLabel, RetrievalConfig, ROUTING_PRIORS
 
 logger = logging.getLogger(__name__)
 
-# Confidence threshold above which we reinforce, below which we penalise
-_REINFORCE_THRESHOLD = 0.70
-_PENALISE_THRESHOLD = 0.40
-_REINFORCE_DELTA = 0.05
-_PENALISE_DELTA = -0.02
-_WEIGHT_FLOOR = 0.10
-_WEIGHT_CEIL = 1.00
+# Strength of the seeded scalar weight when it is converted into a Beta prior.
+# Low on purpose: it should express the operator's initial belief without taking
+# many observations to overturn. At 4.0 a seeded weight of 0.6 becomes
+# Beta(2.4, 1.6), which roughly ten real observations will dominate.
+_PRIOR_STRENGTH = float(os.environ.get("ROUTER_PRIOR_STRENGTH", "4.0"))
+
+# Posterior for a strategy that has no EFFECTIVE_FOR edge at all. Beta(1,1) is
+# uniform: maximally uncertain, so Thompson sampling will occasionally try it.
+# Under the old rule a missing edge scored 0.0 and could never be selected,
+# which made "not yet seeded" indistinguishable from "known to be useless".
+_UNSEEN_PRIOR = (1.0, 1.0)
+
+# "thompson" (default) samples the posterior; "greedy" takes the posterior mean
+# and is intended for reproducible tests and for operators debugging a decision.
+_EXPLORATION = os.environ.get("ROUTER_EXPLORATION", "thompson").strip().lower()
 
 # Fallback priority when Memgraph is unavailable (or graph has no data yet)
 _STRATEGY_PRIORITY: list[str] = [
@@ -64,56 +101,95 @@ def _run_query(query: str, parameters: dict | None = None) -> list[dict]:
 # Strategy selection
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _query_strategy_weights(question_type: str) -> dict[str, float]:
-    """
-    Fetch EFFECTIVE_FOR edge weights from Memgraph for the given question_type.
+def _query_strategy_posteriors(question_type: str) -> dict[str, tuple[float, float]]:
+    """Fetch each strategy's Beta posterior for the given question type.
 
-    Returns a dict mapping RAGStrategy label → weight.
-    Falls back to ROUTING_PRIORS when Memgraph has no data.
+    Edges seeded before this change carry only a scalar ``weight``; those are
+    migrated on read into a weak Beta prior rather than requiring a migration
+    pass, so an existing deployment keeps its operator-set priors.
+
+    Returns a mapping of strategy label -> (alpha, beta). Strategies with no
+    edge are returned with the uniform prior so they remain explorable.
     """
     query = """
     MATCH (r:RAGStrategy)-[e:EFFECTIVE_FOR]->(d:DocumentType)
     WHERE d.question_type = $question_type
-    RETURN r.label AS strategy, e.weight AS weight
+    RETURN r.label AS strategy,
+           e.weight AS weight,
+           e.alpha  AS alpha,
+           e.beta   AS beta
     """
     rows = _run_query(query, {"question_type": question_type})
 
-    if rows:
-        return {row["strategy"]: float(row["weight"]) for row in rows}
+    posteriors: dict[str, tuple[float, float]] = {}
+    for row in rows:
+        label = row.get("strategy")
+        if label is None:
+            continue
+        alpha, beta = row.get("alpha"), row.get("beta")
+        if alpha is None or beta is None:
+            weight = row.get("weight")
+            weight = 0.5 if weight is None else float(weight)
+            weight = min(1.0, max(0.0, weight))
+            alpha = weight * _PRIOR_STRENGTH
+            beta = (1.0 - weight) * _PRIOR_STRENGTH
+        # Beta is undefined at zero, so keep both shape parameters positive.
+        posteriors[label] = (max(float(alpha), 1e-3), max(float(beta), 1e-3))
 
-    # Fall back to hard-coded priors
-    return {
-        strategy.value: ROUTING_PRIORS.get((strategy, question_type), 0.50)
-        for strategy in RAGStrategyLabel
-    }
+    for label in _STRATEGY_PRIORITY:
+        posteriors.setdefault(label, _UNSEEN_PRIOR)
+    return posteriors
+
+
+def _posterior_mean(alpha: float, beta: float) -> float:
+    return alpha / (alpha + beta)
 
 
 def select_strategy(
     question_type: str,
     graph_id: str | None = None,  # kept for API compatibility; unused (Memgraph uses env)
+    explore: bool | None = None,
 ) -> RetrievalConfig:
     """
-    Choose the best RAG strategy for the given question type.
+    Choose a RAG strategy for the given question type by Thompson sampling.
+
+    One value is drawn from each strategy's Beta posterior and the largest wins,
+    so a strategy is selected roughly in proportion to the probability that it is
+    the best one -- which means a strategy that has never been tried still gets
+    tried. Under the previous ``argmax`` rule it could not: only the incumbent
+    was ever selected, only the selected arm was ever updated, and a challenger's
+    weight therefore never moved.
 
     Args:
         question_type: Classified question type string (e.g. "architecture").
         graph_id:      Ignored (kept for backward compatibility).
+        explore:       Force sampling on/off. Defaults to the ROUTER_EXPLORATION
+                       environment setting; pass False for a reproducible
+                       decision (posterior mean) when debugging.
 
     Returns:
         RetrievalConfig describing which retrieval approach to use.
     """
-    weights = _query_strategy_weights(question_type)
+    posteriors = _query_strategy_posteriors(question_type)
 
-    # Pick strategy with highest weight; use priority order for ties
-    best_strategy = max(
-        _STRATEGY_PRIORITY,
-        key=lambda s: weights.get(s, 0.0),
-    )
-    best_weight = weights.get(best_strategy, 0.5)
+    use_sampling = (_EXPLORATION == "thompson") if explore is None else bool(explore)
+    if use_sampling:
+        scores = {s: random.betavariate(a, b) for s, (a, b) in posteriors.items()}
+    else:
+        scores = {s: _posterior_mean(a, b) for s, (a, b) in posteriors.items()}
+
+    # Ties break by the fixed priority order, as before.
+    best_strategy = max(_STRATEGY_PRIORITY, key=lambda s: scores.get(s, 0.0))
+    alpha, beta = posteriors[best_strategy]
+    posterior_mean = _posterior_mean(alpha, beta)
+    observations = alpha + beta - _PRIOR_STRENGTH
 
     logger.info(
-        "Routing decision: strategy=%s weight=%.3f question_type=%s weights=%s",
-        best_strategy, best_weight, question_type, weights,
+        "Routing decision: strategy=%s mean=%.3f n~%.1f mode=%s question_type=%s "
+        "posteriors=%s",
+        best_strategy, posterior_mean, max(observations, 0.0),
+        "thompson" if use_sampling else "greedy", question_type,
+        {s: (round(a, 2), round(b, 2)) for s, (a, b) in posteriors.items()},
     )
 
     return RetrievalConfig(
@@ -121,7 +197,9 @@ def select_strategy(
         include_graph=(best_strategy in (RAGStrategyLabel.GRAPH_FIRST, RAGStrategyLabel.HYBRID)),
         boost_keywords=(best_strategy in (RAGStrategyLabel.KEYWORD_BOOSTED, RAGStrategyLabel.HYBRID)),
         use_neptune_chunks=(best_strategy == RAGStrategyLabel.HYBRID),
-        strategy_confidence=best_weight,
+        # Report the posterior mean, not the sample: the sample drove exploration,
+        # the mean is the actual estimate of how good this strategy is.
+        strategy_confidence=posterior_mean,
     )
 
 
@@ -136,49 +214,59 @@ def update_feedback(
     graph_id: str | None = None,  # kept for API compatibility; unused
 ) -> None:
     """
-    Adjust the EFFECTIVE_FOR edge weight in Memgraph based on synthesis confidence.
+    Fold the synthesis confidence into this strategy's Beta posterior.
 
-    This is the core learning loop:
-      confidence ≥ 0.70 → reinforce (+0.05, capped at 1.0)
-      confidence < 0.40 → penalise  (-0.02, floored at 0.1)
-      otherwise         → no change
+    Confidence is treated as a fractional Bernoulli reward::
+
+        alpha += c
+        beta  += 1 - c
+
+    so every observation moves the posterior. The previous rule applied a fixed
+    +0.05 above 0.70 and -0.02 below 0.40 and *nothing at all* in between; that
+    dead band covered 30% of the confidence range, and an incumbent sitting in it
+    was locked in permanently because its weight never changed and no challenger
+    was ever selected to earn one.
+
+    alpha and beta are unbounded, so feedback never saturates the way a weight
+    clipped at 1.0 did -- which previously turned the loop into a no-op after
+    about eight confident answers.
+
+    The scalar ``weight`` is rewritten as the posterior mean so the policy stays
+    readable as a table and existing queries keep working.
 
     Args:
         strategy:      RAGStrategyLabel value of the strategy that was used.
         question_type: Question type that was answered.
-        confidence:    Synthesis confidence score (0–1).
+        confidence:    Synthesis confidence score (0-1); clamped.
         graph_id:      Ignored (kept for backward compatibility).
     """
-    if confidence >= _REINFORCE_THRESHOLD:
-        delta = _REINFORCE_DELTA
-    elif confidence < _PENALISE_THRESHOLD:
-        delta = _PENALISE_DELTA
-    else:
-        return  # neutral zone – no update
+    reward = min(1.0, max(0.0, float(confidence)))
 
     query = """
-    MATCH (r:RAGStrategy {label: $strategy})-[e:EFFECTIVE_FOR]->(d:DocumentType {question_type: $question_type})
-    SET e.weight = toFloat(
-        CASE
-            WHEN e.weight + $delta > $ceil  THEN $ceil
-            WHEN e.weight + $delta < $floor THEN $floor
-            ELSE e.weight + $delta
-        END
-    ),
-    e.feedback_count = coalesce(e.feedback_count, 0) + 1
-    RETURN e.weight AS new_weight
+    MATCH (r:RAGStrategy {label: $strategy})-[e:EFFECTIVE_FOR]->(d:DocumentType)
+    WHERE d.question_type = $question_type
+    SET e.alpha = coalesce(e.alpha, coalesce(e.weight, 0.5) * $prior_strength) + $reward,
+        e.beta  = coalesce(e.beta, (1.0 - coalesce(e.weight, 0.5)) * $prior_strength)
+                  + (1.0 - $reward),
+        e.feedback_count = coalesce(e.feedback_count, 0) + 1
+    SET e.weight = toFloat(e.alpha / (e.alpha + e.beta))
+    RETURN e.alpha AS alpha, e.beta AS beta, e.weight AS weight,
+           e.feedback_count AS n
     """
     rows = _run_query(query, {
-        "strategy":      strategy,
-        "question_type": question_type,
-        "delta":         delta,
-        "ceil":          _WEIGHT_CEIL,
-        "floor":         _WEIGHT_FLOOR,
+        "strategy":       strategy,
+        "question_type":  question_type,
+        "reward":         reward,
+        "prior_strength": _PRIOR_STRENGTH,
     })
     if rows:
+        row = rows[0]
         logger.info(
-            "Routing feedback applied: strategy=%s qt=%s confidence=%.2f delta=%+.2f new_weight=%.3f",
-            strategy, question_type, confidence, delta, rows[0].get("new_weight", 0),
+            "Routing feedback applied: strategy=%s qt=%s confidence=%.2f "
+            "-> Beta(%.2f, %.2f) mean=%.3f n=%s",
+            strategy, question_type, reward,
+            row.get("alpha", 0.0), row.get("beta", 0.0),
+            row.get("weight", 0.0), row.get("n", 0),
         )
     else:
         logger.debug(
