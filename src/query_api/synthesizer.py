@@ -352,13 +352,15 @@ def synthesize_answer(
         parsed.get("repeated_patterns", [])
         + graph_context.get("repeated_patterns", [])
     ))[:10]
+    confidence, confidence_reported = _confidence_from(parsed)
 
     return QueryResponse(
         answer=parsed.get("answer", raw_text),
         sources=parsed.get("sources", [c.to_dict() for c in chunks[:5]]),
         inferred_skills=inferred_skills,
         repeated_patterns=repeated_patterns,
-        confidence=float(parsed.get("confidence", 0.7)),
+        confidence=confidence,
+        confidence_reported=confidence_reported,
         question_type=question_type,
         graph_entities_used=graph_context.get("graph_entities_used", []),
         retrieval_count=len(chunks),
@@ -377,7 +379,37 @@ def _parse_model_response(raw_text: str) -> dict:
         return json.loads(text)
     except json.JSONDecodeError:
         logger.warning("Could not parse model JSON response; returning raw text")
-        return {"answer": raw_text, "sources": [], "confidence": 0.5}
+        return {"answer": raw_text, "sources": [], "_unparsed": True}
+
+
+_OMITTED_CONFIDENCE = 0.7    # response value when the model leaves the field out
+_UNPARSED_CONFIDENCE = 0.5   # response value when the model's output was not JSON
+
+
+def _confidence_from(parsed: dict) -> tuple[float, bool]:
+    """Return (confidence, reported).
+
+    ``reported`` is True only when the model actually supplied a number in
+    [0, 1]. Otherwise a fallback constant is returned for the response and
+    ``reported`` is False, and the router must not be updated with it: a
+    constant the code chose is not an observation of how well the strategy
+    worked. Previously all three fallbacks (0.7 omitted, 0.5 unparseable,
+    0.0 failed call) were folded into the routing posterior as if the model
+    had said them -- and under the old fixed-step rule the 0.7 default sat
+    exactly on the reinforce threshold.
+    """
+    if parsed.get("_unparsed"):
+        return _UNPARSED_CONFIDENCE, False
+    raw = parsed.get("confidence")
+    if isinstance(raw, bool) or raw is None:
+        return _OMITTED_CONFIDENCE, False
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return _OMITTED_CONFIDENCE, False
+    if not (0.0 <= value <= 1.0) or value != value:  # out of range or NaN
+        return _OMITTED_CONFIDENCE, False
+    return value, True
 
 
 def _build_mock_response(
@@ -406,6 +438,8 @@ def _build_mock_response(
         inferred_skills=graph_context.get("inferred_skills", []),
         repeated_patterns=graph_context.get("repeated_patterns", []),
         confidence=0.0,
+        # Debug output, not a model's assessment: must not train the router.
+        confidence_reported=False,
         question_type=question_type,
         graph_entities_used=graph_context.get("graph_entities_used", []),
         retrieval_count=len(chunks),

@@ -70,9 +70,12 @@ _UNSEEN_PRIOR = (1.0, 1.0)
 _EXPLORATION = os.environ.get("ROUTER_EXPLORATION", "thompson").strip().lower()
 
 # Monte Carlo draws used to estimate the propensity of the selected strategy.
-# 500 draws puts the standard error near 0.02 for a propensity around 0.5,
-# which is ample for off-policy weighting and costs well under a millisecond.
-_PROPENSITY_SAMPLES = int(os.environ.get("ROUTER_PROPENSITY_SAMPLES", "500"))
+# Measured (scripts/bench_router.py): 4 arms x 200 draws costs ~1.1 ms median
+# in pure Python, against ~0.014 ms for the Thompson draw itself; 500 draws
+# cost ~2.7 ms. 200 puts the standard error at <= 0.035 for a propensity near
+# 0.5, which is adequate for off-policy weighting, and the whole selection
+# step stays three orders of magnitude below the synthesis call it precedes.
+_PROPENSITY_SAMPLES = int(os.environ.get("ROUTER_PROPENSITY_SAMPLES", "200"))
 
 # Health thresholds. An arm is *starved* when it has essentially no observations
 # while a sibling has many: that pattern is exactly what the old argmax rule

@@ -308,7 +308,12 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
     demo_step(logger, "Updating routing feedback weights after answer confidence assessment")
     has_neptune_graph = bool(NEPTUNE_GRAPH_ID)
     demo_if(logger, "NEPTUNE_GRAPH_ID configured for routing feedback update", has_neptune_graph)
-    if has_neptune_graph:
+    # A confidence the model did not actually report (omitted field, unparseable
+    # output, failed call) is a constant the code chose, not an observation.
+    # Training the router on it would pull every posterior toward that constant.
+    demo_if(logger, "synthesiser reported a confidence (not a fallback constant)",
+            query_response.confidence_reported)
+    if has_neptune_graph and query_response.confidence_reported:
         try:
             update_feedback(
                 strategy=retrieval_config.strategy,
@@ -330,7 +335,9 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
             question_type=question_type,
             strategy=retrieval_config.strategy,
             propensity=retrieval_config.selection_propensity,
-            confidence=query_response.confidence,
+            # NULL, not the fallback constant, so the self-confidence column can
+            # be compared against ratings without default values polluting it.
+            confidence=query_response.confidence if query_response.confidence_reported else None,
         )
     except Exception as exc:
         logger.warning("Routing decision record failed (non-fatal): %s", exc)
