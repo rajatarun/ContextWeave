@@ -304,7 +304,12 @@ class QuestionResult:
     declared_type: str
     question: str
     classified_type: str | None = None
-    routing_decision: str | None = None
+    routing_decision: str | None = None      # strategy label chosen by the router
+    # Probability the router had of choosing that strategy, and its posterior
+    # mean at decision time. The propensity is what makes this log usable for
+    # off-policy evaluation (scripts/routing_offpolicy_eval.py).
+    selection_propensity: float | None = None
+    strategy_confidence: float | None = None
     confidence: float | None = None
     # Confidence bucket for reporting, and the posterior-mean shift this
     # observation would produce on a freshly seeded edge.
@@ -368,7 +373,15 @@ def run_question(
         try:
             data = _post(endpoint, entry["q"], top_k, timeout)
             result.classified_type  = data.get("questionType")
-            result.routing_decision = data.get("routingDecision")
+            # routingDecision is a dict ({strategy, strategyConfidence,
+            # selectionPropensity, ...}); older responses returned the bare label.
+            rd = data.get("routingDecision")
+            if isinstance(rd, dict):
+                result.routing_decision     = rd.get("strategy")
+                result.selection_propensity = rd.get("selectionPropensity")
+                result.strategy_confidence  = rd.get("strategyConfidence")
+            else:
+                result.routing_decision = rd
             result.confidence       = data.get("confidence")
             result.retrieval_count  = data.get("retrievalCount")
             result.graph_entities_used = data.get("graphEntitiesUsed", [])
