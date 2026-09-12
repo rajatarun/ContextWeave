@@ -3,7 +3,8 @@ ExpertiseRAG – Query API Lambda Handler
 
 Exposes:
   POST /query-expertise  – main reasoning endpoint
-  GET  /health           – health check
+  POST /feedback         – rate an answer by queryId; independent reward for the router
+  GET  /health           – health check (includes routing learning-loop health)
 
 Request body (POST /query-expertise):
   {
@@ -34,6 +35,7 @@ import os
 import time
 import traceback
 from typing import Any
+from uuid import uuid4
 
 import boto3
 
@@ -49,6 +51,7 @@ from retriever import deduplicate_chunks, retrieve_chunks, retrieve_with_strateg
 from synthesizer import classify_question, synthesize_answer
 from models import QueryRequest, RAGStrategyLabel
 import cache as _cache
+import feedback as _feedback
 from shared.demo_logging import demo_for, demo_if, demo_step, demo_strategy_choice, resolve_log_level
 
 logger = logging.getLogger()
@@ -88,6 +91,15 @@ def _error(status: int, message: str, details: str = "") -> dict:
     if details:
         payload["details"] = details
     return _response(status, payload)
+
+
+def _db_clients():
+    """Lazily import the shared db_clients module (psycopg2 is loaded on first use)."""
+    import importlib
+    shared_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared")
+    if shared_dir not in _sys.path:
+        _sys.path.insert(0, shared_dir)
+    return importlib.import_module("db_clients")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -256,6 +268,21 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
         question_type=question_type,
     )
 
+    # Attach routing metadata and a queryId *before* the cache write so a
+    # cached answer still carries the decision that produced it and can be
+    # rated later via POST /feedback.
+    query_id = str(uuid4())
+    query_response.query_id = query_id
+    query_response.routing_decision = {
+        "strategy": retrieval_config.strategy,
+        "questionType": question_type,
+        "strategyConfidence": retrieval_config.strategy_confidence,
+        "selectionPropensity": retrieval_config.selection_propensity,
+        "graphExpansionForced": force_graph,
+        "keywordBoostApplied": retrieval_config.boost_keywords,
+        "neptuneVectorsUsed": retrieval_config.use_neptune_chunks,
+    }
+
     # Step 7 – Write to semantic cache (non-fatal; skip low-confidence answers)
     should_cache_write = query_response.confidence >= 0.5
     demo_if(logger, "response confidence >= 0.5 (eligible for cache write)", should_cache_write)
@@ -264,16 +291,11 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
             has_embedding = question_embedding is not None
             demo_if(logger, "question embedding available for cache write", has_embedding)
             if has_embedding:
-                import importlib, sys as _sys, os as _os
-                shared_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "shared")
-                if shared_dir not in _sys.path:
-                    _sys.path.insert(0, shared_dir)
-                _db = importlib.import_module("db_clients")
                 _cache.write_cache(
                     question_embedding,
                     query_response.to_dict(),
                     question_type,
-                    _db.get_pg_connection(),
+                    _db_clients().get_pg_connection(),
                 )
         except Exception as exc:
             logger.warning("Cache write failed (non-fatal): %s", exc)
@@ -286,7 +308,12 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
     demo_step(logger, "Updating routing feedback weights after answer confidence assessment")
     has_neptune_graph = bool(NEPTUNE_GRAPH_ID)
     demo_if(logger, "NEPTUNE_GRAPH_ID configured for routing feedback update", has_neptune_graph)
-    if has_neptune_graph:
+    # A confidence the model did not actually report (omitted field, unparseable
+    # output, failed call) is a constant the code chose, not an observation.
+    # Training the router on it would pull every posterior toward that constant.
+    demo_if(logger, "synthesiser reported a confidence (not a fallback constant)",
+            query_response.confidence_reported)
+    if has_neptune_graph and query_response.confidence_reported:
         try:
             update_feedback(
                 strategy=retrieval_config.strategy,
@@ -297,24 +324,33 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
         except Exception as exc:
             logger.warning("Routing feedback update failed (non-fatal): %s", exc)
 
+    # Step 9 – Record the decision so a later rating can reach it (non-fatal).
+    # This is the second reward source: the self-confidence above is the
+    # model's opinion of its own answer; a rating is someone else's.
+    demo_step(logger, "Recording routing decision for later human feedback")
+    try:
+        _feedback.record_decision(
+            _db_clients().get_pg_connection(),
+            query_id=query_id,
+            question_type=question_type,
+            strategy=retrieval_config.strategy,
+            propensity=retrieval_config.selection_propensity,
+            # NULL, not the fallback constant, so the self-confidence column can
+            # be compared against ratings without default values polluting it.
+            confidence=query_response.confidence if query_response.confidence_reported else None,
+        )
+    except Exception as exc:
+        logger.warning("Routing decision record failed (non-fatal): %s", exc)
+
     elapsed_ms = int((time.monotonic() - start_time) * 1000)
     logger.info(
-        "Pipeline complete in %dms | confidence=%.2f | strategy=%s | model=%s",
+        "Pipeline complete in %dms | confidence=%.2f | strategy=%s | model=%s | queryId=%s",
         elapsed_ms,
         query_response.confidence,
         retrieval_config.strategy,
         query_response.model_id,
+        query_id,
     )
-
-    # Attach routing metadata to response
-    query_response.routing_decision = {
-        "strategy": retrieval_config.strategy,
-        "questionType": question_type,
-        "strategyConfidence": retrieval_config.strategy_confidence,
-        "graphExpansionForced": force_graph,
-        "keywordBoostApplied": retrieval_config.boost_keywords,
-        "neptuneVectorsUsed": retrieval_config.use_neptune_chunks,
-    }
 
     result = query_response.to_dict()
     result["latencyMs"] = elapsed_ms
@@ -340,12 +376,19 @@ def lambda_handler(event: dict, context: Any) -> dict:
     demo_if(logger, "request targets GET /health", is_health_request)
     if is_health_request:
         from graph_expander import get_document_type_distribution
+        from rag_router import routing_health
         doc_type_dist = []
         if NEPTUNE_GRAPH_ID:
             try:
                 doc_type_dist = get_document_type_distribution(NEPTUNE_GRAPH_ID)
             except Exception:
                 pass
+        # Learning-loop health: distinguishes a converged router from one that
+        # has silently stopped learning (see rag_router.routing_health).
+        try:
+            health = routing_health()
+        except Exception as exc:
+            health = {"error": str(exc)}
         return _response(200, {
             "status": "healthy",
             "knowledgeBaseId": KNOWLEDGE_BASE_ID,
@@ -353,8 +396,35 @@ def lambda_handler(event: dict, context: Any) -> dict:
             "environment": os.environ.get("ENVIRONMENT", "unknown"),
             "routingGraph": {
                 "documentTypeDistribution": doc_type_dist,
+                "health": health,
             },
         })
+
+    # ── POST /feedback ────────────────────────────────────────────────────────
+    # {"queryId": "...", "rating": "up" | "down" | "neutral" | true | false | 0..1}
+    is_feedback_request = method == "POST" and "/feedback" in path
+    demo_if(logger, "request targets POST /feedback", is_feedback_request)
+    if is_feedback_request:
+        body_raw = event.get("body", "") or ""
+        if event.get("isBase64Encoded"):
+            import base64
+            body_raw = base64.b64decode(body_raw).decode("utf-8")
+        try:
+            body = json.loads(body_raw) if body_raw.strip() else {}
+        except json.JSONDecodeError:
+            return _error(400, "Invalid request", "Body must be JSON with 'queryId' and 'rating'.")
+        try:
+            applied = _feedback.apply_rating(
+                _db_clients().get_pg_connection(),
+                query_id=body.get("queryId"),
+                rating=body.get("rating"),
+            )
+            return _response(200, applied)
+        except _feedback.FeedbackError as exc:
+            return _error(exc.status, "Feedback not applied", exc.message)
+        except Exception as exc:
+            logger.error("Feedback error: %s\n%s", exc, traceback.format_exc())
+            return _error(500, "Internal server error", str(exc))
 
     # ── POST /query-expertise ─────────────────────────────────────────────────
     is_query_request = method == "POST" and "/query-expertise" in path

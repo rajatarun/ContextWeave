@@ -244,36 +244,58 @@ assert len(QUESTIONS) >= 100, f"Need at least 100 questions, got {len(QUESTIONS)
 # Weight mechanics – mirror rag_router.py constants so this script can
 # simulate/predict the exact same updates that happen server-side.
 # ─────────────────────────────────────────────────────────────────────────────
-_REINFORCE_THRESHOLD = 0.70   # conf ≥ this → weight += REINFORCE_DELTA
-_PENALISE_THRESHOLD  = 0.40   # conf <  this → weight += PENALISE_DELTA
-_REINFORCE_DELTA     = +0.05
-_PENALISE_DELTA      = -0.02
-_WEIGHT_FLOOR        = 0.10
-_WEIGHT_CEIL         = 1.00
-# To break even: need REINFORCE_DELTA / abs(PENALISE_DELTA) = 2.5 reinforces
-# for every 1 penalise just to stay at the same weight level.
-_BREAK_EVEN_RATIO    = _REINFORCE_DELTA / abs(_PENALISE_DELTA)  # 2.5
+# The router folds confidence into a Beta posterior (alpha += c, beta += 1 - c),
+# so there is no categorical reinforce/penalise/neutral action and no fixed step.
+# The previous mirror of +0.05 / -0.02 / 0.00 described a rule the server no
+# longer runs; keeping it here would have this script report dynamics that do
+# not happen. Reward is simply the confidence, and what it moves is the mean.
+_PRIOR_STRENGTH = 4.0
+
+# Confidence bands are retained for *display grouping only* -- they no longer
+# correspond to different update behaviour.
+_HIGH_CONFIDENCE = 0.70
+_LOW_CONFIDENCE = 0.40
+
+# Display-only aliases. These are reporting bucket boundaries, NOT update
+# thresholds: the router folds every confidence value into the posterior, so
+# there is no band in which an observation is discarded.
+_REINFORCE_THRESHOLD = _HIGH_CONFIDENCE
+_PENALISE_THRESHOLD = _LOW_CONFIDENCE
 
 
 def _feedback_action(confidence: float | None) -> str:
-    """Map a confidence score to the weight-update action string."""
+    """Bucket a confidence score for reporting. Not an update rule."""
     if confidence is None:
         return "unknown"
-    if confidence >= _REINFORCE_THRESHOLD:
+    if confidence >= _HIGH_CONFIDENCE:
         return "reinforce"
-    if confidence < _PENALISE_THRESHOLD:
+    if confidence < _LOW_CONFIDENCE:
         return "penalise"
     return "neutral"
 
 
+def posterior_shift(confidence: float | None, alpha: float, beta: float) -> float:
+    """Change in posterior mean this observation produces, given the current Beta.
+
+    Replaces the old fixed-delta prediction: the effect of an observation now
+    depends on how much evidence has already accumulated, so a fixed number
+    cannot describe it.
+    """
+    if confidence is None:
+        return 0.0
+    c = min(1.0, max(0.0, confidence))
+    before = alpha / (alpha + beta)
+    after = (alpha + c) / (alpha + beta + 1.0)
+    return after - before
+
+
 def _feedback_delta(confidence: float | None) -> float:
-    """Return the numeric weight delta that the server will apply."""
-    action = _feedback_action(confidence)
-    if action == "reinforce":
-        return _REINFORCE_DELTA
-    if action == "penalise":
-        return _PENALISE_DELTA
-    return 0.0
+    """Posterior-mean shift for a freshly seeded edge, for at-a-glance reporting.
+
+    Real magnitude depends on accumulated evidence; use posterior_shift() with
+    the actual Beta parameters when that matters.
+    """
+    return posterior_shift(confidence, _PRIOR_STRENGTH * 0.5, _PRIOR_STRENGTH * 0.5)
 
 
 @dataclass
@@ -282,11 +304,17 @@ class QuestionResult:
     declared_type: str
     question: str
     classified_type: str | None = None
-    routing_decision: str | None = None
+    routing_decision: str | None = None      # strategy label chosen by the router
+    # Probability the router had of choosing that strategy, and its posterior
+    # mean at decision time. The propensity is what makes this log usable for
+    # off-policy evaluation (scripts/routing_offpolicy_eval.py).
+    selection_propensity: float | None = None
+    strategy_confidence: float | None = None
     confidence: float | None = None
-    # Feedback action inferred from confidence (mirrors rag_router.update_feedback)
+    # Confidence bucket for reporting, and the posterior-mean shift this
+    # observation would produce on a freshly seeded edge.
     feedback_action: str | None = None   # "reinforce" | "penalise" | "neutral"
-    feedback_delta: float = 0.0          # +0.05 / -0.02 / 0.00
+    feedback_delta: float = 0.0          # posterior-mean shift, not a fixed step
     retrieval_count: int | None = None
     graph_entities_used: list[str] = field(default_factory=list)
     inferred_skills: list[str] = field(default_factory=list)
@@ -345,7 +373,15 @@ def run_question(
         try:
             data = _post(endpoint, entry["q"], top_k, timeout)
             result.classified_type  = data.get("questionType")
-            result.routing_decision = data.get("routingDecision")
+            # routingDecision is a dict ({strategy, strategyConfidence,
+            # selectionPropensity, ...}); older responses returned the bare label.
+            rd = data.get("routingDecision")
+            if isinstance(rd, dict):
+                result.routing_decision     = rd.get("strategy")
+                result.selection_propensity = rd.get("selectionPropensity")
+                result.strategy_confidence  = rd.get("strategyConfidence")
+            else:
+                result.routing_decision = rd
             result.confidence       = data.get("confidence")
             result.retrieval_count  = data.get("retrievalCount")
             result.graph_entities_used = data.get("graphEntitiesUsed", [])
@@ -372,7 +408,7 @@ def run_question(
 # Console helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-_FB_SYMBOL = {"reinforce": "↑+.05", "penalise": "↓-.02", "neutral": "→   ", "unknown": "?    "}
+_FB_SYMBOL = {"reinforce": "↑high", "penalise": "↓low ", "neutral": "→mid ", "unknown": "?    "}
 
 _W_IDX    = 4
 _W_DECL   = 12
@@ -466,30 +502,22 @@ def print_summary(results: list[QuestionResult]) -> None:
 
     total_delta = sum(r.feedback_delta for r in ok)
 
-    print(f"\n  ── Weight feedback actions (adversarial pressure analysis) ──")
-    print(f"    ↑ Reinforce (conf ≥ {_REINFORCE_THRESHOLD:.2f})  : "
-          f"{n_reinforce:>3}  ({_pct(n_reinforce, n_ok)})  "
-          f"net +{n_reinforce * _REINFORCE_DELTA:.2f}")
-    print(f"    ↓ Penalise  (conf <  {_PENALISE_THRESHOLD:.2f})  : "
-          f"{n_penalise:>3}  ({_pct(n_penalise, n_ok)})  "
-          f"net {n_penalise * _PENALISE_DELTA:.2f}")
-    print(f"    → Neutral                   : "
-          f"{n_neutral:>3}  ({_pct(n_neutral, n_ok)})  no change")
-    print(f"    ──────────────────────────────────────────────")
-    sign = "+" if total_delta >= 0 else ""
-    print(f"    Net estimated weight delta  : {sign}{total_delta:.3f}  "
-          f"{_weight_bar(total_delta / max(n_ok, 1) * 10)}")
+    mean_conf = sum(r.confidence for r in ok if r.confidence is not None) / max(n_ok, 1)
 
-    # Break-even warning
-    if n_penalise > 0:
-        actual_ratio = n_reinforce / n_penalise if n_penalise else float("inf")
-        status_str = "OK" if actual_ratio >= _BREAK_EVEN_RATIO else "BELOW BREAK-EVEN"
-        print(f"\n    Break-even ratio required   : {_BREAK_EVEN_RATIO:.1f}× reinforces per penalise")
-        print(f"    Actual ratio                : {actual_ratio:.1f}×  [{status_str}]")
-        if actual_ratio < _BREAK_EVEN_RATIO:
-            print(f"    WARNING  Adversarial controls are eroding weights faster than they")
-            print(f"             are being built. The system likely has insufficient indexed")
-            print(f"             data to synthesise high-confidence answers. Run /ingest first.")
+    print(f"\n  ── Confidence distribution (drives the Beta posterior) ──")
+    print(f"    ↑ High   (conf ≥ {_HIGH_CONFIDENCE:.2f})  : {n_reinforce:>3}  ({_pct(n_reinforce, n_ok)})")
+    print(f"    ↓ Low    (conf <  {_LOW_CONFIDENCE:.2f})  : {n_penalise:>3}  ({_pct(n_penalise, n_ok)})")
+    print(f"    → Middle                  : {n_neutral:>3}  ({_pct(n_neutral, n_ok)})")
+    print(f"    ──────────────────────────────────────────────")
+    print(f"    Mean confidence             : {mean_conf:.3f}")
+    print(f"    Posterior mean converges to this value for a strategy answering")
+    print(f"    at this confidence; every observation counts, including the middle")
+    print(f"    band, which under the old fixed-step rule was discarded entirely.")
+    if mean_conf < 0.40:
+        print(f"\n    WARNING  Mean confidence is low. Posterior means will settle near")
+        print(f"             {mean_conf:.2f}, and no strategy will look good because none is")
+        print(f"             answering well. This usually means insufficient indexed data")
+        print(f"             rather than a routing problem. Run /ingest first.")
 
     # ── Per (strategy, question_type) net delta ───────────────────────────────
     print(f"\n  ── Estimated net weight delta per (strategy, question_type) ──")
@@ -516,7 +544,7 @@ def print_summary(results: list[QuestionResult]) -> None:
         if delta < 0:
             flag = "ERODING"
             erosion_pairs.append((strategy, qtype))
-        elif ps["p"] > 0 and ratio < _BREAK_EVEN_RATIO:
+        elif ps["p"] > ps["r"]:
             flag = "at-risk"
         else:
             flag = ""
@@ -532,9 +560,9 @@ def print_summary(results: list[QuestionResult]) -> None:
         above70  = sum(1 for c in confs if c >= _REINFORCE_THRESHOLD)
         print(f"\n  ── Confidence distribution ──")
         print(f"    avg={avg_conf:.3f}  min={min(confs):.3f}  max={max(confs):.3f}")
-        print(f"    < {_PENALISE_THRESHOLD:.2f} (penalise zone)  : "
+        print(f"    < {_PENALISE_THRESHOLD:.2f} (low bucket)      : "
               f"{below40:>3}  ({_pct(below40, len(confs))})")
-        print(f"    ≥ {_REINFORCE_THRESHOLD:.2f} (reinforce zone) : "
+        print(f"    ≥ {_REINFORCE_THRESHOLD:.2f} (high bucket)     : "
               f"{above70:>3}  ({_pct(above70, len(confs))})")
 
     # ── Latency stats ─────────────────────────────────────────────────────────
@@ -574,7 +602,7 @@ def print_summary(results: list[QuestionResult]) -> None:
         n_r = sum(1 for c in confs if c >= _REINFORCE_THRESHOLD)
         n_p = sum(1 for c in confs if c < _PENALISE_THRESHOLD)
         ratio_str = f"{n_r/n_p:.1f}×" if n_p else "∞"
-        flag = "" if n_p == 0 or (n_r/n_p) >= _BREAK_EVEN_RATIO else "  ← adversarial pressure"
+        flag = "" if n_p <= n_r else "  ← mostly low-confidence answers"
         print(f"    {route:<20}  avg={avg:.3f}  ↑{n_r} ↓{n_p}  ratio={ratio_str}{flag}")
 
     # ── Type → route cross-tab ────────────────────────────────────────────────
@@ -603,7 +631,7 @@ def print_summary(results: list[QuestionResult]) -> None:
             print(f"    {strategy} × {qtype}  "
                   f"net={ps['delta']:+.3f}  "
                   f"↑{ps['r']} ↓{ps['p']}  "
-                  f"need {int(ps['p'] * _BREAK_EVEN_RATIO + 1)} more reinforces to recover")
+                  f"posterior mean will settle low until answer quality improves")
         print(f"\n    Recommendation: ensure documents are fully ingested before running")
         print(f"    the experiment, or run /ingest and re-seed the routing graph, then")
         print(f"    run this experiment again with --resume to re-test eroded pairs.")
@@ -744,7 +772,7 @@ def main() -> None:
                 net  = sum(x.feedback_delta for x in completed)
                 sign = "+" if net >= 0 else ""
                 ratio = f"{n_r/n_p:.1f}x" if n_p else "∞"
-                flag  = "  << BELOW BREAK-EVEN" if n_p > 0 and (n_r/n_p) < _BREAK_EVEN_RATIO else ""
+                flag  = "  << MOSTLY LOW CONFIDENCE" if n_p > n_r else ""
                 print(f"  [weight-check @{len(completed)}]  "
                       f"↑{n_r} ↓{n_p} →{len(completed)-n_r-n_p}  "
                       f"net={sign}{net:.2f}  ratio={ratio}{flag}", flush=True)

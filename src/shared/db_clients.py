@@ -220,5 +220,26 @@ def init_pgvector_schema() -> None:
             CREATE INDEX IF NOT EXISTS qcache_expires_idx
                 ON query_cache (expires_at)
         """)
+
+        # ── Routing decision log (human feedback) ────────────────────────────
+        # One row per answered query: which strategy answered, with what
+        # propensity and self-confidence, and the rating later posted against
+        # it via POST /feedback. Kept in step with query_api/feedback.SCHEMA_SQL.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS routing_decisions (
+                query_id        TEXT PRIMARY KEY,
+                question_type   TEXT NOT NULL,
+                strategy        TEXT NOT NULL,
+                propensity      DOUBLE PRECISION,
+                confidence      DOUBLE PRECISION,
+                created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                rating          DOUBLE PRECISION,
+                rated_at        TIMESTAMPTZ
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS routing_decisions_created_idx
+                ON routing_decisions (created_at)
+        """)
     conn.commit()
     logger.info("pgvector schema initialised")

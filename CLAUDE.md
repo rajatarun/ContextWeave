@@ -10,7 +10,7 @@
 **Name**: ContextWeave / ExpertiseRAG
 **Type**: AWS-native GraphRAG + CAG platform
 **Purpose**: Answers deep, evidence-backed questions about a developer's professional expertise using retrieval-augmented generation with a knowledge graph and a semantic response cache.
-**Owner**: Rajat Arun (rajatarun)
+**Owner**: Tarun Raja (rajatarun)
 **Repository**: https://github.com/rajatarun/ContextWeave
 **Account**: AWS account `239571291755` (teamweave)
 
@@ -74,7 +74,7 @@ ContextWeave includes an **agentic routing layer** that automatically selects th
 
 DocumentType and ChunkingStrategy nodes — and their relationships to each Document node — are written to Neptune Analytics alongside expertise nodes.
 
-**At query time**, the `RAGRouter` reads `EFFECTIVE_FOR` edge weights from Neptune to select the optimal strategy:
+**At query time**, the `RAGRouter` reads each strategy's `EFFECTIVE_FOR` posterior — `Beta(alpha, beta)` per (strategy, question type) — and selects by **Thompson sampling**: one draw per strategy, highest draw wins. A strategy is therefore selected roughly in proportion to the probability that it is the best one, so an untried strategy still gets tried. The scalar `weight` on the edge is maintained as the posterior mean so the policy stays readable as a table.
 
 | Strategy | When chosen | Behaviour |
 |---|---|---|
@@ -83,10 +83,19 @@ DocumentType and ChunkingStrategy nodes — and their relationships to each Docu
 | `keyword_boosted` | project, credential | pgvector + keyword-overlap reranking (25/75 blend) |
 | `semantic_search` | general | pgvector semantic search only |
 
-**After every query**, the winning strategy's `EFFECTIVE_FOR` edge weight is updated in Neptune:
-- `confidence ≥ 0.70` → `weight += 0.05` (cap 1.00)
-- `confidence < 0.40` → `weight -= 0.02` (floor 0.10)
-- `0.40 ≤ confidence < 0.70` → no change
+**After every query**, the synthesis confidence `c ∈ [0,1]` is folded into the selected strategy's posterior as a fractional Bernoulli reward:
+- `alpha += c`, `beta += 1 − c`
+- `weight = alpha / (alpha + beta)` (posterior mean; kept for dashboards and legacy queries)
+
+Every observation moves the posterior — there is no confidence band in which feedback is discarded and no ceiling at which it saturates.
+
+**Only reported confidences are rewards.** When the model omits the `confidence` field, returns non-JSON, or the call fails, the response carries a fallback constant (0.7 / 0.5 / 0.0) and `confidenceReported: false`; the router is **not** updated in that case and the decision is recorded with a NULL confidence. A constant the code chose is not an observation. `docs/confidence-semantics.md` states what every score in this and the sibling systems means and when they may be combined.
+
+**Second reward source.** The self-confidence above is the model's opinion of its own answer; a confidently wrong answer reinforces the strategy that produced it. Every response therefore carries a `queryId`, and `POST /feedback {"queryId", "rating"}` (rating: `up`/`down`/`neutral`, `true`/`false`, or a number in `[0,1]`) folds an independent rating into the same posterior with weight `ROUTER_HUMAN_FEEDBACK_WEIGHT` (default 2.0 — one rating counts as two self-assessments), once per `queryId`. Human and self observations are counted separately on the edge (`human_feedback_count`, `feedback_count`). Decisions are recorded in the `routing_decisions` table (query id, question type, strategy, propensity, self-confidence, rating), which is also the data an operator needs to check whether self-confidence predicts ratings at all.
+
+Each decision also records its **selection propensity** (`routingDecision.selectionPropensity`), the probability Thompson sampling had of choosing that strategy, so a different routing policy can later be evaluated from the decision log by inverse-propensity weighting without being deployed.
+
+> **History.** Until September 2026 the router selected by `argmax` over the scalar weight and applied fixed steps (+0.05 above 0.70, −0.02 below 0.40, nothing in between). That is a bandit with no exploration: only the selected strategy was ever updated, so a challenger was never tried and its weight never moved. With an incumbent answering inside the [0.40, 0.70) dead band, a strategy that would have answered at 0.90 was selected 0 times in 2000 simulated queries. The failure was silent — a frozen router and a converged one log identically. `GET /health` now reports `routingGraph.health` with a per-question-type verdict of `learning` / `converged` / `starved`; `starved` (one strategy heavily observed while siblings have none) is the signature of that defect and should alert. `scripts/routing_regret_sim.py` reproduces the comparison offline.
 
 The graph learns from every answered question. No retraining. No manual tuning.
 
@@ -132,7 +141,7 @@ No long-lived AWS credentials are stored in GitHub secrets. The workflow assumes
 - **Code**: `src/preprocessor/handler.py`
 
 ### `expertise-rag-query-api-{env}`
-- **Trigger**: API Gateway POST `/query-expertise`, GET `/health`
+- **Trigger**: API Gateway POST `/query-expertise`, POST `/feedback`, GET `/health`
 - **Pipeline**:
   - Step 0: Embed question → check CAG semantic cache (short-circuit on hit)
   - Step 1: classify_question()
@@ -142,8 +151,9 @@ No long-lived AWS credentials are stored in GitHub secrets. The workflow assumes
   - Step 5: expand_graph_context() (Neptune openCypher traversal)
   - Step 6: synthesize_answer() (Bedrock Converse)
   - Step 7: write_cache() (if confidence ≥ 0.5)
-  - Step 8: RAGRouter.update_feedback() (Neptune weight update)
-- **Response shape**: `{ answer, sources, inferredSkills, repeatedPatterns, confidence, questionType, graphEntitiesUsed, routingDecision, cacheHit, latencyMs }`
+  - Step 8: RAGRouter.update_feedback() (posterior update from self-confidence)
+  - Step 9: feedback.record_decision() (so POST /feedback can rate this answer later)
+- **Response shape**: `{ queryId, answer, sources, inferredSkills, repeatedPatterns, confidence, questionType, graphEntitiesUsed, routingDecision, cacheHit, latencyMs }`
 - **Code**: `src/query_api/handler.py`
 
 ### `expertise-rag-db-init-{env}`

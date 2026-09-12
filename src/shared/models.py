@@ -276,6 +276,10 @@ class RetrievalConfig:
     boost_keywords: bool = False
     use_neptune_chunks: bool = False        # also search Neptune vector store
     strategy_confidence: float = 0.5       # weight of the winning EFFECTIVE_FOR edge
+    # P(this strategy is selected) under the sampling policy at decision time.
+    # Logged so that a different routing policy can later be evaluated from the
+    # decision log by inverse-propensity weighting without being deployed.
+    selection_propensity: float = 1.0
 
 
 @dataclass
@@ -290,9 +294,17 @@ class QueryResponse:
     retrieval_count: int = 0
     model_id: str = ""
     routing_decision: dict[str, Any] = field(default_factory=dict)
+    # Identifier a caller can POST back to /feedback to rate this answer.
+    query_id: str = ""
+    # False when `confidence` is a fallback constant (field omitted by the model,
+    # unparseable output, or a failed call) rather than something the model said.
+    # The router must not learn from a constant the code chose.
+    confidence_reported: bool = True
 
     def to_dict(self) -> dict:
         return {
+            "queryId": self.query_id,
+            "confidenceReported": self.confidence_reported,
             "answer": self.answer,
             "sources": self.sources,
             "inferredSkills": self.inferred_skills,
