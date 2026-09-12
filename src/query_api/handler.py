@@ -311,6 +311,7 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
         "strategy": retrieval_config.strategy,
         "questionType": question_type,
         "strategyConfidence": retrieval_config.strategy_confidence,
+        "selectionPropensity": retrieval_config.selection_propensity,
         "graphExpansionForced": force_graph,
         "keywordBoostApplied": retrieval_config.boost_keywords,
         "neptuneVectorsUsed": retrieval_config.use_neptune_chunks,
@@ -340,12 +341,19 @@ def lambda_handler(event: dict, context: Any) -> dict:
     demo_if(logger, "request targets GET /health", is_health_request)
     if is_health_request:
         from graph_expander import get_document_type_distribution
+        from rag_router import routing_health
         doc_type_dist = []
         if NEPTUNE_GRAPH_ID:
             try:
                 doc_type_dist = get_document_type_distribution(NEPTUNE_GRAPH_ID)
             except Exception:
                 pass
+        # Learning-loop health: distinguishes a converged router from one that
+        # has silently stopped learning (see rag_router.routing_health).
+        try:
+            health = routing_health()
+        except Exception as exc:
+            health = {"error": str(exc)}
         return _response(200, {
             "status": "healthy",
             "knowledgeBaseId": KNOWLEDGE_BASE_ID,
@@ -353,6 +361,7 @@ def lambda_handler(event: dict, context: Any) -> dict:
             "environment": os.environ.get("ENVIRONMENT", "unknown"),
             "routingGraph": {
                 "documentTypeDistribution": doc_type_dist,
+                "health": health,
             },
         })
 

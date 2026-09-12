@@ -185,3 +185,62 @@ def test_retrieval_config_flags_follow_the_strategy(store):
     cfg = R.select_strategy("architecture", explore=False)
     if cfg.strategy == "hybrid":
         assert cfg.include_graph and cfg.boost_keywords
+
+
+# ---------------------------------------------------------------------------
+# Propensity logging and learning-loop health
+# ---------------------------------------------------------------------------
+
+def test_propensities_sum_to_one_and_favour_the_leader(store):
+    seed(store, {"graph_first": 0.5, "semantic_search": 0.5,
+                 "hybrid": 0.5, "keyword_boosted": 0.5})
+    for _ in range(100):
+        reward(store, "graph_first", 0.9)   # well-observed strong arm
+    post = R._query_strategy_posteriors("architecture")
+    p = R._p_best(post, samples=4000, rng=random.Random(3))
+    assert sum(p.values()) == pytest.approx(1.0)
+    assert p["graph_first"] > 0.8
+    assert all(v > 0 for v in p.values()), "no arm should be unreachable"
+
+
+def test_thompson_decision_reports_a_positive_propensity(store):
+    random.seed(2)
+    seed(store, PRIORS)
+    cfg = R.select_strategy("architecture", explore=True)
+    assert 0.0 < cfg.selection_propensity <= 1.0
+
+
+def test_greedy_decision_has_propensity_one(store):
+    seed(store, PRIORS)
+    cfg = R.select_strategy("architecture", explore=False)
+    assert cfg.selection_propensity == 1.0
+
+
+def test_health_flags_a_starved_arm(store):
+    """The signature of the old defect: one arm observed 200 times, siblings never."""
+    seed(store, PRIORS)
+    for _ in range(200):
+        reward(store, "semantic_search", 0.55)
+    h = R.routing_health(["architecture"], samples=500)["questionTypes"]["architecture"]
+    assert h["verdict"] == "starved"
+    assert set(h["starvedArms"]) == {"graph_first", "hybrid", "keyword_boosted"}
+
+
+def test_health_calls_a_clear_winner_converged_not_starved(store):
+    seed(store, PRIORS)
+    for _ in range(200):
+        reward(store, "graph_first", 0.90)
+    for s in ("semantic_search", "hybrid", "keyword_boosted"):
+        for _ in range(30):
+            reward(store, s, 0.50)
+    h = R.routing_health(["architecture"], samples=2000)["questionTypes"]["architecture"]
+    assert h["verdict"] == "converged"
+    assert h["leader"] == "graph_first"
+    assert h["starvedArms"] == []
+
+
+def test_health_reports_learning_before_evidence_accumulates(store):
+    seed(store, PRIORS)
+    h = R.routing_health(["architecture"], samples=2000)
+    assert h["questionTypes"]["architecture"]["verdict"] == "learning"
+    assert h["anyStarved"] is False

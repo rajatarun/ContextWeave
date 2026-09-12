@@ -69,6 +69,25 @@ _UNSEEN_PRIOR = (1.0, 1.0)
 # and is intended for reproducible tests and for operators debugging a decision.
 _EXPLORATION = os.environ.get("ROUTER_EXPLORATION", "thompson").strip().lower()
 
+# Monte Carlo draws used to estimate the propensity of the selected strategy.
+# 500 draws puts the standard error near 0.02 for a propensity around 0.5,
+# which is ample for off-policy weighting and costs well under a millisecond.
+_PROPENSITY_SAMPLES = int(os.environ.get("ROUTER_PROPENSITY_SAMPLES", "500"))
+
+# Health thresholds. An arm is *starved* when it has essentially no observations
+# while a sibling has many: that pattern is exactly what the old argmax rule
+# produced, and Thompson sampling should make it impossible, so seeing it in
+# production means exploration is off or feedback is not being written.
+_STARVED_MAX_OBS = 3.0
+_STARVED_SIBLING_MIN_OBS = 50.0
+# Posterior probability that one arm is best above which we call a question
+# type converged rather than still learning.
+_CONVERGED_P_BEST = 0.95
+
+QUESTION_TYPES: list[str] = [
+    "skill_depth", "architecture", "project", "comparison", "credential", "general",
+]
+
 # Fallback priority when Memgraph is unavailable (or graph has no data yet)
 _STRATEGY_PRIORITY: list[str] = [
     RAGStrategyLabel.GRAPH_FIRST,
@@ -145,6 +164,38 @@ def _posterior_mean(alpha: float, beta: float) -> float:
     return alpha / (alpha + beta)
 
 
+def _posterior_sd(alpha: float, beta: float) -> float:
+    n = alpha + beta
+    return (alpha * beta / (n * n * (n + 1.0))) ** 0.5
+
+
+def _p_best(
+    posteriors: dict[str, tuple[float, float]],
+    samples: int,
+    rng: random.Random | None = None,
+) -> dict[str, float]:
+    """Monte Carlo estimate of P(arm has the largest posterior draw), per arm.
+
+    Under Thompson sampling this *is* the selection probability, so the value
+    for the chosen arm is its propensity. Ties are broken by _STRATEGY_PRIORITY
+    exactly as select_strategy() does, so the estimate matches the policy.
+    """
+    draw = (rng or random).betavariate
+    wins = {s: 0 for s in posteriors}
+    # Iterate in priority order so that on an exact tie the first (highest
+    # priority) arm keeps the win, matching max() over _STRATEGY_PRIORITY.
+    order = {s: i for i, s in enumerate(_STRATEGY_PRIORITY)}
+    arms = sorted(posteriors.items(), key=lambda kv: order.get(kv[0], len(order)))
+    for _ in range(samples):
+        best, best_v = None, -1.0
+        for s, (a, b) in arms:
+            v = draw(a, b)
+            if v > best_v:
+                best, best_v = s, v
+        wins[best] += 1
+    return {s: w / samples for s, w in wins.items()}
+
+
 def select_strategy(
     question_type: str,
     graph_id: str | None = None,  # kept for API compatibility; unused (Memgraph uses env)
@@ -184,10 +235,22 @@ def select_strategy(
     posterior_mean = _posterior_mean(alpha, beta)
     observations = alpha + beta - _PRIOR_STRENGTH
 
+    # Propensity of the decision just made. Greedy is deterministic, so its
+    # chosen arm has propensity 1 and every other arm 0; anything logged under
+    # greedy therefore cannot be reweighted to evaluate another policy, which
+    # is one more reason it is not the default.
+    if use_sampling and _PROPENSITY_SAMPLES > 0:
+        propensity = _p_best(posteriors, _PROPENSITY_SAMPLES).get(best_strategy, 0.0)
+        # The arm was in fact selected, so its propensity cannot be 0; clamp so
+        # an unlucky Monte Carlo estimate never produces an infinite IPW weight.
+        propensity = max(propensity, 1.0 / _PROPENSITY_SAMPLES)
+    else:
+        propensity = 1.0
+
     logger.info(
-        "Routing decision: strategy=%s mean=%.3f n~%.1f mode=%s question_type=%s "
-        "posteriors=%s",
-        best_strategy, posterior_mean, max(observations, 0.0),
+        "Routing decision: strategy=%s mean=%.3f n~%.1f propensity=%.3f mode=%s "
+        "question_type=%s posteriors=%s",
+        best_strategy, posterior_mean, max(observations, 0.0), propensity,
         "thompson" if use_sampling else "greedy", question_type,
         {s: (round(a, 2), round(b, 2)) for s, (a, b) in posteriors.items()},
     )
@@ -200,7 +263,77 @@ def select_strategy(
         # Report the posterior mean, not the sample: the sample drove exploration,
         # the mean is the actual estimate of how good this strategy is.
         strategy_confidence=posterior_mean,
+        selection_propensity=propensity,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Health: is the router learning, converged, or stuck?
+# ─────────────────────────────────────────────────────────────────────────────
+
+def routing_health(
+    question_types: list[str] | None = None,
+    samples: int = 2000,
+) -> dict:
+    """Report, per question type, whether routing is learning, converged, or stuck.
+
+    The defect this guards against was silent: a router that had stopped
+    learning and one that had converged produced the same logs, because both
+    showed one strategy selected every time. The two are distinguishable from
+    the posteriors, not from the selections:
+
+      converged  one arm is best with posterior probability >= 0.95 and the
+                 others have actually been observed. Concentrated selection is
+                 the correct behaviour here.
+      learning   no arm is yet that clearly best; exploration is still paying.
+      starved    an arm has essentially no observations while a sibling has
+                 many. Thompson sampling cannot produce this pattern -- an
+                 unobserved arm keeps a wide posterior and keeps being drawn --
+                 so it means exploration is disabled or feedback is not being
+                 written. This is the signature of the old argmax rule.
+
+    The verdict is data an operator can alert on; the old scalar table could
+    not express it.
+    """
+    report: dict[str, dict] = {}
+    for qt in question_types or QUESTION_TYPES:
+        posteriors = _query_strategy_posteriors(qt)
+        p_best = _p_best(posteriors, samples)
+        arms = {}
+        for s, (a, b) in posteriors.items():
+            n = max(a + b - _PRIOR_STRENGTH, 0.0) if (a, b) != _UNSEEN_PRIOR else 0.0
+            arms[s] = {
+                "alpha": round(a, 3), "beta": round(b, 3),
+                "mean": round(_posterior_mean(a, b), 4),
+                "sd": round(_posterior_sd(a, b), 4),
+                "observations": round(n, 1),
+                "pBest": round(p_best.get(s, 0.0), 4),
+            }
+        leader = max(arms, key=lambda s: arms[s]["pBest"])
+        most_obs = max(v["observations"] for v in arms.values())
+        starved = sorted(
+            s for s, v in arms.items()
+            if v["observations"] <= _STARVED_MAX_OBS and most_obs >= _STARVED_SIBLING_MIN_OBS
+        )
+        if starved:
+            verdict = "starved"
+        elif arms[leader]["pBest"] >= _CONVERGED_P_BEST:
+            verdict = "converged"
+        else:
+            verdict = "learning"
+        report[qt] = {
+            "verdict": verdict,
+            "leader": leader,
+            "leaderPBest": arms[leader]["pBest"],
+            "starvedArms": starved,
+            "arms": arms,
+        }
+    return {
+        "exploration": _EXPLORATION,
+        "priorStrength": _PRIOR_STRENGTH,
+        "questionTypes": report,
+        "anyStarved": any(r["verdict"] == "starved" for r in report.values()),
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -323,7 +456,7 @@ def seed_routing_graph(graph_id: str = "") -> dict[str, int]:
 
     Returns counts of nodes/edges written.
     """
-    question_types = ["skill_depth", "architecture", "project", "comparison", "credential", "general"]
+    question_types = QUESTION_TYPES
     strategies = [s.value for s in RAGStrategyLabel]
 
     nodes_written = 0

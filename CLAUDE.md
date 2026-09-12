@@ -10,7 +10,7 @@
 **Name**: ContextWeave / ExpertiseRAG
 **Type**: AWS-native GraphRAG + CAG platform
 **Purpose**: Answers deep, evidence-backed questions about a developer's professional expertise using retrieval-augmented generation with a knowledge graph and a semantic response cache.
-**Owner**: Rajat Arun (rajatarun)
+**Owner**: Tarun Raja (rajatarun)
 **Repository**: https://github.com/rajatarun/ContextWeave
 **Account**: AWS account `239571291755` (teamweave)
 
@@ -74,7 +74,7 @@ ContextWeave includes an **agentic routing layer** that automatically selects th
 
 DocumentType and ChunkingStrategy nodes — and their relationships to each Document node — are written to Neptune Analytics alongside expertise nodes.
 
-**At query time**, the `RAGRouter` reads `EFFECTIVE_FOR` edge weights from Neptune to select the optimal strategy:
+**At query time**, the `RAGRouter` reads each strategy's `EFFECTIVE_FOR` posterior — `Beta(alpha, beta)` per (strategy, question type) — and selects by **Thompson sampling**: one draw per strategy, highest draw wins. A strategy is therefore selected roughly in proportion to the probability that it is the best one, so an untried strategy still gets tried. The scalar `weight` on the edge is maintained as the posterior mean so the policy stays readable as a table.
 
 | Strategy | When chosen | Behaviour |
 |---|---|---|
@@ -83,10 +83,13 @@ DocumentType and ChunkingStrategy nodes — and their relationships to each Docu
 | `keyword_boosted` | project, credential | pgvector + keyword-overlap reranking (25/75 blend) |
 | `semantic_search` | general | pgvector semantic search only |
 
-**After every query**, the winning strategy's `EFFECTIVE_FOR` edge weight is updated in Neptune:
-- `confidence ≥ 0.70` → `weight += 0.05` (cap 1.00)
-- `confidence < 0.40` → `weight -= 0.02` (floor 0.10)
-- `0.40 ≤ confidence < 0.70` → no change
+**After every query**, the synthesis confidence `c ∈ [0,1]` is folded into the selected strategy's posterior as a fractional Bernoulli reward:
+- `alpha += c`, `beta += 1 − c`
+- `weight = alpha / (alpha + beta)` (posterior mean; kept for dashboards and legacy queries)
+
+Every observation moves the posterior — there is no confidence band in which feedback is discarded and no ceiling at which it saturates. Each decision also records its **selection propensity** (`routingDecision.selectionPropensity`), the probability Thompson sampling had of choosing that strategy, so a different routing policy can later be evaluated from the decision log by inverse-propensity weighting without being deployed.
+
+> **History.** Until September 2026 the router selected by `argmax` over the scalar weight and applied fixed steps (+0.05 above 0.70, −0.02 below 0.40, nothing in between). That is a bandit with no exploration: only the selected strategy was ever updated, so a challenger was never tried and its weight never moved. With an incumbent answering inside the [0.40, 0.70) dead band, a strategy that would have answered at 0.90 was selected 0 times in 2000 simulated queries. The failure was silent — a frozen router and a converged one log identically. `GET /health` now reports `routingGraph.health` with a per-question-type verdict of `learning` / `converged` / `starved`; `starved` (one strategy heavily observed while siblings have none) is the signature of that defect and should alert. `scripts/routing_regret_sim.py` reproduces the comparison offline.
 
 The graph learns from every answered question. No retraining. No manual tuning.
 

@@ -276,6 +276,10 @@ class RetrievalConfig:
     boost_keywords: bool = False
     use_neptune_chunks: bool = False        # also search Neptune vector store
     strategy_confidence: float = 0.5       # weight of the winning EFFECTIVE_FOR edge
+    # P(this strategy is selected) under the sampling policy at decision time.
+    # Logged so that a different routing policy can later be evaluated from the
+    # decision log by inverse-propensity weighting without being deployed.
+    selection_propensity: float = 1.0
 
 
 @dataclass
