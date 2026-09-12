@@ -358,9 +358,12 @@ class QueryResponse:
     retrieval_count: int = 0
     model_id: str = ""
     routing_decision: dict[str, Any] = field(default_factory=dict)
+    # Identifier a caller can POST back to /feedback to rate this answer.
+    query_id: str = ""
 
     def to_dict(self) -> dict:
         return {
+            "queryId": self.query_id,
             "answer": self.answer,
             "sources": self.sources,
             "inferredSkills": self.inferred_skills,

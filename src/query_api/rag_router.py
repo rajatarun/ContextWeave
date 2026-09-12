@@ -345,16 +345,23 @@ def update_feedback(
     question_type: str,
     confidence: float,
     graph_id: str | None = None,  # kept for API compatibility; unused
-) -> None:
+    weight: float = 1.0,
+    source: str = "self",
+) -> dict | None:
     """
-    Fold the synthesis confidence into this strategy's Beta posterior.
+    Fold a reward into this strategy's Beta posterior.
 
-    Confidence is treated as a fractional Bernoulli reward::
+    The reward is treated as a fractional Bernoulli observation::
 
-        alpha += c
-        beta  += 1 - c
+        alpha += weight * c
+        beta  += weight * (1 - c)
 
-    so every observation moves the posterior. The previous rule applied a fixed
+    so every observation moves the posterior. ``source`` is ``"self"`` for
+    the synthesiser's own confidence (the default, weight 1) and ``"human"``
+    for a rating submitted against the answer (see feedback.py), which is
+    counted separately on the edge as ``human_feedback_count`` so the two
+    reward sources can be compared. Returns the updated posterior, or None if
+    no edge was found. The previous rule applied a fixed
     +0.05 above 0.70 and -0.02 below 0.40 and *nothing at all* in between; that
     dead band covered 30% of the confidence range, and an incumbent sitting in it
     was locked in permanently because its weight never changed and no challenger
@@ -374,38 +381,48 @@ def update_feedback(
         graph_id:      Ignored (kept for backward compatibility).
     """
     reward = min(1.0, max(0.0, float(confidence)))
+    weight = max(0.0, float(weight))
+    is_human = 1 if source == "human" else 0
 
     query = """
     MATCH (r:RAGStrategy {label: $strategy})-[e:EFFECTIVE_FOR]->(d:DocumentType)
     WHERE d.question_type = $question_type
-    SET e.alpha = coalesce(e.alpha, coalesce(e.weight, 0.5) * $prior_strength) + $reward,
+    SET e.alpha = coalesce(e.alpha, coalesce(e.weight, 0.5) * $prior_strength)
+                  + $w * $reward,
         e.beta  = coalesce(e.beta, (1.0 - coalesce(e.weight, 0.5)) * $prior_strength)
-                  + (1.0 - $reward),
-        e.feedback_count = coalesce(e.feedback_count, 0) + 1
+                  + $w * (1.0 - $reward),
+        e.feedback_count = coalesce(e.feedback_count, 0) + 1,
+        e.human_feedback_count = coalesce(e.human_feedback_count, 0) + $human
     SET e.weight = toFloat(e.alpha / (e.alpha + e.beta))
     RETURN e.alpha AS alpha, e.beta AS beta, e.weight AS weight,
-           e.feedback_count AS n
+           e.feedback_count AS n, e.human_feedback_count AS n_human
     """
     rows = _run_query(query, {
         "strategy":       strategy,
         "question_type":  question_type,
         "reward":         reward,
+        "w":              weight,
+        "human":          is_human,
         "prior_strength": _PRIOR_STRENGTH,
     })
     if rows:
         row = rows[0]
         logger.info(
-            "Routing feedback applied: strategy=%s qt=%s confidence=%.2f "
-            "-> Beta(%.2f, %.2f) mean=%.3f n=%s",
-            strategy, question_type, reward,
+            "Routing feedback applied: source=%s strategy=%s qt=%s reward=%.2f weight=%.1f "
+            "-> Beta(%.2f, %.2f) mean=%.3f n=%s n_human=%s",
+            source, strategy, question_type, reward, weight,
             row.get("alpha", 0.0), row.get("beta", 0.0),
-            row.get("weight", 0.0), row.get("n", 0),
+            row.get("weight", 0.0), row.get("n", 0), row.get("n_human", 0),
         )
-    else:
-        logger.debug(
-            "Routing feedback skipped (no EFFECTIVE_FOR edge found): strategy=%s qt=%s",
-            strategy, question_type,
-        )
+        return {
+            "alpha": row.get("alpha"), "beta": row.get("beta"),
+            "mean": row.get("weight"), "n": row.get("n"), "nHuman": row.get("n_human"),
+        }
+    logger.debug(
+        "Routing feedback skipped (no EFFECTIVE_FOR edge found): strategy=%s qt=%s",
+        strategy, question_type,
+    )
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
