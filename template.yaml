@@ -1062,6 +1062,12 @@ Resources:
             ApiId: !Ref ExpertiseAPI
             Path: /health
             Method: GET
+        RoutingDecisions:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ExpertiseAPI
+            Path: /routing-decisions
+            Method: GET
         CorsOptions:
           Type: HttpApi
           Properties:

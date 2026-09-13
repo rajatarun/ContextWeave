@@ -93,6 +93,8 @@ Every observation moves the posterior — there is no confidence band in which f
 
 **Second reward source.** The self-confidence above is the model's opinion of its own answer; a confidently wrong answer reinforces the strategy that produced it. Every response therefore carries a `queryId`, and `POST /feedback {"queryId", "rating"}` (rating: `up`/`down`/`neutral`, `true`/`false`, or a number in `[0,1]`) folds an independent rating into the same posterior with weight `ROUTER_HUMAN_FEEDBACK_WEIGHT` (default 2.0 — one rating counts as two self-assessments), once per `queryId`. Human and self observations are counted separately on the edge (`human_feedback_count`, `feedback_count`). Decisions are recorded in the `routing_decisions` table (query id, question type, strategy, propensity, self-confidence, rating), which is also the data an operator needs to check whether self-confidence predicts ratings at all.
 
+`GET /routing-decisions` reads that table back out (`src/query_api/routing_decisions_api.py`). `?mode=list` pages the raw decisions (`questionType`, `strategy`, `since`, `limit`, `offset` filters, newest first); `?mode=summary` groups by (question type, strategy) and reports `meanAbsDiff` — `AVG(ABS(confidence - rating))` over the decisions that carry **both** a reported self-confidence and a rating. That number is the calibration check: near 0 the self-assessment tracks what people think and is worth using as the cheap always-available reward; near 0.5 the router has been learning from a proxy that measures nothing. It is null, never 0.0, for a group nobody has rated. Read-only and free of PII — the table holds query ids, strategy labels and two scores, never the question, the answer, or anything about the caller. Consumed by the platform `/observability` console (weave-platform E10).
+
 Each decision also records its **selection propensity** (`routingDecision.selectionPropensity`), the probability Thompson sampling had of choosing that strategy, so a different routing policy can later be evaluated from the decision log by inverse-propensity weighting without being deployed.
 
 > **History.** Until September 2026 the router selected by `argmax` over the scalar weight and applied fixed steps (+0.05 above 0.70, −0.02 below 0.40, nothing in between). That is a bandit with no exploration: only the selected strategy was ever updated, so a challenger was never tried and its weight never moved. With an incumbent answering inside the [0.40, 0.70) dead band, a strategy that would have answered at 0.90 was selected 0 times in 2000 simulated queries. The failure was silent — a frozen router and a converged one log identically. `GET /health` now reports `routingGraph.health` with a per-question-type verdict of `learning` / `converged` / `starved`; `starved` (one strategy heavily observed while siblings have none) is the signature of that defect and should alert. `scripts/routing_regret_sim.py` reproduces the comparison offline.
@@ -141,7 +143,7 @@ No long-lived AWS credentials are stored in GitHub secrets. The workflow assumes
 - **Code**: `src/preprocessor/handler.py`
 
 ### `expertise-rag-query-api-{env}`
-- **Trigger**: API Gateway POST `/query-expertise`, POST `/feedback`, GET `/health`
+- **Trigger**: API Gateway POST `/query-expertise`, POST `/feedback`, GET `/health`, GET `/routing-decisions`
 - **Pipeline**:
   - Step 0: Embed question → check CAG semantic cache (short-circuit on hit)
   - Step 1: classify_question()

@@ -2,9 +2,11 @@
 ExpertiseRAG – Query API Lambda Handler
 
 Exposes:
-  POST /query-expertise  – main reasoning endpoint
-  POST /feedback         – rate an answer by queryId; independent reward for the router
-  GET  /health           – health check (includes routing learning-loop health)
+  POST /query-expertise   – main reasoning endpoint
+  POST /feedback          – rate an answer by queryId; independent reward for the router
+  GET  /health            – health check (includes routing learning-loop health)
+  GET  /routing-decisions – read the decision log: per-decision rows, or a summary
+                            of how far self-confidence sits from human ratings
 
 Request body (POST /query-expertise):
   {
@@ -52,6 +54,7 @@ from synthesizer import classify_question, synthesize_answer
 from models import QueryRequest, RAGStrategyLabel
 import cache as _cache
 import feedback as _feedback
+import routing_decisions_api as _routing_decisions
 from shared.demo_logging import demo_for, demo_if, demo_step, demo_strategy_choice, resolve_log_level
 
 logger = logging.getLogger()
@@ -399,6 +402,30 @@ def lambda_handler(event: dict, context: Any) -> dict:
                 "health": health,
             },
         })
+
+    # ── GET /routing-decisions ────────────────────────────────────────────────
+    # ?mode=list|summary&questionType=&strategy=&since=&limit=&offset=
+    # Read-only view of the decision log. Summary mode reports meanAbsDiff per
+    # (question type, strategy): how far the synthesiser's self-confidence sits
+    # from the ratings people gave the same answers — the calibration check the
+    # table exists for. Consumed by the platform observability console.
+    is_routing_decisions_request = method == "GET" and "/routing-decisions" in path
+    demo_if(logger, "request targets GET /routing-decisions", is_routing_decisions_request)
+    if is_routing_decisions_request:
+        try:
+            result = _routing_decisions.handle(
+                _db_clients().get_pg_connection(),
+                event.get("queryStringParameters") or {},
+            )
+            return _response(200, result)
+        except _routing_decisions.RoutingDecisionsError as exc:
+            # The message is the whole error here; passing it as the title keeps
+            # the body to {"error": "..."} rather than a title/detail pair that
+            # would say the same thing twice.
+            return _error(exc.status, exc.message)
+        except Exception as exc:
+            logger.error("Routing decisions error: %s\n%s", exc, traceback.format_exc())
+            return _error(500, "Internal server error", str(exc))
 
     # ── POST /feedback ────────────────────────────────────────────────────────
     # {"queryId": "...", "rating": "up" | "down" | "neutral" | true | false | 0..1}
