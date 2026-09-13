@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from types import ModuleType, SimpleNamespace
 
+import pytest
+
 
 @dataclass
 class FakeSpan:
@@ -201,3 +203,49 @@ def test_model_exceptions_are_reraised(monkeypatch):
         assert False, "expected exception"
     except RuntimeError as exc:
         assert str(exc) == "invoke failed"
+
+
+# ---------------------------------------------------------------------------
+# REVIEW / non-ALLOW verdict handling
+#
+# mcp-observatory's WrapperPolicy can return a "review" (budget exceeded) or
+# "block" (empty output) decision, not just "allow". _run_observed_call logs
+# result.decision.action and records it on the DynamoDB metric row, but always
+# `return result.output` regardless of the decision -- observe_model_request()
+# and observe_converse_request() give their callers (embedder.py,
+# synthesizer.py) no way to distinguish a reviewed or blocked call from a
+# clean allow. This is the same "ignores the verdict" gap documented for
+# DeviceWeave in tests/test_observatory_wrapper.py there.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "observe_model_request()/observe_converse_request() (via "
+        "_run_observed_call) only log and record result.decision.action -- "
+        "they always return result.output unchanged for 'allow', 'review', "
+        "and 'block' alike. No caller inspects the decision, so a 'review' "
+        "verdict is silently treated as an allow. This documents the "
+        "expected behaviour once a non-allow decision is surfaced to callers "
+        "instead of being indistinguishable from a clean allow."
+    ),
+)
+def test_observe_model_request_surfaces_review_verdict_instead_of_ignoring_it(monkeypatch):
+    mod, wrapper, _table = _load_module(monkeypatch)
+
+    class ReviewDecision:
+        action = "review"
+        reason = "cost_budget_exceeded"
+
+    async def review_invoke(self, *, source, model, prompt, input_payload, call):
+        return SimpleNamespace(output=call(), span=FakeSpan(), decision=ReviewDecision())
+
+    monkeypatch.setattr(type(wrapper), "invoke", review_invoke)
+
+    runtime = FakeRuntime()
+    result = mod.observe_model_request(runtime_client=runtime, model_id="m", body="{}")
+
+    # Desired future behaviour: a non-"allow" decision must be visible to the
+    # caller rather than returning the same plain output as an allow.
+    assert isinstance(result, dict) and result.get("observatory_verdict") == "review"
