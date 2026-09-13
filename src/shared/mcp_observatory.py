@@ -53,6 +53,10 @@ def _push_metric(operation: str, span: Any, decision: Any, extra: dict[str, Any]
             "trace_id": span.trace_id,
             "operation": operation,
             "timestamp": now_iso,
+            # SpanTimelineIndex partition key (contract v2.0.0, I6/I7). Derived
+            # from timestamp rather than a fresh now() call so the two can
+            # never disagree about which UTC day this row happened on.
+            "span_date": now_iso[:10],
             "prompt_tokens": Decimal(int(getattr(span, "prompt_tokens", 0) or 0)),
             "completion_tokens": Decimal(int(getattr(span, "completion_tokens", 0) or 0)),
             "cost_usd": _to_decimal(getattr(span, "cost_usd", 0.0)),

@@ -37,7 +37,7 @@ def _contracts_on_path():
     yield
 
 
-from contracts.conformance import check_item, load_contract, readers_for  # noqa: E402
+from contracts.conformance import check_item, load_contract  # noqa: E402
 
 
 class _FakeSpan:
@@ -161,18 +161,24 @@ def test_key_attributes_are_lower_case_pk_sk(monkeypatch):
     assert isinstance(item["pk"], str) and isinstance(item["sk"], str)
 
 
-def test_written_item_is_visible_to_at_least_one_reader(monkeypatch):
-    """A row with no reader is durable, billable telemetry nobody ever sees.
+def test_written_item_carries_the_span_timeline_index_keys(monkeypatch):
+    """Contract v2.0.0: reads go through the SpanTimelineIndex GSI, not pk.
 
-    ContextWeave writes into the OBSERVATORY namespace, which the contract's
-    namespace_registry lists readers for -- this asserts that stays true for
-    the item this writer actually produces, not just for the registry entry.
+    A GSI indexes only items carrying both of its key attributes, so this
+    replaces the old pk/readers_for reachability check (superseded -- I5 in
+    the v2 contract) with an assertion on the two attributes that now decide
+    whether a dashboard ever sees this row: span_date must be present and
+    must agree with timestamp's date, exactly as I6/I7 require.
     """
+    contract = load_contract()
     mod, table = _load_writer(monkeypatch)
     runtime = _FakeRuntime()
 
     mod.observe_model_request(runtime_client=runtime, model_id="m", body="{}")
 
     item = table.items[0]
-    readers = readers_for(item["pk"], load_contract())
-    assert readers, f"pk={item['pk']!r} has no readers in the shared table contract"
+    gsi = contract["gsi"]
+    assert gsi["partition_key"] in item
+    assert gsi["sort_key"] in item
+    assert item["span_date"] == item["timestamp"][:10]
+    assert check_item(item, contract) == []
