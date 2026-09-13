@@ -216,6 +216,7 @@ These files are uploaded to `s3://<bucket>/raw/contextweave/` by the GitHub Acti
 | `repo-signals.yaml` | Structured expertise signals | 0.7 |
 | `docs/c4.puml` | C4 system context + container diagram | 0.8 |
 | `docs/aws-infrastructure.puml` | AWS service topology diagram | 0.8 |
+| `docs/weave-platform.md` | Portfolio map and integration plan for all weave repositories | 1.0 |
 
 ---
 
