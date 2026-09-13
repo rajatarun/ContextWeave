@@ -175,12 +175,5 @@ What the whole-portfolio read adds to that sentence: **the data plane is already
 
 ---
 
-## 7. Corrections to the previous version of this document
-
-- **CipherWeave (R6) was mis-described.** The previous version relied on findings written before PR #28. As merged on Sep 11, `main` implements Eq. 1/2, Algorithm 1, the max-of-three drift statistic with EWMA baselines and cold-start policy, a compliance floor, real ML-KEM-768 via `liboqs-python` with fail-closed on a missing backend, 23 paper-property tests, and a 440-episode labelled corpus whose harness falsified four things in the detector and fixed them. R6 moves from "not publishable as an implementation report" to "publishable as a simulation study." SEC-6 (`ctypes.memmove`) remains.
-- **The shared infrastructure stack and the shared telemetry table were missed.** They are the strongest evidence that this is one system, and they change the recommended edges (E5, E10).
-- **The JS package and the design system were missed.** `@weaveaijs/mcp-observatory` and `@weaveaijs/tantu` exist on npm; the unified console has a design system waiting for it.
-- **TeamWeave's DPO collector was missed.** It is the seed of a flywheel and of R7.
-
 ---
 *Maintained in the ContextWeave repository because ContextWeave is the platform's knowledge layer and this document is ingested into it. Update it when an integration edge in §4.2 lands.*
