@@ -547,7 +547,7 @@ Resources:
     Properties:
       DBInstanceClass: !Ref PostgresInstanceClass
       Engine: postgres
-      EngineVersion: '16.6'
+      EngineVersion: '16.15'
       DBName: !Ref PostgresDbName
       MasterUsername: !Ref PostgresUsername
       MasterUserPassword: !Sub '{{resolve:secretsmanager:${PostgresSecret}:SecretString:password}}'
