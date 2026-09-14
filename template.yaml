@@ -558,26 +558,42 @@ Resources:
       DBInstanceClass: !Ref PostgresInstanceClass
       Engine: postgres
       # Pinned to what the instance is ACTUALLY running. Do not bump this to
-      # satisfy a linter.
+      # satisfy a linter, and do not lower it to match an older comment.
       #
-      # It was bumped to 16.15 and then 16.14 in this session for exactly that
-      # reason -- cfn-lint's W3691 flags 16.6 as deprecated and
-      # `sam validate --lint` treats any matched rule as a build failure. The
-      # deploy that carried it wedged contextweave-rag-prod in
-      # UPDATE_ROLLBACK_FAILED, because the instance was STOPPED and RDS
-      # refuses to modify a stopped instance ("You can't modify a stopped DB
-      # instance"). The rollback then failed for the same reason, so the stack
-      # could not move in either direction.
+      # History, because this has now failed in two different ways:
       #
-      # Two things follow. A version change here is a real maintenance
-      # operation with downtime, not a lint fix. And any change to this
-      # resource fails outright while the instance is stopped, which it is
-      # routinely -- so confirm state before deploying anything that touches it:
+      # 1. It was bumped to 16.15 and then 16.14 to silence cfn-lint's W3691
+      #    (`sam validate --lint` treats any matched rule as a build failure).
+      #    That deploy wedged contextweave-rag-prod in UPDATE_ROLLBACK_FAILED:
+      #    the instance was STOPPED, RDS refuses to modify a stopped instance
+      #    ("You can't modify a stopped DB instance"), and the rollback then
+      #    failed for the same reason, so the stack could not move in either
+      #    direction. W3691 is suppressed in the Metadata block above rather
+      #    than silenced by mutating production, and the deploy workflow now
+      #    starts the instance before touching the stack.
+      #
+      # 2. This was then set back to 16.6 on the belief that 16.6 was what the
+      #    instance ran. By then it did not: the live instance is on 16.14, and
+      #    the next deploy failed with "Cannot find upgrade path from 16.14 to
+      #    16.6". Minor versions cannot be downgraded, so a stale pin here is
+      #    not a no-op -- it is an impossible request, and CloudFormation
+      #    spends three minutes discovering that before rolling back.
+      #
+      # Why it drifts: AutoMinorVersionUpgrade is not set, and its default is
+      # true, so RDS moves the minor version during a maintenance window and
+      # this pin goes stale on its own, with no commit doing anything wrong.
+      # The permanent fixes are to set AutoMinorVersionUpgrade: false (which
+      # also stops security patches) or to pin the major version only as '16'
+      # (which hands the minor to RDS). Both are policy decisions about
+      # patching, not build fixes, so neither is taken here unilaterally.
+      #
+      # Until one is taken, confirm the live version before deploying anything
+      # that touches this resource -- the deploy workflow's "Ensure the
+      # Postgres instance is running" step now does exactly this and fails
+      # fast on a mismatch:
       #   aws rds describe-db-instances \
       #     --query "DBInstances[].[DBInstanceIdentifier,DBInstanceStatus,EngineVersion]"
-      #
-      # W3691 is suppressed below rather than silenced by mutating production.
-      EngineVersion: '16.6'
+      EngineVersion: '16.14'
       DBName: !Ref PostgresDbName
       MasterUsername: !Ref PostgresUsername
       MasterUserPassword: !Sub '{{resolve:secretsmanager:${PostgresSecret}:SecretString:password}}'

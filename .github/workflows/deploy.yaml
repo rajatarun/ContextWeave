@@ -225,6 +225,81 @@ jobs:
           aws rds wait db-instance-available --db-instance-identifier "$DB_ID" --region "$REGION"
           echo "${DB_ID} is available."
 
+      # EngineVersion in template.yaml is a pin to what the instance actually
+      # runs, and it goes stale on its own: AutoMinorVersionUpgrade defaults to
+      # true, so RDS moves the minor version in a maintenance window without
+      # any commit doing anything.
+      #
+      # A stale pin is not a harmless no-op. Minor versions cannot be
+      # downgraded, so the deploy fails with "Cannot find upgrade path from
+      # 16.14 to 16.6" -- but only after CloudFormation has built a changeset,
+      # started updating, failed on PostgresRDS, and rolled the whole stack
+      # back. Three minutes to learn one number is wrong.
+      #
+      # So compare them first. This never modifies the instance: an upgrade is
+      # real maintenance with downtime and is someone's decision, not this
+      # workflow's.
+      - name: Check the template's EngineVersion against the live instance
+        run: |
+          STACK="${{ env.STACK_NAME_PROD }}"
+          REGION="${{ env.AWS_REGION }}"
+
+          TEMPLATE_VERSION="$(awk -F\' '/^      EngineVersion:/{print $2; exit}' "${{ env.SAM_TEMPLATE }}")"
+          if [ -z "$TEMPLATE_VERSION" ]; then
+            echo "Could not read EngineVersion from ${{ env.SAM_TEMPLATE }}." >&2
+            echo "If the property was moved or reformatted, update this step -- do" >&2
+            echo "not drop it, or a stale pin costs a failed deploy and a rollback." >&2
+            exit 1
+          fi
+
+          DB_ID="$(aws cloudformation describe-stack-resource \
+            --stack-name "$STACK" --region "$REGION" \
+            --logical-resource-id PostgresRDS \
+            --query "StackResourceDetail.PhysicalResourceId" \
+            --output text 2>/dev/null || true)"
+
+          if [ -z "$DB_ID" ] || [ "$DB_ID" = "None" ]; then
+            echo "No PostgresRDS in $STACK yet (first deploy); nothing to compare."
+            exit 0
+          fi
+
+          LIVE_VERSION="$(aws rds describe-db-instances \
+            --db-instance-identifier "$DB_ID" --region "$REGION" \
+            --query "DBInstances[0].EngineVersion" --output text 2>/dev/null || echo "")"
+
+          if [ -z "$LIVE_VERSION" ] || [ "$LIVE_VERSION" = "None" ]; then
+            echo "Could not read the live EngineVersion; leaving it to CloudFormation."
+            exit 0
+          fi
+
+          echo "template: ${TEMPLATE_VERSION}   live: ${LIVE_VERSION}"
+
+          # A major-only pin ('16') deliberately hands the minor to RDS, so any
+          # 16.x matches it.
+          case "$TEMPLATE_VERSION" in
+            *.*) MATCH=$([ "$TEMPLATE_VERSION" = "$LIVE_VERSION" ] && echo yes || echo no) ;;
+            *)   MATCH=$(case "$LIVE_VERSION" in "$TEMPLATE_VERSION".*) echo yes ;; *) echo no ;; esac) ;;
+          esac
+
+          if [ "$MATCH" = "no" ]; then
+            echo "::error::template.yaml pins EngineVersion ${TEMPLATE_VERSION}, but ${DB_ID} runs ${LIVE_VERSION}."
+            echo "" >&2
+            echo "RDS cannot downgrade a minor version, so this deploy would fail on" >&2
+            echo "PostgresRDS and roll the stack back." >&2
+            echo "" >&2
+            echo "If RDS auto-upgraded the instance (AutoMinorVersionUpgrade defaults" >&2
+            echo "to true), set EngineVersion to ${LIVE_VERSION} -- that is a" >&2
+            echo "documentation change, and the deploy becomes a no-op for this" >&2
+            echo "resource." >&2
+            echo "" >&2
+            echo "If you actually intend to upgrade to ${TEMPLATE_VERSION}, that is" >&2
+            echo "maintenance with downtime: schedule it and remove this guard for" >&2
+            echo "that run deliberately." >&2
+            exit 1
+          fi
+
+          echo "EngineVersion matches; PostgresRDS will not be modified."
+
       # Recovering a stack from UPDATE_ROLLBACK_FAILED is iterative, not a
       # single call: each continue-update-rollback can fail again on a
       # different resource, and you only learn which one after the attempt.
