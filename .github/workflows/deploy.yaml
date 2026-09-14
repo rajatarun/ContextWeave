@@ -163,6 +163,68 @@ jobs:
       # continue-update-rollback, skipping any resource that is itself stuck in
       # UPDATE_FAILED, so the stack reaches UPDATE_ROLLBACK_COMPLETE before we
       # attempt a fresh deploy.
+      # RDS refuses every modification on a stopped instance, so a stopped
+      # database does not just block the deploy -- it blocks the ROLLBACK too,
+      # which is how contextweave-rag-prod ended up stuck in
+      # UPDATE_ROLLBACK_FAILED with no way out in either direction. The
+      # instance is stopped routinely to save money, and AWS auto-starts it
+      # after 7 days, so "is it running right now" is not something a deploy
+      # can assume. This runs before the recovery step because the recovery
+      # needs the instance up as much as the deploy does.
+      - name: Ensure the Postgres instance is running
+        run: |
+          STACK="${{ env.STACK_NAME_PROD }}"
+          REGION="${{ env.AWS_REGION }}"
+
+          # Resolve the physical id from the stack rather than hardcoding a
+          # CloudFormation-generated name that changes if the resource is
+          # ever replaced.
+          DB_ID="$(aws cloudformation describe-stack-resource \
+            --stack-name "$STACK" --region "$REGION" \
+            --logical-resource-id PostgresRDS \
+            --query "StackResourceDetail.PhysicalResourceId" \
+            --output text 2>/dev/null || true)"
+
+          if [ -z "$DB_ID" ] || [ "$DB_ID" = "None" ]; then
+            echo "No PostgresRDS in $STACK yet (first deploy); nothing to start."
+            exit 0
+          fi
+
+          db_status() {
+            aws rds describe-db-instances --db-instance-identifier "$DB_ID" --region "$REGION" \
+              --query "DBInstances[0].DBInstanceStatus" --output text 2>/dev/null || echo "missing"
+          }
+
+          STATUS="$(db_status)"
+          echo "${DB_ID} is ${STATUS}"
+
+          case "$STATUS" in
+            available)
+              exit 0 ;;
+            missing)
+              echo "Instance not found; leaving it to CloudFormation."; exit 0 ;;
+            stopping)
+              # start-db-instance is rejected mid-stop, so let it finish first.
+              echo "Waiting for the stop to finish before starting it again..."
+              for _ in $(seq 1 60); do
+                sleep 10
+                [ "$(db_status)" = "stopped" ] && break
+              done
+              aws rds start-db-instance --db-instance-identifier "$DB_ID" --region "$REGION" >/dev/null
+              ;;
+            stopped)
+              echo "Starting ${DB_ID}..."
+              aws rds start-db-instance --db-instance-identifier "$DB_ID" --region "$REGION" >/dev/null
+              ;;
+            *)
+              # starting / modifying / backing-up: already transitioning, just wait.
+              echo "In a transitional state; waiting for it to settle." ;;
+          esac
+
+          echo "Waiting for ${DB_ID} to become available..."
+          aws rds wait db-instance-available --db-instance-identifier "$DB_ID" --region "$REGION"
+          echo "${DB_ID} is available."
+
       # Recovering a stack from UPDATE_ROLLBACK_FAILED is iterative, not a
       # single call: each continue-update-rollback can fail again on a
       # different resource, and you only learn which one after the attempt.
