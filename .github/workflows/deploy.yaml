@@ -163,62 +163,94 @@ jobs:
       # continue-update-rollback, skipping any resource that is itself stuck in
       # UPDATE_FAILED, so the stack reaches UPDATE_ROLLBACK_COMPLETE before we
       # attempt a fresh deploy.
+      # Recovering a stack from UPDATE_ROLLBACK_FAILED is iterative, not a
+      # single call: each continue-update-rollback can fail again on a
+      # different resource, and you only learn which one after the attempt.
+      # The previous version of this step tried once, built its skip list from
+      # the last 200 stack EVENTS (so it could pass logical ids that failed in
+      # some earlier, unrelated update and are not in a failed state now), and
+      # never printed ResourceStatusReason -- so when it failed, as it did, the
+      # log said only that the waiter saw UPDATE_ROLLBACK_FAILED and nothing
+      # about why.
+      #
+      # This version loops, rebuilds the skip list from the resources' CURRENT
+      # state each time, and prints the reason for every failure so the log
+      # explains itself.
       - name: Recover stack from UPDATE_ROLLBACK_FAILED (if needed)
         run: |
-          STATUS=$(aws cloudformation describe-stacks \
-            --stack-name "${{ env.STACK_NAME_PROD }}" \
-            --region "${{ env.AWS_REGION }}" \
-            --query "Stacks[0].StackStatus" \
-            --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+          STACK="${{ env.STACK_NAME_PROD }}"
+          REGION="${{ env.AWS_REGION }}"
+          MAX_ATTEMPTS=3
 
+          stack_status() {
+            aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
+              --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "DOES_NOT_EXIST"
+          }
+
+          # Resources in a failed state RIGHT NOW, with the reason, so the skip
+          # list reflects reality rather than event history.
+          report_failed() {
+            aws cloudformation describe-stack-resources --stack-name "$STACK" --region "$REGION" \
+              --query "StackResources[?contains(ResourceStatus, 'FAILED')].[LogicalResourceId,ResourceStatus,ResourceStatusReason]" \
+              --output text
+          }
+          failed_ids() {
+            aws cloudformation describe-stack-resources --stack-name "$STACK" --region "$REGION" \
+              --query "StackResources[?contains(ResourceStatus, 'FAILED')].LogicalResourceId" \
+              --output text | tr '\t' ' ' | xargs
+          }
+
+          STATUS="$(stack_status)"
           echo "Current stack status: $STATUS"
-
           if [ "$STATUS" != "UPDATE_ROLLBACK_FAILED" ]; then
             echo "No recovery needed."
             exit 0
           fi
 
-          echo "Stack is stuck in UPDATE_ROLLBACK_FAILED – collecting failed resources..."
+          for ATTEMPT in $(seq 1 "$MAX_ATTEMPTS"); do
+            echo "=== recovery attempt ${ATTEMPT}/${MAX_ATTEMPTS} ==="
+            echo "Resources currently in a failed state:"
+            report_failed || true
 
-          # Only resources whose rollback genuinely failed (not ones that were
-          # cascade-cancelled) may be passed to --resources-to-skip.
-          # Filter out any event where ResourceStatusReason contains "cancelled".
-          FAILED=$(aws cloudformation describe-stack-events \
-            --stack-name "${{ env.STACK_NAME_PROD }}" \
-            --region "${{ env.AWS_REGION }}" \
-            --max-items 200 \
-            --output json \
-          | jq -r '
-              .StackEvents[]
-              | select(
-                  .ResourceStatus == "UPDATE_FAILED" and
-                  ((.ResourceStatusReason // "") | ascii_downcase | contains("cancelled") | not)
-                )
-              | .LogicalResourceId
-            ' \
-          | sort -u | tr '\n' ' ' | xargs)
+            SKIP="$(failed_ids || true)"
+            echo "Skipping: ${SKIP:-<none>}"
 
-          echo "Resources to skip: $FAILED"
+            if [ -z "$SKIP" ]; then
+              aws cloudformation continue-update-rollback --stack-name "$STACK" --region "$REGION" || true
+            else
+              # shellcheck disable=SC2086
+              aws cloudformation continue-update-rollback --stack-name "$STACK" --region "$REGION" \
+                --resources-to-skip $SKIP || true
+            fi
 
-          if [ -z "$FAILED" ]; then
-            echo "No UPDATE_FAILED resources found; attempting bare continue-update-rollback."
-            aws cloudformation continue-update-rollback \
-              --stack-name "${{ env.STACK_NAME_PROD }}" \
-              --region "${{ env.AWS_REGION }}"
-          else
-            aws cloudformation continue-update-rollback \
-              --stack-name "${{ env.STACK_NAME_PROD }}" \
-              --region "${{ env.AWS_REGION }}" \
-              --resources-to-skip $FAILED
-          fi
+            # Poll rather than `wait`, because the waiter treats
+            # UPDATE_ROLLBACK_FAILED as terminal and aborts the whole step
+            # before another attempt can be made.
+            for _ in $(seq 1 60); do
+              sleep 10
+              STATUS="$(stack_status)"
+              case "$STATUS" in
+                UPDATE_ROLLBACK_COMPLETE|UPDATE_COMPLETE)
+                  echo "Stack recovered: $STATUS"; exit 0 ;;
+                UPDATE_ROLLBACK_FAILED)
+                  echo "Rollback failed again on attempt ${ATTEMPT}."; break ;;
+                *)
+                  echo "  ... $STATUS" ;;
+              esac
+            done
+          done
 
-          echo "Waiting for rollback to complete..."
-          aws cloudformation wait stack-rollback-complete \
-            --stack-name "${{ env.STACK_NAME_PROD }}" \
-            --region "${{ env.AWS_REGION }}"
-
-          echo "Stack recovered to UPDATE_ROLLBACK_COMPLETE."
-
+          echo "::error::Stack is still UPDATE_ROLLBACK_FAILED after ${MAX_ATTEMPTS} attempts."
+          echo "Resources still failing, with reasons:"
+          report_failed || true
+          echo ""
+          echo "A resource that cannot be rolled back needs a human decision, not another retry."
+          echo "The common one here is PostgresRDS: an engine-version UPGRADE cannot be rolled"
+          echo "back, because RDS does not support downgrading. If that is the blocker, the fix"
+          echo "is to set EngineVersion in template.yaml to the version the instance is ACTUALLY"
+          echo "running (aws rds describe-db-instances --query \"DBInstances[].EngineVersion\")"
+          echo "so the template stops asking for a change, then deploy again."
+          exit 1
       - name: SAM build
         run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel
 

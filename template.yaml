@@ -547,6 +547,19 @@ Resources:
     Properties:
       DBInstanceClass: !Ref PostgresInstanceClass
       Engine: postgres
+      # One-way door. An RDS engine-version UPGRADE cannot be rolled back --
+      # RDS does not support downgrading -- so if any later resource in this
+      # stack fails after this instance has upgraded, CloudFormation's rollback
+      # gets permanently stuck trying to put the version back, and the whole
+      # stack lands in UPDATE_ROLLBACK_FAILED.
+      #
+      # That has already happened once here: this value was changed from 16.6
+      # purely to silence a cfn-lint deprecation warning that was failing
+      # `sam validate --lint`, and a lint fix is not worth wedging prod. Treat
+      # any change to this line as a planned maintenance operation, not part of
+      # a routine deploy, and confirm it against what the instance is actually
+      # running first:
+      #   aws rds describe-db-instances --query "DBInstances[].EngineVersion"
       EngineVersion: '16.14'
       DBName: !Ref PostgresDbName
       MasterUsername: !Ref PostgresUsername
