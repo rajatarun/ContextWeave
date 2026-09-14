@@ -542,25 +542,42 @@ Resources:
 
   PostgresRDS:
     Type: AWS::RDS::DBInstance
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks:
+            # Deprecated-engine-version warning. Suppressed deliberately: the
+            # remedy cfn-lint implies (bump the version) is a live RDS
+            # modification, and doing it to keep a linter quiet already took
+            # prod down once. Upgrading is tracked as maintenance work, not as
+            # a build-break to clear.
+            - W3691
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
       DBInstanceClass: !Ref PostgresInstanceClass
       Engine: postgres
-      # One-way door. An RDS engine-version UPGRADE cannot be rolled back --
-      # RDS does not support downgrading -- so if any later resource in this
-      # stack fails after this instance has upgraded, CloudFormation's rollback
-      # gets permanently stuck trying to put the version back, and the whole
-      # stack lands in UPDATE_ROLLBACK_FAILED.
+      # Pinned to what the instance is ACTUALLY running. Do not bump this to
+      # satisfy a linter.
       #
-      # That has already happened once here: this value was changed from 16.6
-      # purely to silence a cfn-lint deprecation warning that was failing
-      # `sam validate --lint`, and a lint fix is not worth wedging prod. Treat
-      # any change to this line as a planned maintenance operation, not part of
-      # a routine deploy, and confirm it against what the instance is actually
-      # running first:
-      #   aws rds describe-db-instances --query "DBInstances[].EngineVersion"
-      EngineVersion: '16.14'
+      # It was bumped to 16.15 and then 16.14 in this session for exactly that
+      # reason -- cfn-lint's W3691 flags 16.6 as deprecated and
+      # `sam validate --lint` treats any matched rule as a build failure. The
+      # deploy that carried it wedged contextweave-rag-prod in
+      # UPDATE_ROLLBACK_FAILED, because the instance was STOPPED and RDS
+      # refuses to modify a stopped instance ("You can't modify a stopped DB
+      # instance"). The rollback then failed for the same reason, so the stack
+      # could not move in either direction.
+      #
+      # Two things follow. A version change here is a real maintenance
+      # operation with downtime, not a lint fix. And any change to this
+      # resource fails outright while the instance is stopped, which it is
+      # routinely -- so confirm state before deploying anything that touches it:
+      #   aws rds describe-db-instances \
+      #     --query "DBInstances[].[DBInstanceIdentifier,DBInstanceStatus,EngineVersion]"
+      #
+      # W3691 is suppressed below rather than silenced by mutating production.
+      EngineVersion: '16.6'
       DBName: !Ref PostgresDbName
       MasterUsername: !Ref PostgresUsername
       MasterUserPassword: !Sub '{{resolve:secretsmanager:${PostgresSecret}:SecretString:password}}'

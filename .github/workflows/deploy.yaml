@@ -245,11 +245,18 @@ jobs:
           report_failed || true
           echo ""
           echo "A resource that cannot be rolled back needs a human decision, not another retry."
-          echo "The common one here is PostgresRDS: an engine-version UPGRADE cannot be rolled"
-          echo "back, because RDS does not support downgrading. If that is the blocker, the fix"
-          echo "is to set EngineVersion in template.yaml to the version the instance is ACTUALLY"
-          echo "running (aws rds describe-db-instances --query \"DBInstances[].EngineVersion\")"
-          echo "so the template stops asking for a change, then deploy again."
+          echo ""
+          echo "The one that has actually happened here is PostgresRDS while STOPPED:"
+          echo "  'You can't modify a stopped DB instance. Start the DB instance, and then modify it.'"
+          echo "RDS refuses every modification on a stopped instance, so the update fails AND the"
+          echo "rollback fails for the same reason and the stack cannot move in either direction."
+          echo "No number of retries fixes that. Start it, wait for 'available', then re-run:"
+          echo "  aws rds describe-db-instances --query \"DBInstances[].[DBInstanceIdentifier,DBInstanceStatus]\""
+          echo "  aws rds start-db-instance --db-instance-identifier <id>"
+          echo "  aws rds wait db-instance-available --db-instance-identifier <id>"
+          echo ""
+          echo "Then check the template is not asking for a change the instance cannot take;"
+          echo "EngineVersion in particular must match what is really running."
           exit 1
       - name: SAM build
         run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel
