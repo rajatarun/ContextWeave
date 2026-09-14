@@ -1274,6 +1274,14 @@ Outputs:
     Description: Full URL for the POST /query-expertise endpoint
     Value: !Sub https://${ExpertiseAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/query-expertise
 
+  OpenApiSpecPath:
+    Description: >
+      Path, in this repository, of the OpenAPI document describing the API at
+      APIEndpoint. A harness resolves the server URL from APIEndpoint and the
+      operations from this file; openapi/contextweave.yaml is kept in sync with
+      contracts/contextweave_http_api.json by tests/test_openapi_contract.py.
+    Value: openapi/contextweave.yaml
+
   MemgraphInstanceId:
     Description: Memgraph EC2 instance ID
     Value: !Ref MemgraphEC2
@@ -1303,6 +1311,31 @@ Outputs:
     Value: !Ref PostgresSecret
     Export:
       Name: !Sub ${AWS::StackName}-PostgresSecretArn
+
+  # The endpoint alone is not enough to connect or to operate the instance.
+  # These three close that gap so a test harness (or an operator) can resolve
+  # everything it needs from `describe-stacks` instead of reading the template.
+  PostgresPort:
+    Description: RDS PostgreSQL port
+    Value: !GetAtt PostgresRDS.Endpoint.Port
+    Export:
+      Name: !Sub ${AWS::StackName}-PostgresPort
+
+  PostgresDbName:
+    Description: PostgreSQL database name (pgvector chunks, query_cache, routing_decisions)
+    Value: !Ref PostgresDbName
+    Export:
+      Name: !Sub ${AWS::StackName}-PostgresDbName
+
+  PostgresInstanceIdentifier:
+    Description: >
+      RDS DB instance identifier. Needed to start/stop the instance -- the
+      deploy pipeline has to start it before touching the stack, because RDS
+      refuses every modification while stopped and that wedges the rollback
+      too. Previously this had to be dug out with describe-stack-resource.
+    Value: !Ref PostgresRDS
+    Export:
+      Name: !Sub ${AWS::StackName}-PostgresInstanceIdentifier
 
   IngestionStateMachineArn:
     Description: Step Functions ingestion state machine ARN

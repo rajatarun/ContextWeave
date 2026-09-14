@@ -1,0 +1,255 @@
+openapi: 3.0.3
+
+info:
+  title: ContextWeave / ExpertiseRAG Query API
+  version: "2.0.0"
+  description: |
+    The HTTP surface of the ContextWeave query API.
+
+    **This document is not the source of truth for the response shapes.**
+    `contracts/contextweave_http_api.json` is, because TeamWeave validates its
+    client against that same file; `tests/test_openapi_contract.py` fails if the
+    two disagree, so this spec cannot quietly drift from what the handlers
+    actually return.
+
+    **Resolving the server for automation.** Do not hardcode the URL. Read it
+    from the stack:
+
+        aws cloudformation describe-stacks --stack-name contextweave-rag-prod \
+          --query "Stacks[0].Outputs[?OutputKey=='APIEndpoint'].OutputValue" \
+          --output text
+
+    `scripts/stack_env.py` does this for every value a harness needs (API base
+    URL, Postgres host/port/database/secret, the RDS instance identifier) and
+    emits them as JSON or as shell exports.
+
+servers:
+  - url: "{apiEndpoint}"
+    description: Resolved from the APIEndpoint stack output
+    variables:
+      apiEndpoint:
+        default: https://example.execute-api.us-east-1.amazonaws.com/prod
+        description: The APIEndpoint output of the contextweave-rag-{env} stack
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Liveness plus the routing graph's learning-loop health
+      description: |
+        `routingGraph.health` carries a per-question-type verdict of
+        `learning` / `converged` / `starved`. `starved` is the signature of a
+        router that has stopped exploring and should alert — a frozen router
+        and a converged one are otherwise indistinguishable from the logs.
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, routingGraph]
+                properties:
+                  status: { type: string, example: healthy }
+                  knowledgeBaseId: { type: string }
+                  neptuneGraphId: { type: string }
+                  environment: { type: string }
+                  routingGraph:
+                    type: object
+                    properties:
+                      documentTypeDistribution:
+                        type: array
+                        items: { type: object }
+                      health:
+                        type: object
+                        properties:
+                          exploration: { type: number }
+                          priorStrength: { type: number }
+                          questionTypes:
+                            type: object
+                            additionalProperties:
+                              type: object
+                              properties:
+                                verdict:
+                                  type: string
+                                  enum: [learning, converged, starved]
+                                leader: { type: string }
+                                leaderPBest: { type: number }
+                                starvedArms:
+                                  type: array
+                                  items: { type: string }
+                                arms: { type: object }
+
+  /query-expertise:
+    post:
+      operationId: queryExpertise
+      summary: Ask the knowledge layer a question
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                question: { type: string }
+                topK: { type: integer, default: 8 }
+      responses:
+        "200":
+          description: An answer, with the routing decision that produced it
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [queryId, answer, sources, confidence, questionType, cacheHit]
+                properties:
+                  queryId:
+                    type: string
+                    description: |
+                      Required to rate this answer later via POST /feedback. A
+                      client that drops it can never give feedback on what it
+                      received.
+                  answer: { type: string }
+                  sources:
+                    type: array
+                    items:
+                      type: object
+                      required: [file, excerpt, weight]
+                      properties:
+                        file: { type: string }
+                        excerpt: { type: string }
+                        weight: { type: number }
+                  confidence: { type: number, format: float }
+                  confidenceReported:
+                    type: boolean
+                    description: |
+                      False when the model omitted a confidence and a fallback
+                      constant was substituted. The router is NOT updated in
+                      that case — a constant the code chose is not an
+                      observation.
+                  questionType: { type: string }
+                  cacheHit: { type: boolean }
+                  latencyMs: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /feedback:
+    post:
+      operationId: postFeedback
+      summary: Rate a previous answer; folds an independent reward into the router
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [queryId, rating]
+              properties:
+                queryId: { type: string }
+                rating:
+                  description: up/down/neutral, a boolean, or a number in [0,1]
+                  oneOf:
+                    - type: string
+                      enum: [up, down, neutral, good, bad, helpful, unhelpful, yes, no, correct, wrong, partial, mixed]
+                    - type: boolean
+                    - type: number
+                      minimum: 0
+                      maximum: 1
+      responses:
+        "200":
+          description: Rating applied
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [queryId, strategy, questionType]
+                properties:
+                  queryId: { type: string }
+                  strategy: { type: string }
+                  questionType: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404":
+          description: Unknown queryId — older than the decision log, or served before feedback existed
+        "409":
+          description: This queryId has already been rated (one rating per query)
+
+  /routing-decisions:
+    get:
+      operationId: getRoutingDecisions
+      summary: Read the routing decision log
+      description: |
+        `mode=summary` answers the question the table exists for: does the
+        model's self-assessed confidence agree with what people actually think
+        of the answers? `meanAbsDiff` is `AVG(ABS(confidence - rating))` over
+        decisions carrying both. Near 0 the self-assessment tracks ratings and
+        is worth using as the cheap always-available reward; near 0.5 the
+        router has been learning from a proxy that measures nothing.
+      parameters:
+        - { name: mode, in: query, schema: { type: string, enum: [list, summary], default: list } }
+        - { name: questionType, in: query, schema: { type: string } }
+        - { name: strategy, in: query, schema: { type: string } }
+        - { name: since, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, description: list mode only; clamped to 1..1000, schema: { type: integer, default: 100 } }
+        - { name: offset, in: query, description: list mode only, schema: { type: integer, default: 0 } }
+      responses:
+        "200":
+          description: Decisions, or a per-(question type, strategy) summary
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [items, count]
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          required: [queryId, questionType, strategy, propensity, confidence, rating, createdAt, ratedAt]
+                          properties:
+                            queryId: { type: string }
+                            questionType: { type: string }
+                            strategy: { type: string }
+                            propensity: { type: number, nullable: true }
+                            confidence: { type: number, nullable: true }
+                            rating: { type: number, nullable: true }
+                            createdAt: { type: string, format: date-time }
+                            ratedAt: { type: string, format: date-time, nullable: true }
+                      count:
+                        type: integer
+                        description: Total matching the filters, not the size of this page
+                  - type: object
+                    required: [groups, totalCount, totalRated]
+                    properties:
+                      groups:
+                        type: array
+                        items:
+                          type: object
+                          required: [questionType, strategy, count, ratedCount, avgConfidence, avgRating, meanAbsDiff]
+                          properties:
+                            questionType: { type: string }
+                            strategy: { type: string }
+                            count: { type: integer }
+                            ratedCount: { type: integer }
+                            avgConfidence: { type: number, nullable: true }
+                            avgRating:
+                              type: number
+                              nullable: true
+                              description: null, never 0.0, for a group nobody has rated
+                            meanAbsDiff:
+                              type: number
+                              nullable: true
+                              description: null, never 0.0, for a group nobody has rated
+                      totalCount: { type: integer }
+                      totalRated: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+components:
+  responses:
+    BadRequest:
+      description: Unusable request
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error: { type: string }
