@@ -222,3 +222,26 @@ def test_openapi_spec_path_output_points_at_the_spec():
     assert (REPO_ROOT / m.group(1)).is_file(), (
         f"OpenApiSpecPath output points at {m.group(1)}, which does not exist"
     )
+
+
+def test_engine_version_is_greppable_by_the_deploy_workflow():
+    """The pre-deploy guard reads EngineVersion out of the template with awk.
+
+    That guard exists because the pin goes stale on its own -- RDS auto-upgrades
+    the minor version in a maintenance window -- and a stale pin is not a no-op:
+    minor versions cannot be downgraded, so CloudFormation spends three minutes
+    building a changeset, failing on PostgresRDS and rolling the stack back to
+    tell you one number is wrong.
+
+    The guard matches `^      EngineVersion: '...'`. If the property is
+    reindented or rewritten the awk returns nothing, and while the step does
+    fail loudly on that, it fails during a deploy. This fails at the commit.
+    """
+    lines = re.findall(r"^      EngineVersion: '([^']+)'$",
+                       TEMPLATE_PATH.read_text(encoding="utf-8"), re.M)
+    assert len(lines) == 1, (
+        f"expected exactly one 6-space-indented EngineVersion line for the "
+        f"deploy workflow's awk to find, got {lines}. If the property moved, "
+        f"update the 'Check the template's EngineVersion against the live "
+        f"instance' step in .github/workflows/deploy.yaml too."
+    )
