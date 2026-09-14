@@ -163,62 +163,163 @@ jobs:
       # continue-update-rollback, skipping any resource that is itself stuck in
       # UPDATE_FAILED, so the stack reaches UPDATE_ROLLBACK_COMPLETE before we
       # attempt a fresh deploy.
+      # RDS refuses every modification on a stopped instance, so a stopped
+      # database does not just block the deploy -- it blocks the ROLLBACK too,
+      # which is how contextweave-rag-prod ended up stuck in
+      # UPDATE_ROLLBACK_FAILED with no way out in either direction. The
+      # instance is stopped routinely to save money, and AWS auto-starts it
+      # after 7 days, so "is it running right now" is not something a deploy
+      # can assume. This runs before the recovery step because the recovery
+      # needs the instance up as much as the deploy does.
+      - name: Ensure the Postgres instance is running
+        run: |
+          STACK="${{ env.STACK_NAME_PROD }}"
+          REGION="${{ env.AWS_REGION }}"
+
+          # Resolve the physical id from the stack rather than hardcoding a
+          # CloudFormation-generated name that changes if the resource is
+          # ever replaced.
+          DB_ID="$(aws cloudformation describe-stack-resource \
+            --stack-name "$STACK" --region "$REGION" \
+            --logical-resource-id PostgresRDS \
+            --query "StackResourceDetail.PhysicalResourceId" \
+            --output text 2>/dev/null || true)"
+
+          if [ -z "$DB_ID" ] || [ "$DB_ID" = "None" ]; then
+            echo "No PostgresRDS in $STACK yet (first deploy); nothing to start."
+            exit 0
+          fi
+
+          db_status() {
+            aws rds describe-db-instances --db-instance-identifier "$DB_ID" --region "$REGION" \
+              --query "DBInstances[0].DBInstanceStatus" --output text 2>/dev/null || echo "missing"
+          }
+
+          STATUS="$(db_status)"
+          echo "${DB_ID} is ${STATUS}"
+
+          case "$STATUS" in
+            available)
+              exit 0 ;;
+            missing)
+              echo "Instance not found; leaving it to CloudFormation."; exit 0 ;;
+            stopping)
+              # start-db-instance is rejected mid-stop, so let it finish first.
+              echo "Waiting for the stop to finish before starting it again..."
+              for _ in $(seq 1 60); do
+                sleep 10
+                [ "$(db_status)" = "stopped" ] && break
+              done
+              aws rds start-db-instance --db-instance-identifier "$DB_ID" --region "$REGION" >/dev/null
+              ;;
+            stopped)
+              echo "Starting ${DB_ID}..."
+              aws rds start-db-instance --db-instance-identifier "$DB_ID" --region "$REGION" >/dev/null
+              ;;
+            *)
+              # starting / modifying / backing-up: already transitioning, just wait.
+              echo "In a transitional state; waiting for it to settle." ;;
+          esac
+
+          echo "Waiting for ${DB_ID} to become available..."
+          aws rds wait db-instance-available --db-instance-identifier "$DB_ID" --region "$REGION"
+          echo "${DB_ID} is available."
+
+      # Recovering a stack from UPDATE_ROLLBACK_FAILED is iterative, not a
+      # single call: each continue-update-rollback can fail again on a
+      # different resource, and you only learn which one after the attempt.
+      # The previous version of this step tried once, built its skip list from
+      # the last 200 stack EVENTS (so it could pass logical ids that failed in
+      # some earlier, unrelated update and are not in a failed state now), and
+      # never printed ResourceStatusReason -- so when it failed, as it did, the
+      # log said only that the waiter saw UPDATE_ROLLBACK_FAILED and nothing
+      # about why.
+      #
+      # This version loops, rebuilds the skip list from the resources' CURRENT
+      # state each time, and prints the reason for every failure so the log
+      # explains itself.
       - name: Recover stack from UPDATE_ROLLBACK_FAILED (if needed)
         run: |
-          STATUS=$(aws cloudformation describe-stacks \
-            --stack-name "${{ env.STACK_NAME_PROD }}" \
-            --region "${{ env.AWS_REGION }}" \
-            --query "Stacks[0].StackStatus" \
-            --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+          STACK="${{ env.STACK_NAME_PROD }}"
+          REGION="${{ env.AWS_REGION }}"
+          MAX_ATTEMPTS=3
 
+          stack_status() {
+            aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
+              --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "DOES_NOT_EXIST"
+          }
+
+          # Resources in a failed state RIGHT NOW, with the reason, so the skip
+          # list reflects reality rather than event history.
+          report_failed() {
+            aws cloudformation describe-stack-resources --stack-name "$STACK" --region "$REGION" \
+              --query "StackResources[?contains(ResourceStatus, 'FAILED')].[LogicalResourceId,ResourceStatus,ResourceStatusReason]" \
+              --output text
+          }
+          failed_ids() {
+            aws cloudformation describe-stack-resources --stack-name "$STACK" --region "$REGION" \
+              --query "StackResources[?contains(ResourceStatus, 'FAILED')].LogicalResourceId" \
+              --output text | tr '\t' ' ' | xargs
+          }
+
+          STATUS="$(stack_status)"
           echo "Current stack status: $STATUS"
-
           if [ "$STATUS" != "UPDATE_ROLLBACK_FAILED" ]; then
             echo "No recovery needed."
             exit 0
           fi
 
-          echo "Stack is stuck in UPDATE_ROLLBACK_FAILED – collecting failed resources..."
+          for ATTEMPT in $(seq 1 "$MAX_ATTEMPTS"); do
+            echo "=== recovery attempt ${ATTEMPT}/${MAX_ATTEMPTS} ==="
+            echo "Resources currently in a failed state:"
+            report_failed || true
 
-          # Only resources whose rollback genuinely failed (not ones that were
-          # cascade-cancelled) may be passed to --resources-to-skip.
-          # Filter out any event where ResourceStatusReason contains "cancelled".
-          FAILED=$(aws cloudformation describe-stack-events \
-            --stack-name "${{ env.STACK_NAME_PROD }}" \
-            --region "${{ env.AWS_REGION }}" \
-            --max-items 200 \
-            --output json \
-          | jq -r '
-              .StackEvents[]
-              | select(
-                  .ResourceStatus == "UPDATE_FAILED" and
-                  ((.ResourceStatusReason // "") | ascii_downcase | contains("cancelled") | not)
-                )
-              | .LogicalResourceId
-            ' \
-          | sort -u | tr '\n' ' ' | xargs)
+            SKIP="$(failed_ids || true)"
+            echo "Skipping: ${SKIP:-<none>}"
 
-          echo "Resources to skip: $FAILED"
+            if [ -z "$SKIP" ]; then
+              aws cloudformation continue-update-rollback --stack-name "$STACK" --region "$REGION" || true
+            else
+              # shellcheck disable=SC2086
+              aws cloudformation continue-update-rollback --stack-name "$STACK" --region "$REGION" \
+                --resources-to-skip $SKIP || true
+            fi
 
-          if [ -z "$FAILED" ]; then
-            echo "No UPDATE_FAILED resources found; attempting bare continue-update-rollback."
-            aws cloudformation continue-update-rollback \
-              --stack-name "${{ env.STACK_NAME_PROD }}" \
-              --region "${{ env.AWS_REGION }}"
-          else
-            aws cloudformation continue-update-rollback \
-              --stack-name "${{ env.STACK_NAME_PROD }}" \
-              --region "${{ env.AWS_REGION }}" \
-              --resources-to-skip $FAILED
-          fi
+            # Poll rather than `wait`, because the waiter treats
+            # UPDATE_ROLLBACK_FAILED as terminal and aborts the whole step
+            # before another attempt can be made.
+            for _ in $(seq 1 60); do
+              sleep 10
+              STATUS="$(stack_status)"
+              case "$STATUS" in
+                UPDATE_ROLLBACK_COMPLETE|UPDATE_COMPLETE)
+                  echo "Stack recovered: $STATUS"; exit 0 ;;
+                UPDATE_ROLLBACK_FAILED)
+                  echo "Rollback failed again on attempt ${ATTEMPT}."; break ;;
+                *)
+                  echo "  ... $STATUS" ;;
+              esac
+            done
+          done
 
-          echo "Waiting for rollback to complete..."
-          aws cloudformation wait stack-rollback-complete \
-            --stack-name "${{ env.STACK_NAME_PROD }}" \
-            --region "${{ env.AWS_REGION }}"
-
-          echo "Stack recovered to UPDATE_ROLLBACK_COMPLETE."
-
+          echo "::error::Stack is still UPDATE_ROLLBACK_FAILED after ${MAX_ATTEMPTS} attempts."
+          echo "Resources still failing, with reasons:"
+          report_failed || true
+          echo ""
+          echo "A resource that cannot be rolled back needs a human decision, not another retry."
+          echo ""
+          echo "The one that has actually happened here is PostgresRDS while STOPPED:"
+          echo "  'You can't modify a stopped DB instance. Start the DB instance, and then modify it.'"
+          echo "RDS refuses every modification on a stopped instance, so the update fails AND the"
+          echo "rollback fails for the same reason and the stack cannot move in either direction."
+          echo "No number of retries fixes that. Start it, wait for 'available', then re-run:"
+          echo "  aws rds describe-db-instances --query \"DBInstances[].[DBInstanceIdentifier,DBInstanceStatus]\""
+          echo "  aws rds start-db-instance --db-instance-identifier <id>"
+          echo "  aws rds wait db-instance-available --db-instance-identifier <id>"
+          echo ""
+          echo "Then check the template is not asking for a change the instance cannot take;"
+          echo "EngineVersion in particular must match what is really running."
+          exit 1
       - name: SAM build
         run: sam build --template ${{ env.SAM_TEMPLATE }} --parallel
 
