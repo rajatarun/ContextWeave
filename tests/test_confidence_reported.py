@@ -21,16 +21,44 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "shared"
 
 @pytest.fixture(scope="module")
 def S():
+    """Import synthesizer with its Lambda-runtime imports stubbed, then undo it.
+
+    This used to stub with `sys.modules.setdefault(name, ModuleType(name))` and
+    never restore, which left a bare `boto3` module in sys.modules for the rest
+    of the session. tests/test_mcp_observatory.py does `import boto3` and
+    `monkeypatch.setattr(boto3, "resource", ...)`, so when it ran after this
+    file it failed six times with "<module 'boto3'> has no attribute
+    'resource'" -- a real-looking error in a file whose own code is fine.
+    Running that file alone passed; running the suite failed.
+
+    pytest.MonkeyPatch() rather than the `monkeypatch` fixture because that one
+    is function-scoped and this fixture is module-scoped; `undo()` in the
+    teardown restores whatever was there before, stub or real.
+    """
+    mp = pytest.MonkeyPatch()
     # synthesizer imports boto3/botocore and the observatory shim at module load.
     for name in ("boto3", "botocore", "botocore.exceptions", "botocore.config",
                  "mcp_observatory", "mcp_observatory.instrument"):
-        sys.modules.setdefault(name, types.ModuleType(name))
-    sys.modules["botocore.exceptions"].ClientError = type("ClientError", (Exception,), {})
-    sys.modules["botocore.config"].Config = type("Config", (), {"__init__": lambda self, **kw: None})
-    sys.modules["boto3"].client = lambda *a, **kw: None
-    sys.modules["mcp_observatory.instrument"].instrument_wrapper_api = lambda *a, **kw: None
+        if name not in sys.modules:
+            mp.setitem(sys.modules, name, types.ModuleType(name))
+    mp.setattr(sys.modules["botocore.exceptions"], "ClientError",
+               type("ClientError", (Exception,), {}), raising=False)
+    mp.setattr(sys.modules["botocore.config"], "Config",
+               type("Config", (), {"__init__": lambda self, **kw: None}), raising=False)
+    mp.setattr(sys.modules["boto3"], "client", lambda *a, **kw: None, raising=False)
+    mp.setattr(sys.modules["mcp_observatory.instrument"], "instrument_wrapper_api",
+               lambda *a, **kw: None, raising=False)
+
+    had_synthesizer = "synthesizer" in sys.modules
     import synthesizer
-    return synthesizer
+    yield synthesizer
+
+    # synthesizer closed over the stubs at import time, so leaving it cached
+    # would hand the next importer a module wired to modules that no longer
+    # exist. Drop it only if this fixture is what imported it.
+    if not had_synthesizer:
+        sys.modules.pop("synthesizer", None)
+    mp.undo()
 
 
 def test_reported_number_in_range_is_reported(S):
