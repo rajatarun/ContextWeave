@@ -47,6 +47,7 @@ import boto3
 import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 
+import agent_card
 from graph_expander import expand_graph_context
 from rag_router import select_strategy, update_feedback
 from retriever import deduplicate_chunks, retrieve_chunks, retrieve_with_strategy
@@ -373,6 +374,16 @@ def lambda_handler(event: dict, context: Any) -> dict:
     path = event.get("rawPath", "")
 
     logger.info("Request: %s %s", method, path)
+
+    # ── A2A Agent Card ────────────────────────────────────────────────────────
+    # The well-known URI every A2A client fetches first. It comes before the
+    # other routes because it is how a caller learns the other routes exist --
+    # TeamWeave previously assumed the /query-expertise path from a hardcoded
+    # sibling constant, which is the coupling this replaces.
+    is_agent_card_request = method == "GET" and agent_card.AGENT_CARD_PATH in path
+    demo_if(logger, "request targets the A2A agent card", is_agent_card_request)
+    if is_agent_card_request:
+        return _response(200, agent_card.build_agent_card(event))
 
     # ── Health check ──────────────────────────────────────────────────────────
     is_health_request = method == "GET" and "/health" in path

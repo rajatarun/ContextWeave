@@ -103,6 +103,33 @@ The graph learns from every answered question. No retraining. No manual tuning.
 
 ---
 
+## A2A Agent Card — how siblings find this service
+
+`GET /.well-known/agent-card.json` publishes ContextWeave as an
+[A2A](https://github.com/a2aproject/A2A) agent (v1.0, Linux Foundation).
+`src/query_api/agent_card.py` builds it; `handler.py` serves it before every
+other route, because it is how a caller learns the other routes exist.
+
+**Why it exists.** TeamWeave reached this service by assuming
+`{CONTEXTWEAVE_URL}/query-expertise` — a path constant in *TeamWeave's*
+repository. Move a route here and the break surfaces there as a 404 its RAG
+layer degrades past in silence: the run loses its grounding and nobody is
+told. The card replaces that guess with a document.
+
+Each route a caller uses is a **skill** (`query-expertise`, `feedback`,
+`routing-decisions`) and each description names its path. The interface URL is
+derived from the request, not configured, so the card cannot advertise a URL
+this deployment does not serve. `capabilities.streaming` is false and no A2A
+transport binding is claimed beyond `HTTP+JSON`, because this service serves
+its own HTTP API and does not implement `message:send` — advertising a
+protocol that is not there is a lie a machine acts on.
+
+`tests/test_agent_card.py` drives the real handler rather than grepping it: a
+source-level assertion passed happily while the branch that serves the card
+was disabled.
+
+---
+
 ## Core Design Decisions
 
 ### 1. CAG + RAG Hybrid (semantic cache layer)

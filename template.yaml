@@ -1096,6 +1096,15 @@ Resources:
           CACHE_SIMILARITY_THRESHOLD: "0.95"
           CACHE_TTL_DAYS: "7"
       Events:
+        # The well-known URI every A2A client fetches first. It is how a
+        # caller learns the routes below exist, rather than hardcoding one --
+        # TeamWeave assumed /query-expertise from a constant in its own repo.
+        AgentCard:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ExpertiseAPI
+            Path: /.well-known/agent-card.json
+            Method: GET
         QueryExpertise:
           Type: HttpApi
           Properties:
