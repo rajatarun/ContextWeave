@@ -150,6 +150,78 @@ The embedder is injected rather than imported at module scope, so listing and
 deleting work when the Bedrock and observability stack does not — a withdrawal
 must not depend on the thing that ingested it still being healthy.
 
+**The database is provisioned by the deploy, and the isolation is verified
+rather than asserted.** `src/shared/health_provision.py` runs from the
+`DBInitFunction` custom resource, on the expertise connection — `CREATE
+DATABASE` cannot run in a transaction and has to be issued from a *different*
+database, so a schema migration could not do it. One ordering is the whole
+point:
+
+    CREATE DATABASE healthrag OWNER healthrag
+    REVOKE ALL ON DATABASE healthrag FROM PUBLIC   <- the one that isolates
+    GRANT CONNECT ON DATABASE healthrag TO healthrag
+
+A new database grants `CONNECT` to **PUBLIC**, and every role is a member of
+PUBLIC. So `REVOKE ... FROM expertiserag` — the line anyone would write, and the
+one this file described before it was automated — isolates nothing at all: the
+expertise role connects anyway, through a grant nobody wrote down. Granting
+first and revoking second is the other way to get it wrong, since the revoke
+takes back the grant just made.
+
+Afterwards the deploy **asks Postgres** with `has_database_privilege`, which
+accounts for PUBLIC membership, and the expertise role it asks about is read
+back as `current_user` from the retrieval path's own connection — a role name
+from a parameter is exactly the value that is true in the template and false in
+the database. A `not isolated` verdict fails the custom resource, and so does a
+failed provision: the health API is live either way, so a database that was
+never created means a record is uploaded, the ingestion writes it nowhere, and
+every signal says the deploy worked. `skipped` is neither — no authorizer means
+no health resources exist, so there is nothing to provision.
+
+What this does **not** cover, stated because a security property half-claimed is
+worse than one not claimed: the expertise credential is the RDS **master user**,
+which holds `CREATEROLE` and therefore admin option on the role it just created.
+It can grant itself membership and get in deliberately. The guarantee is against
+the accidental path — a retrieval query reaching a medical record — which is the
+one that actually happens. Closing the other needs the expertise Lambdas to run
+as a non-master role.
+
+Four things in the wiring were wrong in the first pass and are worth naming,
+because each deploys green up to the moment it does not:
+
+- `GenerateSecretKey` is not a property of `GenerateSecretString` (it is
+  `GenerateStringKey`). CloudFormation rejects the unsupported property and
+  fails the stack; the wrong name reads exactly like the right one.
+- The health secret has **no `SecretTargetAttachment`**, on purpose — an
+  attachment writes the *instance's* connection details into the secret, and a
+  secret answering `dbname` with `expertiserag` would point the health store
+  straight at the corpus it exists to stay out of. So the host arrives from the
+  template as `HEALTH_POSTGRES_HOST` and the dbname stays the secret's alone.
+  `get_connection` refuses an absent host rather than defaulting: psycopg2 reads
+  an empty host as the local unix socket, so the failure would surface later and
+  name the wrong thing.
+- Neither health function had `VpcConfig`, and the Postgres instance is not
+  publicly accessible — they would have resolved the endpoint and hung until the
+  connect timeout.
+- Read of the health credential is `DBInitRole`'s own policy, **not** an entry in
+  the shared `SecretsReadPolicy`. The one-line version would have handed it to
+  the preprocessor and the query API too — the two functions the separate
+  database exists to keep away from it. A shared policy is the cheapest place to
+  undo an isolation without any diff looking wrong.
+
+`db_clients.get_pg_connection` pings with a bare `SELECT 1` and never commits, so
+the connection the provisioner is handed is always inside a transaction — and
+psycopg2 refuses to change `autocommit` there. It rolls back first, and restores
+the caller's setting afterwards.
+
+`tests/test_health_provision.py` holds all of it against a fake that reproduces
+those two psycopg2 behaviours rather than a fake written from recollection, and
+twenty-six mutations — reversing the grant order, revoking from the role instead
+of PUBLIC, dropping the rollback, assuming isolation instead of asking,
+downgrading the failure to a warning, hardcoding the role name, restoring the
+invalid secret property, adding the health secret to the shared policy, taking a
+function out of the VPC — each fail it.
+
 `tests/test_health_store.py` holds all of it, and ten mutations — dropping the
 route's authorizer, adding a default one, falling back to the expertise
 database, pointing the SQL at `chunks`, answering an empty retrieval, losing the
@@ -240,8 +312,8 @@ No long-lived AWS credentials are stored in GitHub secrets. The workflow assumes
 
 ### `expertise-rag-db-init-{env}`
 - **Trigger**: CloudFormation custom resource (post-deploy) + Step Functions + manual
-- **Actions**: `start` (StartIngestionJob), `status` (GetIngestionJob), `seed_routing` (seed Neptune routing graph), `empty_all` (clear all Neptune data)
-- **On Deploy**: Seeds Neptune with initial `EFFECTIVE_FOR` prior weights for all strategy/question-type pairs; initialises pgvector schema (`chunks` + `query_cache` tables)
+- **Actions**: `start` (StartIngestionJob), `status` (GetIngestionJob), `seed_routing` (seed Neptune routing graph), `provision_health` (create the health database, role and grants), `empty_all` (clear all Neptune data)
+- **On Deploy**: Seeds Neptune with initial `EFFECTIVE_FOR` prior weights for all strategy/question-type pairs; initialises pgvector schema (`chunks` + `query_cache` tables); provisions the health database and **verifies** the expertise role cannot connect to it
 - **Code**: `src/ingestion_trigger/handler.py`
 
 ---
@@ -253,6 +325,8 @@ No long-lived AWS credentials are stored in GitHub secrets. The workflow assumes
 | `db_clients.py` | Singleton factories for Memgraph (Neo4j bolt) and PostgreSQL (psycopg2); credentials read from AWS Secrets Manager |
 | `embedder.py` | Titan Text Embeddings V2 wrapper — `embed_text()` and `embed_texts()` |
 | `chunker.py` | Text chunking utilities (hierarchical, sentence, fixed-window) |
+| `health_db.py` | The health store's own connection, schema and per-document read/replace/delete — no fallback to the expertise credential |
+| `health_provision.py` | Creates the health database, role and grants from the deploy; `verify_isolation` asks Postgres whether the expertise role can still connect |
 | `models.py` | Canonical domain models, routing enums, ROUTING_PRIORS, SOURCE_WEIGHTS |
 
 ---

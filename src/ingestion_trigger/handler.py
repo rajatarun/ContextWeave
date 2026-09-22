@@ -56,6 +56,56 @@ def init_db_schema() -> dict:
         return {"status": "failed", "reason": str(exc)}
 
 
+def provision_health_db() -> dict:
+    """Create the health database, its role and its grants, then prove it.
+
+    Runs from the expertise connection because `CREATE DATABASE` has to be
+    issued from a *different* database than the one it creates, and the
+    expertise credential is the RDS master user, which is the only credential
+    this stack has that may create one.
+
+    The expertise role is not configured here -- it is read back as
+    `current_user` from the very connection the retrieval path uses. A role
+    name from a parameter would be the thing that is true in the template and
+    false in the database, and this check exists precisely to catch that class
+    of mismatch.
+    """
+    try:
+        health_provision = _get_shared_module("health_provision")
+    except Exception as exc:
+        logger.error("health_provision module unavailable: %s", exc, exc_info=True)
+        return {"status": "failed", "reason": str(exc)}
+
+    if not os.environ.get("HEALTH_POSTGRES_SECRET_ARN", ""):
+        # The health surface is gated on an authorizer being configured. No
+        # secret means no health resources exist at all, so there is nothing to
+        # provision -- not a failure.
+        return {"status": "skipped", "reason": "health surface not enabled"}
+
+    try:
+        db_clients = _get_shared_module("db_clients")
+        conn = db_clients.get_pg_connection()
+        result = health_provision.provision(conn)
+        if result.get("status") != "success":
+            return result
+
+        with conn.cursor() as cur:
+            cur.execute("SELECT current_user")
+            expertise_role = cur.fetchone()[0]
+
+        isolation = health_provision.verify_isolation(
+            conn, expertise_role, result.get("database", "")
+        )
+        result["isolation"] = isolation
+        if not isolation.get("isolated"):
+            result["status"] = "failed"
+            result["reason"] = isolation.get("reason", "isolation not verified")
+        return result
+    except Exception as exc:
+        logger.error("health DB provisioning failed: %s", exc, exc_info=True)
+        return {"status": "failed", "reason": str(exc)}
+
+
 def seed_routing_graph_memgraph() -> dict:
     """
     Seed the adaptive routing graph in Memgraph with initial prior weights.
@@ -244,6 +294,23 @@ def lambda_handler(event: dict, context: Any) -> dict:
         if pg_result["status"] != "success":
             errors.append(f"pgvector init: {pg_result.get('reason', 'unknown')}")
 
+        # Fatal, unlike the Memgraph seed below, and for two different reasons
+        # that happen to point the same way:
+        #
+        #   - isolation unverified means the expertise role can still CONNECT
+        #     to the health database, which is the single property this whole
+        #     store exists to provide. Deploying green on that would ship the
+        #     failure while reporting the fix.
+        #   - provisioning failed at all means the health API is live and its
+        #     database is not, so a person uploads a medical record and the
+        #     ingestion writes it nowhere. The record is safe; the belief that
+        #     it was stored is not.
+        #
+        # Skipped is neither: the surface is off and there is nothing to do.
+        health_result = provision_health_db()
+        if health_result["status"] == "failed":
+            errors.append(f"health db: {health_result.get('reason', 'unknown')}")
+
         seed_result = seed_routing_graph_memgraph()
         if seed_result["status"] != "success":
             # Non-fatal: Memgraph may not be ready yet on first deploy
@@ -259,6 +326,7 @@ def lambda_handler(event: dict, context: Any) -> dict:
             data={
                 "Message": "DB schema initialised and routing graph seeded",
                 "PgvectorStatus": pg_result["status"],
+                "HealthDbStatus": health_result["status"],
                 "RoutingGraphNodes": str(seed_result.get("nodes", 0)),
                 "RoutingGraphEdges": str(seed_result.get("edges", 0)),
             },
@@ -266,6 +334,7 @@ def lambda_handler(event: dict, context: Any) -> dict:
         return {
             "status": "success",
             "pgvector": pg_result,
+            "health_db": health_result,
             "routing_graph": seed_result,
         }
 
@@ -273,6 +342,11 @@ def lambda_handler(event: dict, context: Any) -> dict:
     if event.get("action") == "init_db":
         result = init_db_schema()
         return {"action": "init_db", **result}
+
+    # ── Direct invocation: provision the health database ──────────────────────
+    if event.get("action") == "provision_health":
+        result = provision_health_db()
+        return {"action": "provision_health", **result}
 
     # ── Direct invocation: seed routing graph ─────────────────────────────────
     if event.get("action") == "seed_routing":

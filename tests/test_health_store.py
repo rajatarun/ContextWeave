@@ -103,6 +103,23 @@ def test_the_health_store_refuses_to_fall_back_to_the_expertise_database(monkeyp
     assert "no fallback" in str(raised.value)
 
 
+def test_the_health_store_refuses_to_connect_without_a_host(monkeypatch):
+    """psycopg2 reads an empty host as "the local unix socket", so a missing
+    value does not fail at the call -- it fails later, with a message about a
+    socket that was never the intent. The health secret has no target
+    attachment (deliberately, so nothing can overwrite its dbname), which is
+    exactly why the host can be absent."""
+    monkeypatch.setattr(health_db, "_conn", None)
+    monkeypatch.setenv("HEALTH_POSTGRES_SECRET_ARN", "arn:aws:secret:health")
+    monkeypatch.delenv("HEALTH_POSTGRES_HOST", raising=False)
+    monkeypatch.setattr(health_db, "_secret",
+                        lambda arn: {"username": "healthrag", "dbname": "healthrag",
+                                     "password": "x"})
+    with pytest.raises(RuntimeError) as raised:
+        health_db.get_connection()
+    assert "host" in str(raised.value)
+
+
 def test_the_health_store_never_touches_the_expertise_table():
     source = (REPO / "src" / "shared" / "health_db.py").read_text()
     statements = [line for line in source.splitlines()

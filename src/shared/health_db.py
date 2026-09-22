@@ -94,16 +94,38 @@ def get_connection() -> Any:
             "connection, because that corpus is read by the content teams."
         )
 
-    import psycopg2
-
     secret = _secret(secret_arn)
     dbname = secret.get("dbname") or secret.get("db") or ""
     if not dbname:
         raise RuntimeError("health secret carries no dbname")
 
+    # The host is the one field the secret cannot generate for itself. The
+    # expertise secret gets one from a `SecretTargetAttachment`; this secret
+    # deliberately has no attachment, because the attachment writes the
+    # *instance's* connection details into the secret -- including a dbname --
+    # and a secret that says `expertiserag` would point this module at the
+    # corpus it exists to stay out of. So the host arrives from the template as
+    # an environment variable and the dbname stays the secret's alone.
+    host = secret.get("host") or os.environ.get("HEALTH_POSTGRES_HOST", "")
+    if not host:
+        # Never defaulted. psycopg2 reads an empty host as "the local unix
+        # socket", so a missing value would not fail here -- it would fail
+        # later, with a message about a socket that was never the intent.
+        raise RuntimeError(
+            "no host for the health database: neither the secret nor "
+            "HEALTH_POSTGRES_HOST carries one"
+        )
+    port = int(secret.get("port") or os.environ.get("HEALTH_POSTGRES_PORT", "5432"))
+
+    # Imported last, after everything that can be wrong about the configuration
+    # has been checked. With the import first, a misconfigured deployment
+    # reports ModuleNotFoundError in any environment without the driver, which
+    # sends whoever reads it to a packaging problem that does not exist.
+    import psycopg2
+
     _conn = psycopg2.connect(
-        host=secret.get("host", ""),
-        port=int(secret.get("port", 5432)),
+        host=host,
+        port=port,
         dbname=dbname,
         user=secret.get("username") or secret.get("user", ""),
         password=secret.get("password", ""),
