@@ -1484,6 +1484,27 @@ Resources:
 
   ExpertiseAPI:
     Type: AWS::Serverless::HttpApi
+    # W1028 is suppressed here, and only W1028, and only on this resource.
+    #
+    # `HealthAPIFunction` carries `Condition: HealthEnabled`, so for each of its
+    # routes SAM generates the condition three times, nested: once around the
+    # path item, once around the method, once around the integration `uri`.
+    # Inside the outer true-branch the condition is already true, so the inner
+    # false-branches are unreachable and cfn-lint says so -- correctly, about
+    # generated output that nothing in this repository writes or can change.
+    # The only ways to remove it are to stop conditioning the function (the
+    # health surface would then ship whether or not an authorizer exists) or to
+    # stop gating the lint on warnings, which would have hidden the W1001 that
+    # caught the conditional invoke role two commits ago.
+    #
+    # `sam validate --lint` fails on any match, warnings included. That is worth
+    # keeping, so the exception is one rule on one resource rather than a
+    # severity threshold.
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks:
+            - W1028
     Properties:
       StageName: !Ref Environment
       Description: ExpertiseRAG query API – POST /query-expertise

@@ -245,3 +245,51 @@ def test_the_implication_rule_is_not_a_yes_machine():
     assert not _implies("HealthEnabled", "CreateHealthBucket"), \
         "the implication does not run backwards"
     assert not _implies("HealthEnabled", "NoSuchCondition")
+
+
+# ── the one suppressed lint rule stays one ──────────────────────────────────
+
+def _suppressions():
+    """Every cfn-lint ignore_checks in the template, by where it sits."""
+    found = {}
+    top = (TEMPLATE.get("Metadata") or {}).get("cfn-lint", {})
+    rules = ((top.get("config") or {}).get("ignore_checks") or [])
+    if rules:
+        found["<template>"] = list(rules)
+    for name, res in RESOURCES.items():
+        cfg = ((res.get("Metadata") or {}).get("cfn-lint") or {}).get("config") or {}
+        if cfg.get("ignore_checks"):
+            found[name] = list(cfg["ignore_checks"])
+    return found
+
+
+# Every one of these is a deliberate exception with a reason written beside it
+# in the template. The list is asserted whole so a new one has to be added here
+# too, where it gets read.
+EXPECTED_SUPPRESSIONS = {
+    # The deprecated-engine-version warning. The remedy cfn-lint implies is a
+    # live RDS modification, and doing that to quiet a linter took prod down
+    # once. Predates the health work.
+    "PostgresRDS": ["W3691"],
+    # The condition SAM writes three times per health route, nested: around the
+    # path item, the method, and the integration uri. Inside the outer
+    # true-branch it is already true, so the inner false-branches are
+    # unreachable -- correct, about generated output nothing here writes.
+    "ExpertiseAPI": ["W1028"],
+}
+
+
+def test_lint_suppressions_have_not_grown():
+    """`sam validate --lint` fails on any match, warnings included, and that is
+    worth keeping: W1001 is a warning, and it is what caught a conditional
+    `GetAtt` that made the stack undeployable. So each exception is one rule on
+    one resource. A severity threshold or a template-wide ignore would buy the
+    same green at the cost of the rule that has already earned its keep.
+    """
+    assert _suppressions() == EXPECTED_SUPPRESSIONS
+
+
+def test_no_suppression_is_template_wide():
+    """A template-level ignore silences the rule for every resource, including
+    ones written years later by someone who never saw the reason."""
+    assert "<template>" not in _suppressions()

@@ -241,6 +241,27 @@ Resource nor a valid authorizer URI. The intrinsic survives into the generated
 `authorizerUri`, which was checked by running the transform in both states
 rather than by reading it.
 
+**One lint rule is suppressed, and the scope is the point.** Because
+`HealthAPIFunction` is conditional, SAM writes `HealthEnabled` **three times per
+health route**, nested: around the path item, around the method, around the
+integration `uri`. Inside the outer true-branch the condition is already true,
+so the inner false-branches are unreachable and cfn-lint's W1028 says so —
+correctly, about output SAM generates and nothing in this repository writes. The
+only other ways to clear it are to stop conditioning the function (the health
+surface would then ship whether or not an authorizer exists) or to stop failing
+the lint on warnings — and W1001 is a warning, and it is what caught the
+conditional invoke role. So the exception is one rule on one resource, not a
+severity threshold: `Metadata.cfn-lint.config.ignore_checks: [W1028]` on
+`ExpertiseAPI`. With it in place a `!Ref` to a missing resource, a bad property
+value on that same resource, and W1001 on that same resource all still fail.
+
+It also took a version pin to see at all: `sam validate --lint` uses the
+cfn-lint SAM bundles (`>=1.52,<1.54`), and 1.56 and 1.57 do not report W1028
+here while 1.53 does. A local lint that passes proves nothing unless it runs the
+version CI runs. `tests/test_template_references.py` asserts the whole
+suppression list, including the older `W3691` on `PostgresRDS`, so a new one has
+to be added there too — where the reason gets read.
+
 `!Ref KMSKey` also shipped in the health resources; the key is
 `ArtifactsKMSKey`. Nothing here could tell — the YAML is valid and the tests
 passed. `tests/test_template_references.py` now resolves every `Ref`, `GetAtt`
