@@ -8,6 +8,21 @@ Description: >
 # Parameters
 # ─────────────────────────────────────────────────────────────────────────────
 Parameters:
+  SiweAuthorizerFunctionArn:
+    Type: String
+    Default: ""
+    Description: >
+      Lambda authorizer guarding the /health routes. The same SIWE authorizer
+      TeamWeave uses, so the platform has one notion of who a caller is. Empty
+      disables the health surface entirely -- see HealthEnabled. It is never
+      "authorizer optional": every expertise route on this API is open, which
+      is why the health routes cannot be.
+  HealthDocsBucketName:
+    Type: String
+    Default: ""
+    Description: >
+      Bucket holding health documents. Separate from the artifacts bucket on
+      purpose; leave empty and one is created for this stack.
   Environment:
     Type: String
     Default: dev
@@ -131,6 +146,15 @@ Conditions:
     - !Equals [!Select [0, !Split ['.', !Ref MemgraphInstanceType]], 't4g']
     - !Equals [!Select [0, !Split ['.', !Ref MemgraphInstanceType]], 'm7g']
     - !Equals [!Select [0, !Split ['.', !Ref MemgraphInstanceType]], 'c7g']
+
+  # The health surface exists only with an authorizer to put in front of it.
+  # Every expertise route on this API is open, which is exactly why the health
+  # routes cannot be -- and a health endpoint deployed without an authorizer by
+  # accident is the failure this gate prevents. No authorizer, no surface.
+  HealthEnabled: !Not [!Equals [!Ref SiweAuthorizerFunctionArn, '']]
+  CreateHealthBucket: !And
+    - !Condition HealthEnabled
+    - !Equals [!Ref HealthDocsBucketName, '']
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Globals
@@ -1192,6 +1216,196 @@ Resources:
   # ───────────────────────────────────────────
   # HTTP API (API Gateway v2)
   # ───────────────────────────────────────────
+  # ───────────────────────────────────────────
+  # The health store: its own bucket, its own database, its own endpoint.
+  #
+  # Separate from the expertise corpus at every layer that matters, because
+  # that corpus is queried by TeamWeave's content teams over an API with no
+  # authorizer, searched as one undifferentiated chunk table, and had no
+  # per-document delete. See src/shared/health_db.py for each.
+  # ───────────────────────────────────────────
+
+  HealthAuthorizerInvokeRole:
+    Type: AWS::IAM::Role
+    Condition: HealthEnabled
+    Properties:
+      Description: >
+        Lets API Gateway invoke the SIWE authorizer, which lives in another
+        stack. Without an explicit role SAM adds a resource policy to a
+        function this template does not own, and cannot.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeSiweAuthorizer
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Ref SiweAuthorizerFunctionArn
+
+  HealthDocsBucket:
+    Type: AWS::S3::Bucket
+    Condition: CreateHealthBucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "contextweave-health-${AWS::AccountId}-${Environment}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref KMSKey
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        # A corrected record replaces the old one in the store; the bucket
+        # keeps the previous file so a bad overwrite is recoverable.
+        Status: Enabled
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
+
+  # Its own credential for its own database. The expertise role has no CONNECT
+  # on it, which is what makes the isolation a database grant rather than a
+  # naming convention.
+  HealthPostgresSecret:
+    Type: AWS::SecretsManager::Secret
+    Condition: HealthEnabled
+    Properties:
+      Name: !Sub "contextweave/${Environment}/health-postgres"
+      Description: >
+        Credentials for the health database. A separate database and role on
+        the shared instance -- a separate instance would be stronger and costs
+        another instance, so this is a decision rather than an oversight.
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"healthrag","dbname":"healthrag"}'
+        GenerateSecretKey: "password"
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+  HealthIngestFunction:
+    Type: AWS::Serverless::Function
+    Condition: HealthEnabled
+    Properties:
+      FunctionName: !Sub "contextweave-health-ingest-${Environment}"
+      CodeUri: src/
+      Handler: health_api.ingest.lambda_handler
+      Timeout: 300
+      MemorySize: 1024
+      Environment:
+        Variables:
+          HEALTH_POSTGRES_SECRET_ARN: !Ref HealthPostgresSecret
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - VPCAccessPolicy: {}
+        - Statement:
+            - Effect: Allow
+              Action: [secretsmanager:GetSecretValue]
+              Resource: !Ref HealthPostgresSecret
+            - Effect: Allow
+              Action: [bedrock:InvokeModel]
+              Resource: "*"
+            - Effect: Allow
+              # Read-only on the health bucket: ingestion never needs to write
+              # there, and a write grant is a way for a bug to alter a record.
+              Action: [s3:GetObject]
+              Resource: !If
+                - CreateHealthBucket
+                - !Sub "${HealthDocsBucket.Arn}/*"
+                - !Sub "arn:aws:s3:::${HealthDocsBucketName}/*"
+            - Effect: Allow
+              Action: [kms:Decrypt]
+              Resource: !GetAtt KMSKey.Arn
+
+  # S3 events, created and removed alike. Deleting the file deletes the record:
+  # without the removed half, withdrawing a document from the bucket would
+  # leave it searchable.
+  HealthIngestRule:
+    Type: AWS::Events::Rule
+    Condition: CreateHealthBucket
+    Properties:
+      Description: Ingest or withdraw a health document when the bucket changes
+      EventPattern:
+        source: [aws.s3]
+        detail-type: ["Object Created", "Object Deleted"]
+        detail:
+          bucket:
+            name: [!Sub "contextweave-health-${AWS::AccountId}-${Environment}"]
+      State: ENABLED
+      Targets:
+        - Id: HealthIngestTarget
+          Arn: !GetAtt HealthIngestFunction.Arn
+
+  HealthIngestPermission:
+    Type: AWS::Lambda::Permission
+    Condition: CreateHealthBucket
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt HealthIngestFunction.Arn
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt HealthIngestRule.Arn
+
+  HealthAPIFunction:
+    Type: AWS::Serverless::Function
+    Condition: HealthEnabled
+    Properties:
+      FunctionName: !Sub "contextweave-health-api-${Environment}"
+      CodeUri: src/
+      Handler: health_api.handler.lambda_handler
+      Timeout: 60
+      MemorySize: 1024
+      Environment:
+        Variables:
+          HEALTH_POSTGRES_SECRET_ARN: !Ref HealthPostgresSecret
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - VPCAccessPolicy: {}
+        - Statement:
+            - Effect: Allow
+              Action: [secretsmanager:GetSecretValue]
+              Resource: !Ref HealthPostgresSecret
+            - Effect: Allow
+              Action: [bedrock:InvokeModel]
+              Resource: "*"
+      Events:
+        # Every one of these carries the authorizer. The expertise routes on
+        # this same API carry none, which is the asymmetry the whole store
+        # exists for.
+        HealthQuery:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ExpertiseAPI
+            Path: /health/query
+            Method: POST
+            Auth:
+              Authorizer: SiweAuthorizer
+        HealthDocuments:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ExpertiseAPI
+            Path: /health/documents
+            Method: GET
+            Auth:
+              Authorizer: SiweAuthorizer
+        HealthDocumentDelete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ExpertiseAPI
+            Path: /health/documents/{docId}
+            Method: DELETE
+            Auth:
+              Authorizer: SiweAuthorizer
+
   ExpertiseAPI:
     Type: AWS::Serverless::HttpApi
     Properties:
@@ -1209,6 +1423,28 @@ Resources:
       DefaultRouteSettings:
         ThrottlingBurstLimit: 10
         ThrottlingRateLimit: 5
+      # The first authorizer on this API. It is declared but **not** made the
+      # default: every expertise route is deliberately open (the A2A card has
+      # to be readable without a token, and TeamWeave calls /query-expertise
+      # with none), so making this the default would break discovery and the
+      # RAG layer at once. The health routes opt in, one by one, at their own
+      # Events blocks -- which is the opposite of TeamWeave's API, where a
+      # DefaultAuthorizer covered the A2A card by accident and the live URL
+      # answered 401 to the clients it exists to inform.
+      Auth:
+        Authorizers:
+          SiweAuthorizer:
+            FunctionArn: !Ref SiweAuthorizerFunctionArn
+            FunctionInvokeRole: !GetAtt HealthAuthorizerInvokeRole.Arn
+            AuthorizerPayloadFormatVersion: "2.0"
+            EnableSimpleResponses: true
+            Identity:
+              Headers:
+                - Authorization
+              # Cached per token for five minutes. Zero would call the
+              # authorizer on every request to the health store; an hour would
+              # keep a revoked session alive for an hour.
+              ReauthorizeEvery: 300
       CorsConfiguration:
         AllowHeaders:
           - Content-Type
@@ -1283,6 +1519,23 @@ Resources:
 # Outputs
 # ─────────────────────────────────────────────────────────────────────────────
 Outputs:
+  HealthApiBase:
+    Condition: HealthEnabled
+    Description: >
+      The authenticated health surface. POST /health/query,
+      GET /health/documents, DELETE /health/documents/{docId}. Every one
+      requires a bearer token; the expertise routes on the same API do not,
+      which is the asymmetry the separate store exists for.
+    Value: !Sub "https://${ExpertiseAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/health"
+
+  HealthDocsBucketName:
+    Condition: CreateHealthBucket
+    Description: >
+      Upload a record here and it is ingested; delete it here and the record is
+      withdrawn from the store. Separate bucket, separate database, no entry in
+      the shared knowledge graph.
+    Value: !Ref HealthDocsBucket
+
   ArtifactsBucketName:
     Description: S3 bucket for raw uploads and derived artifacts
     Value: !Ref ArtifactsBucket

@@ -103,6 +103,59 @@ The graph learns from every answered question. No retraining. No manual tuning.
 
 ---
 
+## The health store — a separate database, behind the only authorizer
+
+A medical record does not belong in the expertise corpus, and four properties
+of that corpus say why. Each is answered by a layer of this store rather than
+by a convention:
+
+| The expertise corpus | The health store |
+|---|---|
+| `POST /query-expertise` has **no authorizer** — nor does any route on that API | every `/health/*` route requires the SIWE bearer token |
+| retrieval searches one undifferentiated `chunks` table (its only filters are the query's own and `embedding IS NOT NULL`) | its own **database** and role; the expertise role has no `CONNECT` |
+| no per-document delete: re-ingestion replaces a file's own chunks, and the graph's only removal is `MATCH (n) DETACH DELETE n` | `DELETE /health/documents/{docId}`, and deleting the S3 object withdraws the record |
+| every answer cached in `query_cache` for 7 days | nothing is cached; `cacheHit` is always false |
+
+Without the first, anyone with the URL could read the record. Without the
+second, `linkedin_quick_post` asking about work under pressure could retrieve a
+chunk of a discharge summary and put it in a draft — cosine similarity does not
+know what it has found. Without the third, ingesting would be one-way. Without
+the fourth, an answer would outlive the delete of the record it came from.
+
+**Health documents never enter the knowledge graph.** Memgraph and Neptune are
+shared with the expertise path and have no per-document delete, so a graph write
+is the one thing `delete_document` could not take back. The cost is real: no
+entity expansion for health questions, only vector retrieval over the record.
+
+**The authorizer is declared but is not the default.** Every expertise route is
+open deliberately — the A2A card has to be readable without a token or
+discovery cannot work, and TeamWeave calls `/query-expertise` with none. A
+`DefaultAuthorizer` would break both, which is exactly what TeamWeave's own API
+did when its card answered `401` to the clients it exists to inform. The health
+routes opt in one at a time, and `HealthEnabled` means no authorizer configured
+→ no health resources at all, so the surface cannot ship open by accident.
+
+Three smaller decisions worth knowing:
+
+- **An empty retrieval is not an answer.** `found: false` and an empty string,
+  never a model answering from general knowledge — that would present its
+  recollection as the person's own chart.
+- **A failure never echoes the database error.** A psycopg2 message can carry a
+  row, and a row here is a medical record.
+- **`DELETE` answers 404 when nothing was removed.** "It is gone" and "it was
+  never here" have to be different answers, or you cannot confirm a record is
+  deleted.
+
+The embedder is injected rather than imported at module scope, so listing and
+deleting work when the Bedrock and observability stack does not — a withdrawal
+must not depend on the thing that ingested it still being healthy.
+
+`tests/test_health_store.py` holds all of it, and ten mutations — dropping the
+route's authorizer, adding a default one, falling back to the expertise
+database, pointing the SQL at `chunks`, answering an empty retrieval, losing the
+404, echoing the error, dropping removal events, granting `s3:PutObject`,
+reading unsupported file types — each fail it.
+
 ## A2A Agent Card — how siblings find this service
 
 `GET /.well-known/agent-card.json` publishes ContextWeave as an
