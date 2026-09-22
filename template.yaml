@@ -1253,9 +1253,17 @@ Resources:
   # per-document delete. See src/shared/health_db.py for each.
   # ───────────────────────────────────────────
 
+  # Deliberately *not* conditioned on HealthEnabled, unlike every other health
+  # resource. The API's authorizer block GetAtts this role, and SAM refuses an
+  # `Fn::If` anywhere in `Auth` -- on the block, on `Authorizers`, or on the
+  # authorizer itself ("Invalid value for 'Auth' property", and the transform
+  # fails while `sam validate --lint` passes, so CI would have gone green and
+  # `sam build` would have died). A GetAtt to a resource whose condition is
+  # false is a template error whether or not anything uses the value, so with
+  # the role conditioned the stack could not deploy *without* the health
+  # surface -- which is every deploy this repository actually does.
   HealthAuthorizerInvokeRole:
     Type: AWS::IAM::Role
-    Condition: HealthEnabled
     Properties:
       Description: >
         Lets API Gateway invoke the SIWE authorizer, which lives in another
@@ -1275,7 +1283,16 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: lambda:InvokeFunction
-                Resource: !Ref SiweAuthorizerFunctionArn
+                # An empty string is not a valid policy Resource, so the
+                # disabled state names a function that does exist. Nothing
+                # routes to this authorizer when health is off -- no health
+                # route exists to carry it -- and the grant adds no reach:
+                # API Gateway already invokes the query API on every
+                # unauthenticated expertise call.
+                Resource: !If
+                  - HealthEnabled
+                  - !Ref SiweAuthorizerFunctionArn
+                  - !GetAtt QueryAPIFunction.Arn
 
   HealthDocsBucket:
     Type: AWS::S3::Bucket
@@ -1288,7 +1305,7 @@ Resources:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: aws:kms
-              KMSMasterKeyID: !Ref KMSKey
+              KMSMasterKeyID: !Ref ArtifactsKMSKey
             BucketKeyEnabled: true
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
@@ -1370,7 +1387,7 @@ Resources:
                 - !Sub "arn:aws:s3:::${HealthDocsBucketName}/*"
             - Effect: Allow
               Action: [kms:Decrypt]
-              Resource: !GetAtt KMSKey.Arn
+              Resource: !GetAtt ArtifactsKMSKey.Arn
 
   # S3 events, created and removed alike. Deleting the file deletes the record:
   # without the removed half, withdrawing a document from the bucket would
@@ -1493,7 +1510,13 @@ Resources:
       Auth:
         Authorizers:
           SiweAuthorizer:
-            FunctionArn: !Ref SiweAuthorizerFunctionArn
+            # Same reason as the invoke role above: the block cannot be
+            # conditioned, so the value inside it is, and an authorizer built
+            # on an empty ARN fails the API's OpenAPI import.
+            FunctionArn: !If
+              - HealthEnabled
+              - !Ref SiweAuthorizerFunctionArn
+              - !GetAtt QueryAPIFunction.Arn
             FunctionInvokeRole: !GetAtt HealthAuthorizerInvokeRole.Arn
             AuthorizerPayloadFormatVersion: "2.0"
             EnableSimpleResponses: true

@@ -214,6 +214,42 @@ the connection the provisioner is handed is always inside a transaction — and
 psycopg2 refuses to change `autocommit` there. It rolls back first, and restores
 the caller's setting afterwards.
 
+**The surface was gated on a parameter nothing passed.** `HealthEnabled` reads
+`SiweAuthorizerFunctionArn`, and the deploy workflow never supplied it — so every
+health resource was condition-false on every deploy: no bucket, no database, no
+endpoint, and a green deploy either way. The same shape as the AgentCore gateway
+target conditioned on a parameter TeamWeave's deploy never passed. The workflow
+now resolves it from the `siwe-infra` stack's `AuthorizerFunctionArn` output, the
+same one TeamWeave reads. Unlike TeamWeave a missing authorizer is **not** fatal
+here — every expertise route is deliberately open and needs none — so an absent
+AuthChain means ContextWeave deploys *without* the health store rather than not
+at all, and says so with a warning naming what is missing. The CLI prints the
+string `None` for an absent output, and `None` is not empty: left alone it would
+pass the template's non-empty test and enable the health surface against an
+authorizer ARN that is the word None.
+
+**`Auth` cannot be conditioned, so the values inside it are.** SAM rejects
+`Fn::If` on the `Auth` block, on `Authorizers`, and on the authorizer itself
+(*"Invalid value for 'Auth' property"*) — and `sam validate --lint` **accepts**
+all three. The transform is what fails, so CI goes green and `sam build` dies.
+Since a `GetAtt` to a condition-false resource is a template error whether or
+not the value is used, `HealthAuthorizerInvokeRole` is deliberately the one
+health resource with no `Condition`, and the two places naming the authorizer
+function — the authorizer's `FunctionArn` and the role's policy `Resource` —
+carry the `Fn::If` instead, because an empty string is neither a valid policy
+Resource nor a valid authorizer URI. The intrinsic survives into the generated
+`authorizerUri`, which was checked by running the transform in both states
+rather than by reading it.
+
+`!Ref KMSKey` also shipped in the health resources; the key is
+`ArtifactsKMSKey`. Nothing here could tell — the YAML is valid and the tests
+passed. `tests/test_template_references.py` now resolves every `Ref`, `GetAtt`
+and `Fn::Sub` variable against the declared resources and parameters, offline,
+and holds the conditional rule as well: a reference to a conditional resource
+must sit under an `Fn::If` on that condition or in a resource carrying it (or
+one that implies it — `CreateHealthBucket` is an `And` over `HealthEnabled`).
+An implication it cannot prove is reported rather than waved through.
+
 `tests/test_health_provision.py` holds all of it against a fake that reproduces
 those two psycopg2 behaviours rather than a fake written from recollection, and
 twenty-six mutations — reversing the grant order, revoking from the role instead

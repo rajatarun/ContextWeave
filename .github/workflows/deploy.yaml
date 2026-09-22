@@ -456,6 +456,38 @@ jobs:
           echo "- Public subnet (Memgraph): \`$PUBLIC_SUBNET\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Observatory metrics table: \`$OBS_TABLE_NAME\`" >> "$GITHUB_STEP_SUMMARY"
 
+      # The health surface is gated on this ARN and nothing was passing it, so
+      # every health resource in the template was condition-false on every
+      # deploy: the bucket, the database, the endpoint -- infrastructure for
+      # nothing, deploying green. The authorizer lives in AuthChain's stack,
+      # which publishes it as an output; TeamWeave reads the same one.
+      #
+      # Unlike TeamWeave, a missing authorizer is **not** fatal here. Every
+      # expertise route is deliberately open and does not need it, so an
+      # absent AuthChain means ContextWeave deploys without the health store
+      # rather than not at all. That is what HealthEnabled is for. It is said
+      # out loud, because "deployed fine, no health endpoint" is otherwise
+      # indistinguishable from "deployed fine".
+      - name: Resolve the SIWE authorizer (gates the health surface)
+        id: siwe
+        run: |
+          SIWE_ARN=$(aws cloudformation describe-stacks \
+            --stack-name siwe-infra \
+            --region "${AWS_REGION}" \
+            --query "Stacks[0].Outputs[?OutputKey=='AuthorizerFunctionArn'].OutputValue" \
+            --output text 2>/dev/null || echo "")
+          # describe-stacks prints the string None for an output that is not
+          # there, and a literal None would pass the template's non-empty test
+          # and enable the health surface against an authorizer ARN that is the
+          # word None.
+          if [ "$SIWE_ARN" = "None" ]; then SIWE_ARN=""; fi
+          if [ -z "$SIWE_ARN" ]; then
+            echo "::warning::No AuthorizerFunctionArn in the siwe-infra stack. Deploying WITHOUT the health store: no /health/query, no health database, no health bucket."
+          else
+            echo "SIWE authorizer: $SIWE_ARN"
+          fi
+          echo "arn=$SIWE_ARN" >> "$GITHUB_OUTPUT"
+
       - name: SAM deploy – prod
         run: |
           sam deploy \
@@ -476,6 +508,7 @@ jobs:
               SharedPublicSubnetAz1Id=${{ steps.shared-infra.outputs.public_subnet_az1 }} \
               SharedObservatoryMetricsTableName=${{ steps.shared-infra.outputs.observatory_metrics_table_name }} \
               SharedObservatoryMetricsTableArn=${{ steps.shared-infra.outputs.observatory_metrics_table_arn }} \
+              SiweAuthorizerFunctionArn=${{ steps.siwe.outputs.arn }} \
             --tags \
               Project=ExpertiseRAG \
               Environment=prod \
