@@ -25,7 +25,9 @@ import logging
 import os
 from typing import Any
 
-from ..shared import health_db
+from .layout import shared_module
+
+health_db = shared_module("health_db")
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
@@ -90,7 +92,7 @@ def query(body: dict, *, bedrock=None, embed=None) -> dict:
     # embedding stack being importable, and a test must not have to import
     # Bedrock and the observability wrapper to check a disclaimer.
     if embed is None:
-        from ..shared.embedder import embed_text as embed
+        embed = shared_module("embedder").embed_text
 
     embedding = embed(question)
     if embedding is None:

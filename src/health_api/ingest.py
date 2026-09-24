@@ -16,7 +16,9 @@ import os
 from typing import Any
 from urllib.parse import unquote_plus
 
-from ..shared import health_db
+from .layout import shared_module
+
+health_db = shared_module("health_db")
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
@@ -65,7 +67,7 @@ def ingest_object(bucket: str, key: str, *, s3=None, embed=None) -> dict:
     # and the observability wrapper, and a *withdrawal* needs none of that.
     # Deleting a record must not depend on the embedding stack being healthy.
     if embed is None:
-        from ..shared.embedder import embed_texts as embed
+        embed = shared_module("embedder").embed_texts
 
     vectors = embed(pieces)
     rows = [(c, v) for c, v in zip(pieces, vectors) if v is not None]

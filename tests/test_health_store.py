@@ -338,3 +338,22 @@ def test_ingest_cannot_write_to_the_health_bucket():
                   (st["Action"] if isinstance(st["Action"], list) else [st["Action"]])
                   if a.startswith("s3:")]
     assert s3_actions == ["s3:GetObject"], s3_actions
+
+
+def test_the_handler_imports_when_health_api_is_top_level():
+    """The Lambda layout: CodeUri is src/, handler is health_api.ingest.
+
+    Importing the package as src.health_api — what the unit tests do — makes
+    `from ..shared` legal. The runtime does not import it that way, and that
+    is the ImportModuleError.
+    """
+    import subprocess
+    import sys
+
+    completed = subprocess.run(
+        [sys.executable, "-c", "import health_api.ingest, health_api.handler"],
+        cwd=REPO / "src",
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
