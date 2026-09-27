@@ -48,7 +48,8 @@ MIN_LIMIT = 1
 _ROUND_DP = 4
 
 _LIST_COLUMNS = (
-    "query_id, question_type, strategy, propensity, confidence, rating, created_at, rated_at"
+    "query_id, question_type, strategy, propensity, confidence, rating, created_at, rated_at, "
+    "grounding, judge, reward, reward_mode"
 )
 
 
@@ -166,7 +167,8 @@ def _iso(value: Any) -> str | None:
 
 
 def _decision_row(row: tuple) -> dict:
-    query_id, question_type, strategy, propensity, confidence, rating, created_at, rated_at = row
+    (query_id, question_type, strategy, propensity, confidence, rating, created_at, rated_at,
+     grounding, judge, reward, reward_mode) = row
     return {
         "queryId": query_id,
         "questionType": question_type,
@@ -176,6 +178,14 @@ def _decision_row(row: tuple) -> dict:
         "rating": _round(rating),
         "createdAt": _iso(created_at),
         "ratedAt": _iso(rated_at),
+        # The verified reward and what it was made of (verified_reward.py).
+        # ``reward`` is what the router learned from, NULL when it learned
+        # nothing; scripts/routing_policy_gate.py reads it in preference to
+        # ``confidence``.
+        "grounding": _round(grounding),
+        "judge": _round(judge),
+        "reward": _round(reward),
+        "rewardMode": reward_mode,
     }
 
 

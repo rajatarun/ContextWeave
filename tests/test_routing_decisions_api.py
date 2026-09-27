@@ -41,7 +41,11 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
     confidence      REAL,
     created_at      TEXT NOT NULL,
     rating          REAL,
-    rated_at        TEXT
+    rated_at        TEXT,
+    grounding       REAL,
+    judge           REAL,
+    reward          REAL,
+    reward_mode     TEXT
 )
 """
 
@@ -84,11 +88,12 @@ class FakeConn:
 
     def add(self, query_id, question_type, strategy, *, propensity=0.5,
             confidence=None, created_at="2026-09-01T00:00:00+00:00",
-            rating=None, rated_at=None):
+            rating=None, rated_at=None, grounding=None, judge=None, reward=None,
+            reward_mode=None):
         self.sqlite.execute(
-            "INSERT INTO routing_decisions VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO routing_decisions VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (query_id, question_type, strategy, propensity, confidence,
-             created_at, rating, rated_at),
+             created_at, rating, rated_at, grounding, judge, reward, reward_mode),
         )
         return self
 
@@ -149,7 +154,16 @@ def test_list_returns_newest_first_with_nulls_preserved(conn):
         "queryId": "q1", "questionType": "architecture", "strategy": "graph_first",
         "propensity": 0.31, "confidence": 0.82, "rating": 1.0,
         "createdAt": "2026-09-01T00:00:00+00:00", "ratedAt": "2026-09-01T00:05:00+00:00",
+        "grounding": None, "judge": None, "reward": None, "rewardMode": None,
     }
+
+
+def test_list_carries_the_verified_reward_the_gate_reads(conn):
+    conn.add("v1", "architecture", "graph_first", confidence=0.95, grounding=0.25, judge=0.1,
+             reward=0.15, reward_mode="verified")
+    item = RD.handle(conn, {})["items"][0]
+    assert item["reward"] == 0.15 and item["grounding"] == 0.25 and item["judge"] == 0.1
+    assert item["rewardMode"] == "verified" and item["confidence"] == 0.95
 
 
 def test_list_filters_by_question_type_and_strategy(conn):

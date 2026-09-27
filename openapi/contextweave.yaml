@@ -239,6 +239,16 @@ paths:
                             rating: { type: number, nullable: true }
                             createdAt: { type: string, format: date-time }
                             ratedAt: { type: string, format: date-time, nullable: true }
+                            grounding:
+                              type: number
+                              nullable: true
+                              description: Fraction of the answer's claims supported by the retrieved passages
+                            judge: { type: number, nullable: true, description: Independent judge score, sampled queries only }
+                            reward:
+                              type: number
+                              nullable: true
+                              description: What the router learned from; null when it learned nothing
+                            rewardMode: { type: string, nullable: true }
                       count:
                         type: integer
                         description: Total matching the filters, not the size of this page
