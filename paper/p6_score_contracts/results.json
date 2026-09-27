@@ -1,31 +1,31 @@
 {
  "census": {
-  "scores": 18,
+  "scores": 13,
   "by_repo": {
    "ContextWeave": 7,
    "DeviceWeave": 4,
-   "CipherWeave": 2,
-   "mcp-observatory": 5
+   "CipherWeave": 2
   },
   "by_kind": {
-   "score": 10,
+   "score": 8,
    "posterior_mean": 1,
    "probability": 1,
    "similarity": 1,
-   "risk_indicator": 5
+   "risk_indicator": 2
   },
   "by_source": {
    "self": 2,
-   "measurement": 8,
+   "measurement": 6,
    "model": 1,
    "human": 1,
-   "heuristic": 6
+   "heuristic": 3
   },
   "calibrated": [
    "contextweave.selection_propensity"
   ],
   "registry_problems": [],
-  "cross_pairs": 153,
+  "all_pairs": 78,
+  "cross_system_pairs": 50,
   "allowed_pairs": {
    "average": [],
    "multiply": [],
@@ -52,6 +52,7 @@
   }
  },
  "calibration": {
+  "generator": "60% correct; score ~ N(0.9, 0.05) if correct else N(0.8, 0.05), clipped to [0,1]; fit on first 2500, evaluated on last 2500; ECE with 10 equal-width bins",
   "before": {
    "n": 2500,
    "brier": 0.2582,

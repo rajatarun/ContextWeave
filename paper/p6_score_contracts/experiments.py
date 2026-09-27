@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT))
 from contracts import score_contract as SC  # noqa: E402
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--repos", nargs="*", default=[str(ROOT.parent / r) for r in ("DeviceWeave", "CipherWeave", "mcp-observatory")])
+ap.add_argument("--repos", nargs="*", default=[str(ROOT.parent / r) for r in ("DeviceWeave", "CipherWeave")])
 args = ap.parse_args()
 
 entries = []
@@ -41,12 +41,15 @@ out = {"census": {
     "registry_problems": SC.check_registry(entries, resolve_producers=False),
 }}
 envs = {e["name"]: SC.envelope(0.5, e, evidence=10) for e in entries}
+by_name = {e["name"]: e["_repo"] for e in entries}
+all_pairs = list(itertools.combinations(envs, 2))
 allowed = {op: [] for op in ("average", "multiply", "max")}
-for a, b in itertools.combinations(envs, 2):
+for a, b in all_pairs:
     for op in allowed:
         if SC.can_combine(envs[a], envs[b], op)[0]:
             allowed[op].append([a, b])
-out["census"]["cross_pairs"] = len(list(itertools.combinations(envs, 2)))
+out["census"]["all_pairs"] = len(all_pairs)
+out["census"]["cross_system_pairs"] = sum(1 for a, b in all_pairs if by_name[a] != by_name[b])
 out["census"]["allowed_pairs"] = {op: v for op, v in allowed.items()}
 
 # 2. Rank reversal under a monotone rescaling of the similarity.
@@ -72,7 +75,9 @@ train, test = pairs[:2500], pairs[2500:]
 fit = SC.isotonic_fit(train)
 before = SC.calibration_report(test)
 after = SC.calibration_report([(SC.apply_isotonic(fit, s), o) for s, o in test])
-out["calibration"] = {"before": {k: before[k] for k in ("n", "brier", "ece")},
+out["calibration"] = {"generator": "60% correct; score ~ N(0.9, 0.05) if correct else N(0.8, 0.05), clipped to [0,1]; "
+                                   "fit on first 2500, evaluated on last 2500; ECE with 10 equal-width bins",
+                      "before": {k: before[k] for k in ("n", "brier", "ece")},
                       "after_isotonic": {k: after[k] for k in ("n", "brier", "ece")},
                       "fit_breakpoints": len(fit)}
 print(json.dumps(out, indent=1))
