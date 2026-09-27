@@ -1,0 +1,92 @@
+{
+ "separated/n=500": {
+  "candidates": 48,
+  "should_promote": 12,
+  "promoted": 12,
+  "false_promotions": 0,
+  "missed": 0,
+  "unpaired_promoted": 8,
+  "unpaired_false": 0,
+  "verify": {
+   "CONFIRMED": 12,
+   "INCONCLUSIVE": 0,
+   "MISCALIBRATED": 0
+  },
+  "lift_ci_coverage": 0.896
+ },
+ "separated/n=1500": {
+  "candidates": 48,
+  "should_promote": 12,
+  "promoted": 12,
+  "false_promotions": 0,
+  "missed": 0,
+  "unpaired_promoted": 5,
+  "unpaired_false": 0,
+  "verify": {
+   "CONFIRMED": 6,
+   "INCONCLUSIVE": 5,
+   "MISCALIBRATED": 1
+  },
+  "lift_ci_coverage": 0.917
+ },
+ "separated/n=3000": {
+  "candidates": 48,
+  "should_promote": 12,
+  "promoted": 12,
+  "false_promotions": 0,
+  "missed": 0,
+  "unpaired_promoted": 2,
+  "unpaired_false": 0,
+  "verify": {
+   "CONFIRMED": 2,
+   "INCONCLUSIVE": 10,
+   "MISCALIBRATED": 0
+  },
+  "lift_ci_coverage": 0.938
+ },
+ "close/n=500": {
+  "candidates": 48,
+  "should_promote": 12,
+  "promoted": 12,
+  "false_promotions": 0,
+  "missed": 0,
+  "unpaired_promoted": 10,
+  "unpaired_false": 0,
+  "verify": {
+   "CONFIRMED": 12,
+   "INCONCLUSIVE": 0,
+   "MISCALIBRATED": 0
+  },
+  "lift_ci_coverage": 0.917
+ },
+ "close/n=1500": {
+  "candidates": 48,
+  "should_promote": 12,
+  "promoted": 12,
+  "false_promotions": 0,
+  "missed": 0,
+  "unpaired_promoted": 12,
+  "unpaired_false": 0,
+  "verify": {
+   "CONFIRMED": 12,
+   "INCONCLUSIVE": 0,
+   "MISCALIBRATED": 0
+  },
+  "lift_ci_coverage": 0.979
+ },
+ "close/n=3000": {
+  "candidates": 48,
+  "should_promote": 12,
+  "promoted": 12,
+  "false_promotions": 0,
+  "missed": 0,
+  "unpaired_promoted": 12,
+  "unpaired_false": 0,
+  "verify": {
+   "CONFIRMED": 9,
+   "INCONCLUSIVE": 3,
+   "MISCALIBRATED": 0
+  },
+  "lift_ci_coverage": 0.979
+ }
+}

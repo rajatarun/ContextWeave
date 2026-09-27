@@ -1,0 +1,223 @@
+\documentclass[conference]{IEEEtran}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{url}
+\usepackage{xcolor}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{proposition}{Proposition}
+\newtheorem{corollary}{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+\newtheorem{assumption}{Assumption}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\KL}{\mathrm{KL}}
+\newcommand{\pend}[1]{\textcolor{red!70!black}{[#1]}}
+
+\begin{document}
+
+\title{Learning to Route Without Trusting the Model:\\ Verified Rewards for Adaptive Retrieval Routers}
+
+\author{\IEEEauthorblockN{Tarun Raja}
+\IEEEauthorblockA{\pend{Affiliation} \\ \pend{email}}}
+
+\maketitle
+
+\begin{abstract}
+Adaptive retrieval-augmented generation (RAG) routers learn which retrieval strategy to use for each kind of question, and the usual reward is the generator's self-reported confidence. We show that this makes the router learn the wrong quantity. Under a conditional-independence assumption, the expected self-reward of a strategy is an affine function of its correctness, with a slope that shrinks as the model grows overconfident. The reward-optimal and correctness-optimal strategies then coincide, but the Lai--Robbins regret lower bound, measured in correctness, grows as the inverse square of that slope, and learning stops entirely when the model is maximally overconfident. When the assumption fails, the two optima can differ, and regret is linear. We also show that replacing unobserved confidences with fallback constants biases every strategy's estimate toward the constant, in proportion to its own failure rate. We then replace self-confidence with a \emph{verified reward} built from signals checkable against something other than the model: claim-level grounding in the passages the chosen strategy retrieved, a sampled independent judge, and delayed human ratings. Unobserved signals are treated as missing rather than zero. In a controlled simulation using the deployed Thompson-sampling router, the verified reward cuts correctness regret by a factor of 1.9 to 7.2 across three scenarios. It raises the share of queries sent to the best strategy from 28--35\% to 55--91\%. The system is deployed in ContextWeave. We also release an offline calibration harness for evaluating the reward signals on public QA benchmarks.
+\end{abstract}
+
+\begin{IEEEkeywords}
+retrieval-augmented generation, multi-armed bandits, Thompson sampling, reward design, calibration, LLM self-assessment
+\end{IEEEkeywords}
+
+\section{Introduction}
+Retrieval-augmented generation systems increasingly choose \emph{how} to retrieve per question: pure vector search, graph-first expansion, keyword-boosted reranking, or a hybrid. Our earlier work~\cite{prior-router} framed this as a contextual bandit over strategies. It learned a Beta posterior per (strategy, question type) pair, and each answer's reward was the generator's self-reported confidence. Thompson sampling~\cite{thompson1933,agrawal2012} fixed the exploration defect of an earlier greedy rule. But exploration fixes the \emph{search}, not the \emph{objective}. A strategy that retrieves the wrong passages, and gets a confidently wrong answer out of them, is reinforced exactly as much as one that retrieves the right ones.
+
+This paper asks whether a router can learn reliably without trusting the model's opinion of itself. Our contributions are:
+\begin{enumerate}
+\item A reward model that makes precise what a self-confidence-trained router learns (Section~\ref{sec:theory}). Under conditional independence the expected reward is affine in correctness with slope $s$ (Lemma~\ref{lem:affine}). The Lai--Robbins bound in correctness units scales as $1/s^2$ (Theorem~\ref{thm:regret}). Arm-dependent confounding or fallback substitution breaks the ordering itself (Propositions~\ref{prop:confound},~\ref{prop:missing}).
+\item A verified reward built from grounding, a sampled judge and human ratings, with explicit missingness (Section~\ref{sec:design}). Combining signals preserves the correctness ordering whenever each signal does (Proposition~\ref{prop:combine}).
+\item A simulation of the deployed router showing the regret reduction, and the reward's sensitivity to overconfidence and to grounding noise (Section~\ref{sec:eval}).
+\item An open offline harness that measures how far each signal sits from gold correctness on public QA data, with Brier score, ECE, AUROC and strategy-ranking agreement. The protocol is fixed; the model runs are pending (Section~\ref{sec:calib}).
+\end{enumerate}
+
+\section{Background and Related Work}
+\textbf{Bandits.} We use Thompson sampling with Beta posteriors~\cite{thompson1933,agrawal2012,russo2018}. For rewards in $[0,1]$, Agrawal and Goyal~\cite{agrawal2012} reduce to the Bernoulli case by drawing $B\sim\mathrm{Bernoulli}(R)$. The deployed router instead applies the \emph{fractional} update $\alpha\mathrel{+}=R$, $\beta\mathrel{+}=1-R$. Lai and Robbins~\cite{lai1985} give the asymptotic lower bound on regret that any consistent policy must pay.
+
+\textbf{LLM self-assessment.} Language models' verbalized confidence is informative but miscalibrated, and is typically overconfident~\cite{kadavath2022,xiong2024}. Our result formalizes what that miscalibration costs a learner that uses it as a reward.
+
+\textbf{Grounding and judges.} Faithfulness of an answer to its retrieved context is commonly measured with entailment models~\cite{honovich2022} or LLM judges~\cite{es2023ragas,zheng2023judge}. Judges exhibit position bias~\cite{zheng2023judge}, which we address in a companion paper.
+
+\section{Reward Model and What the Router Learns}\label{sec:theory}
+Fix a question type. Strategy (arm) $a\in\{1,\dots,K\}$ produces a correct answer ($Y=1$) with probability $\mu_a$; let $a^*=\arg\max_a\mu_a$ and $\Delta_a=\mu_{a^*}-\mu_a$. After each answer the router observes a reward $R\in[0,1]$ or nothing ($\bot$). \emph{Correctness regret} after $T$ queries is $\mathrm{Reg}_Y(T)=\sum_{t=1}^T\Delta_{a_t}$. It is measured in correctness, not in the reward the router sees, so a router that confidently learns the wrong thing shows up as regret.
+
+\begin{assumption}[Conditional independence]\label{ass:ci}
+The reward depends on the arm only through correctness: $\E[R\mid Y, a, R\neq\bot]=\E[R\mid Y, R\neq\bot]$.
+\end{assumption}
+
+\begin{lemma}[Affine reward]\label{lem:affine}
+Under Assumption~\ref{ass:ci}, let $c_y=\E[R\mid Y=y, R\neq\bot]$ and $s=c_1-c_0$. Then the reward mean of arm $a$ is $r_a=c_0+s\,\mu_a$.
+\end{lemma}
+\begin{proof}
+By the law of total expectation, $r_a=\mu_a c_1+(1-\mu_a)c_0=c_0+(c_1-c_0)\mu_a$, using Assumption~\ref{ass:ci} to drop the conditioning on $a$ in $c_y$.
+\end{proof}
+
+For self-confidence, let an answer that is wrong still receive a high confidence ($\approx c_1$) with probability $\rho$, the \emph{overconfidence}, and $c_0'$ otherwise. Then $c_0=\rho c_1+(1-\rho)c_0'$, so $s_{\text{self}}=(1-\rho)(c_1-c_0')$, which vanishes as $\rho\to1$.
+
+\begin{theorem}[Regret scales as $1/s^2$]\label{thm:regret}
+Consider Bernoulli-trick rewards: the router observes $B_t\sim\mathrm{Bernoulli}(R_t)$, so arm $a$ yields i.i.d.\ Bernoulli$(r_a)$ observations. Under Assumption~\ref{ass:ci} with $s>0$:
+\begin{enumerate}
+\item the reward-optimal arm is $a^*$;
+\item for any policy that is consistent on the Bernoulli family,
+\begin{equation}
+\liminf_{T\to\infty}\frac{\E[\mathrm{Reg}_Y(T)]}{\ln T}\;\ge\;\sum_{a\neq a^*}\frac{r_{a^*}(1-r_{a^*})}{s^2\,\Delta_a};\label{eq:lr}
+\end{equation}
+\item if $s=0$, every arm has the same reward law, and for any policy $\E[\mathrm{Reg}_Y(T)]=\Theta(T)$ unless it happens to commit to $a^*$ without information.
+\end{enumerate}
+\end{theorem}
+\begin{proof}
+(1) By Lemma~\ref{lem:affine}, $r_a$ is strictly increasing in $\mu_a$ when $s>0$.
+
+(2) Lai and Robbins~\cite{lai1985} show that for any policy consistent on the Bernoulli family, arm $a\ne a^*$ is pulled at least $(1+o(1))\ln T/\KL(r_a,r_{a^*})$ times in expectation, where $\KL$ is the Bernoulli divergence. Each such pull costs $\Delta_a$ in correctness regret. By the $\chi^2$ upper bound on KL, $\KL(p,q)\le (p-q)^2/(q(1-q))$. With $r_{a^*}-r_a=s\Delta_a$ this gives $\KL(r_a,r_{a^*})\le s^2\Delta_a^2/(r_{a^*}(1-r_{a^*}))$. Substituting into $\sum_a\Delta_a\,\E[N_a(T)]$ yields~\eqref{eq:lr}.
+
+(3) If $s=0$ then $r_a=c_0$ for all $a$, and the observations are identically distributed whatever arm is pulled. The policy's choice sequence is therefore independent of which arm is $a^*$. Averaged over a uniformly random relabelling of arms, each arm is pulled $T/K$ times in expectation, so $\E[\mathrm{Reg}_Y(T)]=\frac{T}{K}\sum_a\Delta_a$.
+\end{proof}
+
+\begin{remark}
+Thompson sampling attains the Lai--Robbins constant on Bernoulli rewards~\cite{agrawal2012,kaufmann2012}. Theorem~\ref{thm:regret} therefore says that its correctness regret under self-reward is inflated by $s_{\text{self}}^{-2}$ relative to a reward with slope $1$. The fractional update has the same expected increment as the Bernoulli trick ($\E[B]=R$). We use the Bernoulli form for the proof; the regret simulation in \texttt{scripts/routing\_regret\_sim.py} runs both and finds them indistinguishable.
+\end{remark}
+
+\begin{proposition}[Confounding flips the optimum]\label{prop:confound}
+If Assumption~\ref{ass:ci} fails, so that $r_a=c_0+s\mu_a+\beta_a$ for arm-specific offsets $\beta_a$, then whenever $\beta_b-\beta_{a^*}>s\,\Delta_b$ for some $b$, the reward-optimal arm is not $a^*$, and Thompson sampling incurs $\Omega(T)$ correctness regret.
+\end{proposition}
+\begin{proof}
+$r_b-r_{a^*}=-s\Delta_b+\beta_b-\beta_{a^*}>0$, so $a^*$ is not reward-optimal. Thompson sampling is consistent in reward~\cite{agrawal2012}: it pulls reward-suboptimal arms $O(\ln T)$ times. Hence $a^*$, being reward-suboptimal, is pulled $o(T)$ times, and each of the remaining $T-o(T)$ pulls costs at least $\min_{a\neq a^*}\Delta_a>0$.
+\end{proof}
+Such offsets arise when a strategy changes \emph{how the model sounds} rather than how right it is. For example, a strategy that retrieves more text, correct or not, can yield a more confident synthesis.
+
+\begin{proposition}[Fallback constants bias toward the constant]\label{prop:missing}
+Suppose that when a confidence is unobserved (omitted, unparseable, or a failed call) the pipeline substitutes a constant $\kappa$. Unobservation happens at arm-specific rate $m_a$, independently of $R$ given the arm. Then the learned reward mean is $r'_a=(1-m_a)r_a+m_a\kappa$, and the ordering of arms can reverse. Skipping unobserved rounds instead learns $r_a$ exactly.
+\end{proposition}
+\begin{proof}
+Total expectation over the observation indicator gives $r'_a$. Take two arms with $r_1>r_2$, $m_1>m_2$ and $\kappa<r_2$: then $r'_1-r'_2=(1-m_1)r_1-(1-m_2)r_2+(m_1-m_2)\kappa$, which is negative for $m_1$ large enough. Under skipping, the retained observations are a sample of $R$ given the arm, because missingness is independent of $R$ given the arm (missing at random). Their mean is therefore $r_a$.
+\end{proof}
+The deployed pipeline used fallbacks of $0.7$, $0.5$ and $0.0$ for these three cases, so a strategy whose retrieval failed more often was pulled toward $0.0$ regardless of its answers.
+
+\section{Verified Reward Design}\label{sec:design}
+Each signal is a value in $[0,1]$ or $\bot$ (unobserved).
+
+\textbf{Grounding.} The answer is split into sentence-level claims; fragments with fewer than three content tokens, and abstentions, are dropped. A claim is supported if its support against some retrieved passage reaches a threshold $\tau=0.6$, and the signal is the fraction of claims supported. The default verifier is lexical: it takes the fraction of the claim's content tokens present in the passage, and any number in the claim must appear verbatim, so ``400 teams'' against a passage saying 40 scores zero. The verifier is a parameter; an NLI cross-encoder can replace it. Grounding is $\bot$ when there are no passages, or when the answer contains no checkable claims.
+
+Grounding is the signal that is \emph{about the strategy}. Retrieval is the only thing the router chooses, and a strategy whose passages do not support the answer has failed at that job, whatever the generator thinks of the result.
+
+\textbf{Judge.} An independent model (Claude Sonnet 4.6, grading Nova Pro's answers) scores the answer against the same passages. It runs on a deterministic hash sample (5\%) of query ids, so replays select the same queries. A failed or unparseable judge call yields $\bot$.
+
+\textbf{Human.} Ratings arrive later through a feedback endpoint and are folded in with weight 2.
+
+\textbf{Combination.} Given the observed signals $\{(v_i,w_i)\}$, the reward is $R=\sum_i w_iv_i/\sum_iw_i$. If no signal was observed, the router is not updated.
+
+\begin{proposition}[Combination preserves order]\label{prop:combine}
+If each signal $i$ satisfies Assumption~\ref{ass:ci} with slope $s_i>0$, then $R$ satisfies it too, with slope $\bar s=\sum_i w_is_i/\sum_iw_i>0$.
+\end{proposition}
+\begin{proof}
+Condition on the set of observed signals. Given $Y$, $\E[R\mid Y]=\sum_iw_ic_{i,Y}/\sum_iw_i$, which is independent of the arm. It is affine in $Y$ with slope $\bar s$, and a positive combination of positive slopes is positive.
+\end{proof}
+The self-confidence can still be included (\texttt{verified+self}), but by Proposition~\ref{prop:combine} it only dilutes the slope when $s_{\text{self}}<\bar s$. Every signal is recorded whether or not it is used, so each one's agreement with human ratings can be measured from the same decision log.
+
+\section{Simulation}\label{sec:eval}
+\textbf{Setup.} Four strategies with true correctness rates $\mu$ per scenario, and Thompson sampling with the deployed fractional update and priors, over $T=2000$ queries and 40 seeds. Per query, correctness $Y\sim\mathrm{Bernoulli}(\mu_a)$ is drawn, then three rewards:
+\begin{itemize}
+\item \emph{self}: $\mathcal N(0.88,0.06)$ if $Y=1$, or with probability $\rho$ if $Y=0$; otherwise $\mathcal N(0.80,0.12)$;
+\item \emph{grounding}: $\mathcal N(0.8,\sigma_g)$ if $Y=1$, else $\mathcal N(0.3,\sigma_g)$;
+\item \emph{verified}: grounding, plus the judge on 5\% of queries with weight 2.
+\end{itemize}
+All values are clipped to $[0,1]$. Here $s_{\text{self}}\approx(1-\rho)\,0.08$ and $s_{\text{ground}}\approx0.5$. The rates are assumptions chosen to reflect overconfident self-report~\cite{xiong2024}. The simulation therefore shows the \emph{mechanism}; Section~\ref{sec:calib} is what will measure it on real data.
+
+\begin{table}[t]
+\centering
+\caption{Correctness regret (mean $\pm$ s.d.) and share of queries sent to the best strategy; $T=2000$, 40 seeds, $\rho=0.7$, $\sigma_g=0.2$.}
+\label{tab:main}
+\begin{tabular}{llrr}
+\toprule
+Scenario & Reward & Regret & Best-arm share\\
+\midrule
+flat\_self & self & $294.0\pm25.9$ & 0.323\\
+ & grounding & $65.7\pm17.8$ & 0.795\\
+ & verified & $62.9\pm20.1$ & 0.799\\
+\midrule
+close & self & $138.7\pm12.2$ & 0.277\\
+ & grounding & $66.4\pm21.3$ & 0.588\\
+ & verified & $71.4\pm19.0$ & 0.553\\
+\midrule
+good\_incumbent & self & $383.5\pm26.9$ & 0.350\\
+ & grounding & $52.6\pm13.7$ & 0.909\\
+ & verified & $53.2\pm10.9$ & 0.909\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Results.} Table~\ref{tab:main} shows that the verified reward cuts correctness regret by $1.9\times$ (close) to $7.2\times$ (good\_incumbent), and raises the best-arm share from 28--35\% to 55--91\%. The largest gap is in \emph{good\_incumbent}, where self-reward pays the most for exploring: with a small slope, the router cannot tell that the incumbent is already best. At a 5\% sample the judge adds little over grounding, as expected from its weight.
+
+\begin{table}[t]
+\centering
+\caption{Sensitivity: flat\_self regret vs.\ overconfidence $\rho$ (20 seeds), and close regret vs.\ grounding noise $\sigma_g$ (20 seeds).}
+\label{tab:sweep}
+\begin{tabular}{lrrr}
+\toprule
+$\rho$ & self & grounding & verified\\
+\midrule
+0.0 & 215.5 & 63.3 & 56.8\\
+0.3 & 238.8 & 63.3 & 56.8\\
+0.5 & 274.8 & 63.3 & 56.8\\
+0.7 & 286.6 & 63.3 & 56.8\\
+0.9 & 329.0 & 63.3 & 56.8\\
+\midrule
+$\sigma_g$ & self & grounding & verified\\
+\midrule
+0.1 & 138.2 & 60.4 & 61.7\\
+0.2 & 138.2 & 68.7 & 75.3\\
+0.3 & 138.2 & 78.1 & 73.1\\
+0.4 & 138.2 & 80.0 & 86.7\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:sweep} matches Theorem~\ref{thm:regret} qualitatively: self-reward regret rises monotonically with $\rho$, while the verified rewards do not depend on $\rho$ at all. Even at $\rho=0$, self-reward regret is $3.4\times$ higher. That is because its slope ($0.08$) is small, not because it is wrong, which is exactly the $1/s^2$ effect. Grounding degrades gracefully as its own noise grows and stays below self-reward at every level tested. The finite-horizon ratios are smaller than the asymptotic $(s_{\text{ground}}/s_{\text{self}})^2\approx39$, as expected, since~\eqref{eq:lr} is an asymptotic bound.
+
+\section{Offline Calibration Protocol}\label{sec:calib}
+The simulation fixes the reward distributions by assumption. Whether lexical grounding is good enough on real answers is an empirical question, and we have fixed its protocol. For each record \{question, strategy, retrieved passages, answer, self-confidence, gold answers\} drawn from SQuAD~2.0~\cite{rajpurkar2018}, Natural Questions or HotpotQA, correctness is token-F1 against gold~\cite{rajpurkar2016}, and an unanswerable question counts as correct iff the answer abstains. For each signal (self, lexical grounding, NLI grounding, judge) the harness reports: coverage (the fraction observed); Brier score; 10-bin ECE~\cite{guo2017}; AUROC against correctness (F1 $\ge 0.5$); Spearman $\rho$ with F1; and whether the signal ranks \emph{strategies} in the same order as mean correctness. Ranking strategies correctly is the one property a router needs, and a poorly calibrated signal can still have it.
+
+\pend{Results pending: these runs require generating answers with each retrieval strategy on a local model. The harness (\texttt{scripts/verified\_reward\_bench.py calibrate}) is complete and tested; Table~\ref{tab:main}'s mechanism predicts self-confidence will show high coverage, low AUROC and frequent failures of strategy-ranking agreement.}
+
+\section{Deployment Notes}
+The verified reward runs in the query path of ContextWeave. Grounding costs no model call. The judge costs roughly \$0.0006 per query on average at the 5\% sample. Each decision logs its selection propensity, self-confidence, grounding, judge score and reward, so a candidate policy can be evaluated offline before deployment (companion paper). Setting \texttt{ROUTER\_REWARD\_SOURCE=self} restores the previous behaviour for rollback.
+
+\section{Limitations}
+Lexical support cannot see negation or paraphrase: it will score ``X is not Y'' as supported by ``X is Y''. The NLI verifier and the judge exist for that reason. Assumption~\ref{ass:ci} may fail for grounding as well, for example if a strategy retrieves long passages that support many claims by chance; the calibration protocol's strategy-ranking check is designed to detect this. The simulation's reward distributions are assumptions.
+
+\section{Conclusion}
+A router trained on self-confidence learns the model's opinion of itself. In the best case that costs a factor of $s^{-2}$ in regret; in the worst it picks the wrong strategy forever. Rewards that can be checked against evidence, with missing treated as missing, restore both the objective and the learning rate in simulation. The real-data calibration protocol is ready to confirm or refute this on public benchmarks.
+
+\begin{thebibliography}{99}
+\bibitem{prior-router} T.~Raja, \pend{title of the adaptive RAG router paper}, \pend{venue, year}.
+\bibitem{thompson1933} W.~R. Thompson, ``On the likelihood that one unknown probability exceeds another in view of the evidence of two samples,'' \emph{Biometrika}, vol.~25, pp.~285--294, 1933.
+\bibitem{agrawal2012} S.~Agrawal and N.~Goyal, ``Analysis of Thompson sampling for the multi-armed bandit problem,'' in \emph{Proc. COLT}, 2012.
+\bibitem{kaufmann2012} E.~Kaufmann, N.~Korda, and R.~Munos, ``Thompson sampling: An asymptotically optimal finite-time analysis,'' in \emph{Proc. ALT}, 2012.
+\bibitem{russo2018} D.~Russo, B.~Van~Roy, A.~Kazerouni, I.~Osband, and Z.~Wen, ``A tutorial on Thompson sampling,'' \emph{Found. Trends Mach. Learn.}, vol.~11, no.~1, 2018.
+\bibitem{lai1985} T.~L. Lai and H.~Robbins, ``Asymptotically efficient adaptive allocation rules,'' \emph{Adv. Appl. Math.}, vol.~6, pp.~4--22, 1985.
+\bibitem{kadavath2022} S.~Kadavath \emph{et al.}, ``Language models (mostly) know what they know,'' arXiv:2207.05221, 2022.
+\bibitem{xiong2024} M.~Xiong \emph{et al.}, ``Can LLMs express their uncertainty? An empirical evaluation of confidence elicitation in LLMs,'' in \emph{Proc. ICLR}, 2024.
+\bibitem{honovich2022} O.~Honovich \emph{et al.}, ``TRUE: Re-evaluating factual consistency evaluation,'' in \emph{Proc. NAACL}, 2022.
+\bibitem{es2023ragas} S.~Es, J.~James, L.~Espinosa-Anke, and S.~Schockaert, ``RAGAS: Automated evaluation of retrieval augmented generation,'' arXiv:2309.15217, 2023.
+\bibitem{zheng2023judge} L.~Zheng \emph{et al.}, ``Judging LLM-as-a-judge with MT-Bench and Chatbot Arena,'' in \emph{Proc. NeurIPS Datasets and Benchmarks}, 2023.
+\bibitem{rajpurkar2016} P.~Rajpurkar, J.~Zhang, K.~Lopyrev, and P.~Liang, ``SQuAD: 100,000+ questions for machine comprehension of text,'' in \emph{Proc. EMNLP}, 2016.
+\bibitem{rajpurkar2018} P.~Rajpurkar, R.~Jia, and P.~Liang, ``Know what you don't know: Unanswerable questions for SQuAD,'' in \emph{Proc. ACL}, 2018.
+\bibitem{guo2017} C.~Guo, G.~Pleiss, Y.~Sun, and K.~Q. Weinberger, ``On calibration of modern neural networks,'' in \emph{Proc. ICML}, 2017.
+\end{thebibliography}
+\end{document}

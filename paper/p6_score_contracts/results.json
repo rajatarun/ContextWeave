@@ -1,0 +1,67 @@
+{
+ "census": {
+  "scores": 18,
+  "by_repo": {
+   "ContextWeave": 7,
+   "DeviceWeave": 4,
+   "CipherWeave": 2,
+   "mcp-observatory": 5
+  },
+  "by_kind": {
+   "score": 10,
+   "posterior_mean": 1,
+   "probability": 1,
+   "similarity": 1,
+   "risk_indicator": 5
+  },
+  "by_source": {
+   "self": 2,
+   "measurement": 8,
+   "model": 1,
+   "human": 1,
+   "heuristic": 6
+  },
+  "calibrated": [
+   "contextweave.selection_propensity"
+  ],
+  "registry_problems": [],
+  "cross_pairs": 153,
+  "allowed_pairs": {
+   "average": [],
+   "multiply": [],
+   "max": []
+  }
+ },
+ "rank_reversal": {
+  "A": {
+   "cos": 0.9,
+   "beh": 0.1
+  },
+  "B": {
+   "cos": 0.6,
+   "beh": 0.5
+  },
+  "alpha": 0.5,
+  "raw": {
+   "A": 0.5,
+   "B": 0.55
+  },
+  "cubed_cosine": {
+   "A": 0.4145,
+   "B": 0.358
+  }
+ },
+ "calibration": {
+  "before": {
+   "n": 2500,
+   "brier": 0.2582,
+   "ece": 0.2768
+  },
+  "after_isotonic": {
+   "n": 2500,
+   "brier": 0.1077,
+   "ece": 0.0183
+  },
+  "fit_breakpoints": 263
+ }
+}

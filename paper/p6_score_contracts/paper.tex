@@ -1,0 +1,118 @@
+\documentclass[conference]{IEEEtran}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{url}
+\usepackage{xcolor}
+
+\newtheorem{proposition}{Proposition}
+\newtheorem{definition}{Definition}
+\newcommand{\pend}[1]{\textcolor{red!70!black}{[#1]}}
+
+\begin{document}
+
+\title{Not All Scores Are Probabilities: Typed, Calibrated Confidence Contracts for Composed Agent Systems}
+
+\author{\IEEEauthorblockN{Tarun Raja}
+\IEEEauthorblockA{\pend{Affiliation} \\ \pend{email}}}
+
+\maketitle
+
+\begin{abstract}
+Composed agent systems pass around many numbers in $[0,1]$: a model's self-reported confidence, an embedding similarity, a weighted risk indicator, a posterior mean, a selection propensity. They look interchangeable, and they are routinely thresholded, averaged and multiplied as if they were probabilities. We propose a typed contract. Every emitted score declares its kind (\emph{probability}, \emph{posterior mean}, \emph{score}, \emph{similarity} or \emph{risk indicator}), its source, its range, whether and against what it is calibrated, and the code that produces it. Five rules then govern combination. We prove the rules' premises: averaging or taking the maximum across producers is not invariant under monotone reparametrization, so the combined ranking can flip while every input's ranking is unchanged; products of calibrated, conditionally independent probabilities are calibrated for the conjunction; isotonic regression makes a score calibrated in-sample; and substituting defaults for absent values biases every mean toward the default. Across four systems we find 18 declared scores. Exactly one is a calibrated probability, and none of the 153 cross-producer pairs may be combined numerically. The contract is enforced by a conformance test in every repository, and an isotonic fit reduces an overconfident score's held-out ECE from 0.277 to 0.018.
+\end{abstract}
+
+\section{Introduction}
+In the weave systems, ContextWeave rewards a retrieval router with a model's self-confidence. DeviceWeave executes a command when $\alpha\cdot\text{cosine}+(1-\alpha)\cdot\text{behaviour}\ge0.4$. mcp-observatory gates a tool call on a weighted mean of lexical risk indicators. CipherWeave overrides to post-quantum encryption when a max of standardized deviations exceeds 3. Each number lives in $[0,1]$, or looks like it does, and each means something different. When systems compose, these numbers meet. Nothing in their type says whether $0.7\times0.8$ or $\frac12(0.7+0.8)$ means anything.
+
+\section{The Contract}
+\begin{definition}[Score envelope]
+A score is emitted as $\langle$value, observed, name, kind, source, calibrated, event?, evidence?, neutral?$\rangle$. \emph{kind} is one of:
+\begin{itemize}
+\item \emph{probability}: $P(\text{event})$, and must be calibrated against that event;
+\item \emph{posterior\_mean}: of a stated quantity, carrying its evidence count;
+\item \emph{score}: ordering-only;
+\item \emph{similarity}: its scale belongs to the model that produced it, and it declares its neutral point;
+\item \emph{risk\_indicator}: a standardized or weighted indicator, possibly unbounded, carrying its evidence count.
+\end{itemize}
+An unobserved score has value null and observed false.
+\end{definition}
+
+\textbf{Rules.}
+\begin{itemize}
+\item[R1] Only probabilities compose by probability rules.
+\item[R2] A probability must be calibrated, and name against what.
+\item[R3] Never average, add or max scores of different kinds or producers; combine \emph{decisions} instead.
+\item[R4] Carry the evidence count when reliability depends on it.
+\item[R5] Absence is not zero.
+\end{itemize}
+
+Each repository declares its scores in a registry that names the producing function. A conformance test checks the registry against the contract, imports every producer (so a declaration cannot outlive its code), and pins the contract file's hash, so vendored copies cannot drift. The checker \texttt{can\_combine(a,b,op)} names the rule that forbids an operation.
+
+\section{Why the Rules Hold}
+\begin{proposition}[Cross-producer averages are not ordinal]\label{prop:avg}
+Let $u,v$ be scores from different producers, each meaningful only up to a strictly increasing transformation. For any $\alpha\in(0,1)$ there exist candidates $A,B$ and a strictly increasing $f$ with $\alpha u_A+(1-\alpha)v_A<\alpha u_B+(1-\alpha)v_B$ but $\alpha f(u_A)+(1-\alpha)v_A>\alpha f(u_B)+(1-\alpha)v_B$.
+\end{proposition}
+\begin{proof}
+Take $u_A>u_B$ and $v_A<v_B$ with $\alpha(u_A-u_B)<(1-\alpha)(v_B-v_A)$, so that $B$ ranks higher. Choose $f$ strictly increasing with $f(u_A)-f(u_B)>\frac{1-\alpha}{\alpha}(v_B-v_A)$, for example a steep enough power. Then $A$ ranks higher. Neither input's own ordering has changed.
+\end{proof}
+Concretely, with $\alpha=\tfrac12$, $A=(0.90,0.10)$ and $B=(0.60,0.50)$: the raw averages rank $B$ first (0.550 vs.\ 0.500). Cubing the similarity, a monotone change that could come from simply switching embedding models, ranks $A$ first (0.414 vs.\ 0.358). This is DeviceWeave's \texttt{final\_score} pattern. The same construction applies to $\max$, by choosing $f$ to lift $u_A$ above $v_B$.
+
+\begin{proposition}[Calibrated products are calibrated]\label{prop:prod}
+If $q_1,q_2$ are calibrated probabilities for events $E_1,E_2$, i.e.\ $P(E_i\mid q_i)=q_i$, and $E_1,E_2$ are conditionally independent given $(q_1,q_2)$, with $P(E_i\mid q_1,q_2)=P(E_i\mid q_i)$, then $P(E_1\wedge E_2\mid q_1,q_2)=q_1q_2$.
+\end{proposition}
+\begin{proof}
+By conditional independence, $P(E_1\wedge E_2\mid q_1,q_2)=P(E_1\mid q_1,q_2)\,P(E_2\mid q_1,q_2)=q_1q_2$.
+\end{proof}
+Both hypotheses are needed, which is why R1 requires the kind to be \emph{probability} and R2 requires calibration. Independence remains the caller's claim.
+
+\begin{proposition}[Isotonic calibration]\label{prop:iso}
+Let $\hat g$ be the pool-adjacent-violators (PAV) fit to pairs $(s_j,o_j)$ sorted by $s$. Then $\hat g$ is the least-squares non-decreasing fit~\cite{barlow1972}. On each constant block $\mathcal B$ of $\hat g$, the fitted value equals the block's mean outcome, so the calibration error of $\hat g$ over its own blocks is zero in-sample.
+\end{proposition}
+\begin{proof}
+PAV merges adjacent blocks while their means violate monotonicity, and replaces each merged block by its mean. It is standard that this produces the $L^2$ projection onto the cone of monotone sequences~\cite{barlow1972}. Each block's fitted value is by construction the mean of its outcomes, which is the in-sample calibration statement.
+\end{proof}
+Held out, on 2{,}500 samples of a synthetic overconfident score (0.9 when right, 0.8 when wrong, 60\% right; fitted on a separate 2{,}500), ECE falls from 0.277 to 0.018 and Brier from 0.258 to 0.108.
+
+\begin{proposition}[Defaults bias means]\label{prop:default}
+If a score with mean $\mu$ is missing with probability $m$ (independently of its value), and a default $\kappa$ is substituted, the observed mean is $(1-m)\mu+m\kappa$. Two sources with equal $\mu$ but different $m$ then appear different. Dropping missing values recovers $\mu$.
+\end{proposition}
+\begin{proof}
+This follows from total expectation over the missingness indicator, and from the independence of missingness and value.
+\end{proof}
+
+\section{Census}
+We declared every score emitted by four systems (Table~\ref{tab:census}).
+
+\begin{table}[t]
+\centering
+\caption{Declared scores by kind and system.}
+\label{tab:census}
+\begin{tabular}{lrrrrr}
+\toprule
+System & prob. & post. & score & sim. & risk\\
+\midrule
+ContextWeave & 1 & 1 & 5 & 0 & 0\\
+DeviceWeave & 0 & 0 & 3 & 1 & 0\\
+CipherWeave & 0 & 0 & 0 & 0 & 2\\
+mcp-observatory & 0 & 0 & 2 & 0 & 3\\
+\midrule
+Total (18) & 1 & 1 & 10 & 1 & 5\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Sources: 8 measurement, 6 heuristic, 2 self-reported, 1 model judge and 1 human. The only calibrated probability is the router's selection propensity. It is exact by construction, as a Monte Carlo estimate of the chance that Thompson sampling picks the arm. Of the 153 pairs of distinct scores, \texttt{can\_combine} allows \emph{none} to be averaged, multiplied or maxed. Wherever these systems compose, they must combine decisions (``both gates pass''), not numbers.
+
+\section{Related Work}
+Calibration of classifiers and neural networks is surveyed by Guo et al.~\cite{guo2017}. Isotonic and histogram calibration follow Zadrozny and Elkan~\cite{zadrozny2002}. Measurement theory's distinction between ordinal and interval scales~\cite{stevens1946} is the formal root of R3.
+
+\section{Conclusion}
+A number in $[0,1]$ is not a probability until someone has checked it against outcomes. Typing each score, and refusing combinations its type does not license, turns a silent category error into a failing test.
+
+\begin{thebibliography}{9}
+\bibitem{barlow1972} R.~E. Barlow, D.~J. Bartholomew, J.~M. Bremner, and H.~D. Brunk, \emph{Statistical Inference Under Order Restrictions}. Wiley, 1972.
+\bibitem{guo2017} C.~Guo, G.~Pleiss, Y.~Sun, and K.~Q. Weinberger, ``On calibration of modern neural networks,'' in \emph{Proc. ICML}, 2017.
+\bibitem{zadrozny2002} B.~Zadrozny and C.~Elkan, ``Transforming classifier scores into accurate multiclass probability estimates,'' in \emph{Proc. KDD}, 2002.
+\bibitem{stevens1946} S.~S. Stevens, ``On the theory of scales of measurement,'' \emph{Science}, vol.~103, no.~2684, pp.~677--680, 1946.
+\end{thebibliography}
+\end{document}
