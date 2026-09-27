@@ -1,0 +1,72 @@
+{
+  "$comment": "Every score ContextWeave emits, declared against contracts/score_envelope.json. tests/test_score_contract.py holds this file to the contract and resolves every producer.",
+  "scores": [
+    {
+      "name": "contextweave.synthesis_confidence",
+      "kind": "score",
+      "range": [0, 1],
+      "source": "self",
+      "calibrated": false,
+      "meaning": "The synthesiser model's own confidence in its answer, parsed from its JSON output. Self-report; not checked against correctness. Fallback constants are not scores: confidenceReported=false means unobserved.",
+      "producer": "verified_reward:self_signal"
+    },
+    {
+      "name": "contextweave.grounding",
+      "kind": "score",
+      "range": [0, 1],
+      "source": "measurement",
+      "calibrated": false,
+      "meaning": "Fraction of the answer's claims supported by at least one passage the chosen strategy retrieved (lexical verifier). Null when there are no passages or no checkable claims.",
+      "producer": "verified_reward:grounding_signal"
+    },
+    {
+      "name": "contextweave.judge",
+      "kind": "score",
+      "range": [0, 1],
+      "source": "model",
+      "calibrated": false,
+      "meaning": "An independent judge model's grade of the answer against the retrieved passages, on a hash sample of queries.",
+      "producer": "verified_reward:judge_signal"
+    },
+    {
+      "name": "contextweave.routing_reward",
+      "kind": "score",
+      "range": [0, 1],
+      "source": "measurement",
+      "calibrated": false,
+      "meaning": "Weighted mean of the observed reward signals under ROUTER_REWARD_SOURCE; what the router learns from. A mean of same-scale [0,1] quality grades by design (see verified_reward.py); null when nothing was observed.",
+      "producer": "verified_reward:combine"
+    },
+    {
+      "name": "contextweave.human_rating",
+      "kind": "score",
+      "range": [0, 1],
+      "source": "human",
+      "calibrated": false,
+      "meaning": "A caller's rating of an answer via POST /feedback (up=1, neutral=0.5, down=0).",
+      "producer": "feedback:rating_to_reward"
+    },
+    {
+      "name": "contextweave.routing_posterior_mean",
+      "kind": "posterior_mean",
+      "range": [0, 1],
+      "source": "measurement",
+      "calibrated": false,
+      "event": "expected routing reward of this strategy for this question type",
+      "evidence": "alpha + beta - prior strength (feedback_count on the edge)",
+      "meaning": "Mean of the Beta posterior on an EFFECTIVE_FOR edge. As meaningful as the reward that feeds it.",
+      "producer": "rag_router:_posterior_mean"
+    },
+    {
+      "name": "contextweave.selection_propensity",
+      "kind": "probability",
+      "range": [0, 1],
+      "source": "measurement",
+      "calibrated": true,
+      "calibration_ref": "exact by construction: Monte Carlo estimate (ROUTER_PROPENSITY_SAMPLES draws) of P(Thompson sampling selects this arm | posteriors at decision time)",
+      "event": "Thompson sampling selects this strategy at decision time",
+      "meaning": "The one genuine probability in the inventory; used as an importance-weight denominator for off-policy evaluation.",
+      "producer": "rag_router:select_strategy"
+    }
+  ]
+}

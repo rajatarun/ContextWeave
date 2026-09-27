@@ -91,6 +91,12 @@ def reward_mode() -> str:
     return mode
 
 
+# Registry names and envelope sources (contracts/scores.json) for each signal.
+_REGISTRY_NAME = {"self": "synthesis_confidence", "grounding": "grounding", "judge": "judge",
+                  "human": "human_rating"}
+_ENVELOPE_SOURCE = {"self": "self", "grounding": "measurement", "judge": "model", "human": "human"}
+
+
 @dataclass(frozen=True)
 class RewardSignal:
     """One observation of answer quality. ``value is None`` means not observed."""
@@ -105,8 +111,15 @@ class RewardSignal:
         return self.value is not None and self.weight > 0
 
     def to_dict(self) -> dict[str, Any]:
+        # Shaped as a score envelope (contracts/score_envelope.json): every one
+        # of these is an ordering-only, uncalibrated score, and ``observed`` is
+        # what distinguishes "not measured" from a measured 0 (R5).
         return {
-            "source": self.source,
+            "name": f"contextweave.{_REGISTRY_NAME.get(self.source, self.source)}",
+            "kind": "score",
+            "source": _ENVELOPE_SOURCE.get(self.source, "measurement"),
+            "calibrated": False,
+            "observed": self.value is not None,
             "value": None if self.value is None else round(self.value, 4),
             "weight": self.weight,
             **({"detail": self.detail} if self.detail else {}),
