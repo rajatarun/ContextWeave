@@ -24,7 +24,7 @@
 \title{Learning to Route Without Trusting the Model:\\ Verified Rewards for Adaptive Retrieval Routers}
 
 \author{\IEEEauthorblockN{Tarun Raja}
-\IEEEauthorblockA{\pend{Affiliation} \\ \pend{email}}}
+\IEEEauthorblockA{Independent Researcher \\ rajatarun12@gmail.com}}
 
 \maketitle
 
@@ -37,7 +37,7 @@ retrieval-augmented generation, multi-armed bandits, Thompson sampling, reward d
 \end{IEEEkeywords}
 
 \section{Introduction}
-Retrieval-augmented generation systems increasingly choose \emph{how} to retrieve per question: pure vector search, graph-first expansion, keyword-boosted reranking, or a hybrid. Our earlier work~\cite{prior-router} framed this as a contextual bandit over strategies. It learned a Beta posterior per (strategy, question type) pair, and each answer's reward was the generator's self-reported confidence. Thompson sampling~\cite{thompson1933,agrawal2012} fixed the exploration defect of an earlier greedy rule. But exploration fixes the \emph{search}, not the \emph{objective}. A strategy that retrieves the wrong passages, and gets a confidently wrong answer out of them, is reinforced exactly as much as one that retrieves the right ones.
+Retrieval-augmented generation systems increasingly choose \emph{how} to retrieve per question: pure vector search, graph-first expansion, keyword-boosted reranking, or a hybrid. Our ContextWeave system~\cite{prior-router} framed this as a contextual bandit over strategies. It learned a Beta posterior per (strategy, question type) pair, and each answer's reward was the generator's self-reported confidence. Thompson sampling~\cite{thompson1933,agrawal2012} fixed the exploration defect of an earlier greedy rule. But exploration fixes the \emph{search}, not the \emph{objective}. A strategy that retrieves the wrong passages, and gets a confidently wrong answer out of them, is reinforced exactly as much as one that retrieves the right ones.
 
 This paper asks whether a router can learn reliably without trusting the model's opinion of itself. Our contributions are:
 \begin{enumerate}
@@ -206,9 +206,9 @@ Lexical support cannot see negation or paraphrase: it will score ``X is not Y'' 
 A router trained on self-confidence learns the model's opinion of itself. In the best case that costs a factor of $s^{-2}$ in regret; in the worst it picks the wrong strategy forever. Rewards that can be checked against evidence, with missing treated as missing, restore both the objective and the learning rate in simulation. The real-data calibration protocol is ready to confirm or refute this on public benchmarks.
 
 \begin{thebibliography}{99}
-\bibitem{prior-router} T.~Raja, \pend{title of the adaptive RAG router paper}, \pend{venue, year}.
-\bibitem{comp-gate} T.~Raja, ``Estimate before you deploy: Offline evaluation as a safety gate for changing retrieval routing policies,'' companion paper, \pend{venue, year}.
-\bibitem{comp-audit} T.~Raja, ``Before training on heuristic preferences: A position-robust judge audit for self-improving agent loops,'' companion paper, \pend{venue, year}.
+\bibitem{prior-router} T.~Raja, ``ContextWeave: Adaptive graph and retrieval-augmented generation with a learned strategy router,'' GitHub repository, 2026. [Online]. Available: \url{https://github.com/rajatarun/ContextWeave}
+\bibitem{comp-gate} T.~Raja, ``Estimate before you deploy: Offline evaluation as a safety gate for changing retrieval routing policies,'' Zenodo preprint, 2026.
+\bibitem{comp-audit} T.~Raja, ``Before training on heuristic preferences: A position-robust judge audit for self-improving agent loops,'' Zenodo preprint, 2026.
 \bibitem{thompson1933} W.~R. Thompson, ``On the likelihood that one unknown probability exceeds another in view of the evidence of two samples,'' \emph{Biometrika}, vol.~25, pp.~285--294, 1933.
 \bibitem{agrawal2012} S.~Agrawal and N.~Goyal, ``Analysis of Thompson sampling for the multi-armed bandit problem,'' in \emph{Proc. COLT}, 2012, pp.~39.1--39.26.
 \bibitem{kaufmann2012} E.~Kaufmann, N.~Korda, and R.~Munos, ``Thompson sampling: An asymptotically optimal finite-time analysis,'' in \emph{Proc. ALT}, 2012, pp.~199--213.
