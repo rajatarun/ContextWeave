@@ -237,6 +237,13 @@ def init_pgvector_schema() -> None:
                 rated_at        TIMESTAMPTZ
             )
         """)
+        # Verified-reward columns (query_api/verified_reward.py); same
+        # statements as feedback.MIGRATION_SQL.
+        for column, sql_type in (("grounding", "DOUBLE PRECISION"), ("judge", "DOUBLE PRECISION"),
+                                 ("reward", "DOUBLE PRECISION"), ("reward_mode", "TEXT")):
+            cur.execute(
+                f"ALTER TABLE routing_decisions ADD COLUMN IF NOT EXISTS {column} {sql_type}"
+            )
         cur.execute("""
             CREATE INDEX IF NOT EXISTS routing_decisions_created_idx
                 ON routing_decisions (created_at)

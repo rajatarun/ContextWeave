@@ -56,6 +56,7 @@ from models import QueryRequest, RAGStrategyLabel
 import cache as _cache
 import feedback as _feedback
 import routing_decisions_api as _routing_decisions
+import verified_reward as _verified_reward
 from shared.demo_logging import demo_for, demo_if, demo_step, demo_strategy_choice, resolve_log_level
 
 logger = logging.getLogger()
@@ -309,28 +310,46 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
         )
 
     # Step 8 – Routing feedback (learning loop)
-    demo_step(logger, "Updating routing feedback weights after answer confidence assessment")
+    # The reward is built from checkable signals (verified_reward.py): is the
+    # answer supported by the passages this strategy retrieved, and -- on a
+    # sample -- what an independent judge model makes of it. The synthesiser's
+    # self-confidence is recorded but is a reward only if ROUTER_REWARD_SOURCE
+    # says so. When no signal was observed the router is left alone: a value
+    # the code filled in is not evidence about the strategy.
+    demo_step(logger, "Assessing verified reward for routing feedback")
+    try:
+        assessment = _verified_reward.assess(
+            query_id=query_id,
+            question=req.question,
+            answer=query_response.answer,
+            passages=[c.content for c in chunks],
+            self_confidence=query_response.confidence,
+            self_reported=query_response.confidence_reported,
+        )
+    except Exception as exc:
+        logger.warning("Reward assessment failed (router not updated): %s", exc)
+        assessment = None
+    query_response.routing_decision["reward"] = assessment.to_dict() if assessment else None
+
     has_neptune_graph = bool(NEPTUNE_GRAPH_ID)
     demo_if(logger, "NEPTUNE_GRAPH_ID configured for routing feedback update", has_neptune_graph)
-    # A confidence the model did not actually report (omitted field, unparseable
-    # output, failed call) is a constant the code chose, not an observation.
-    # Training the router on it would pull every posterior toward that constant.
-    demo_if(logger, "synthesiser reported a confidence (not a fallback constant)",
-            query_response.confidence_reported)
-    if has_neptune_graph and query_response.confidence_reported:
+    has_reward = assessment is not None and assessment.reward is not None
+    demo_if(logger, "a reward signal was observed (not a default)", has_reward)
+    if has_neptune_graph and has_reward:
         try:
             update_feedback(
                 strategy=retrieval_config.strategy,
                 question_type=question_type,
-                confidence=query_response.confidence,
+                confidence=assessment.reward,
                 graph_id=NEPTUNE_GRAPH_ID,
+                source="self" if assessment.mode == "self" else "verified",
             )
         except Exception as exc:
             logger.warning("Routing feedback update failed (non-fatal): %s", exc)
 
     # Step 9 – Record the decision so a later rating can reach it (non-fatal).
-    # This is the second reward source: the self-confidence above is the
-    # model's opinion of its own answer; a rating is someone else's.
+    # Every signal is stored whatever the reward mode, so each one's agreement
+    # with the human rating can be measured from this one table.
     demo_step(logger, "Recording routing decision for later human feedback")
     try:
         _feedback.record_decision(
@@ -342,6 +361,10 @@ def _run_query_pipeline(req: QueryRequest) -> dict:
             # NULL, not the fallback constant, so the self-confidence column can
             # be compared against ratings without default values polluting it.
             confidence=query_response.confidence if query_response.confidence_reported else None,
+            grounding=assessment.value_of("grounding") if assessment else None,
+            judge=assessment.value_of("judge") if assessment else None,
+            reward=assessment.reward if assessment else None,
+            reward_mode=assessment.mode if assessment else None,
         )
     except Exception as exc:
         logger.warning("Routing decision record failed (non-fatal): %s", exc)

@@ -83,11 +83,21 @@ DocumentType and ChunkingStrategy nodes — and their relationships to each Docu
 | `keyword_boosted` | project, credential | pgvector + keyword-overlap reranking (25/75 blend) |
 | `semantic_search` | general | pgvector semantic search only |
 
-**After every query**, the synthesis confidence `c ∈ [0,1]` is folded into the selected strategy's posterior as a fractional Bernoulli reward:
+**After every query**, a reward `c ∈ [0,1]` is folded into the selected strategy's posterior as a fractional Bernoulli reward:
 - `alpha += c`, `beta += 1 − c`
 - `weight = alpha / (alpha + beta)` (posterior mean; kept for dashboards and legacy queries)
 
 Every observation moves the posterior — there is no confidence band in which feedback is discarded and no ceiling at which it saturates.
+
+**The reward is verified, not self-reported** (`src/query_api/verified_reward.py`, `ROUTER_REWARD_SOURCE=verified`, the default). The synthesiser's confidence is the model's opinion of its own answer, and exploration cannot fix an objective: a strategy that retrieves the wrong passages and gets a confidently wrong answer from them was reinforced exactly as much as one that retrieved the right ones. The reward is now built from signals checkable against something other than the model:
+
+- **grounding** — the fraction of the answer's sentence-level claims supported by at least one passage *the chosen strategy retrieved*. Computed on every answer, no model call. The default verifier is lexical (content-token overlap, with any number in a claim required verbatim, so "400 teams" against a passage saying 40 is unsupported); it is a weak entailment proxy and is documented as one. The verifier is a parameter, so an NLI model can replace it.
+- **judge** — an independent model (`RouterJudgeModelId`, empty = off) grades the answer against the same passages on a deterministic hash sample of `queryId`s (`RouterJudgeSampleRate`, default 0.05), weight 2. Its IAM grant covers foundation models only *through that inference profile*.
+- **human** — `POST /feedback`, unchanged.
+
+**Missing is missing.** Every signal is `float | None`; no passages, no checkable claims (an abstention), an unsampled or failed judge are all `None`, and a reward made of nothing is `None` — the router is then **not updated**. `routingDecision.reward` on the response and the `grounding`, `judge`, `reward`, `reward_mode` columns of `routing_decisions` record every signal whatever the mode, so each one's agreement with ratings can be measured from one table. `ROUTER_REWARD_SOURCE=self` restores the old reward as a rollback; `verified+self` averages both.
+
+`scripts/verified_reward_bench.py` is the research harness for this: `calibrate` scores self-confidence, grounding (lexical or `--verifier nli`) and a judge against gold answers from a public QA benchmark (SQuAD F1; brier, ECE, AUROC, Spearman, and whether each signal ranks *strategies* the way correctness does — the one property a router needs); `simulate` measures router regret against correctness under an overconfident self-reward vs the verified one. The simulation's numbers follow from its assumed overconfidence, so it shows the mechanism; `calibrate` on real runs is what decides whether the lexical proxy is good enough.
 
 **Only reported confidences are rewards.** When the model omits the `confidence` field, returns non-JSON, or the call fails, the response carries a fallback constant (0.7 / 0.5 / 0.0) and `confidenceReported: false`; the router is **not** updated in that case and the decision is recorded with a NULL confidence. A constant the code chose is not an observation. `docs/confidence-semantics.md` states what every score in this and the sibling systems means and when they may be combined.
 
@@ -362,7 +372,7 @@ No long-lived AWS credentials are stored in GitHub secrets. The workflow assumes
   - Step 5: expand_graph_context() (Neptune openCypher traversal)
   - Step 6: synthesize_answer() (Bedrock Converse)
   - Step 7: write_cache() (if confidence ≥ 0.5)
-  - Step 8: RAGRouter.update_feedback() (posterior update from self-confidence)
+  - Step 8: verified_reward.assess() → RAGRouter.update_feedback() (posterior update from the verified reward; skipped when no signal was observed)
   - Step 9: feedback.record_decision() (so POST /feedback can rate this answer later)
 - **Response shape**: `{ queryId, answer, sources, inferredSkills, repeatedPatterns, confidence, questionType, graphEntitiesUsed, routingDecision, cacheHit, latencyMs }`
 - **Code**: `src/query_api/handler.py`

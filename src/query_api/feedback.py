@@ -59,6 +59,19 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
 )
 """
 
+# Added with the verified reward (verified_reward.py). Separate statements so a
+# table created before them gains the columns on the next write instead of
+# needing a migration. ``reward`` is what the router actually learned from
+# (NULL when it learned nothing); ``grounding`` and ``judge`` are recorded
+# whatever the reward mode, so each signal's agreement with ``rating`` can be
+# measured against the others from this one table.
+MIGRATION_SQL = (
+    "ALTER TABLE routing_decisions ADD COLUMN IF NOT EXISTS grounding DOUBLE PRECISION",
+    "ALTER TABLE routing_decisions ADD COLUMN IF NOT EXISTS judge DOUBLE PRECISION",
+    "ALTER TABLE routing_decisions ADD COLUMN IF NOT EXISTS reward DOUBLE PRECISION",
+    "ALTER TABLE routing_decisions ADD COLUMN IF NOT EXISTS reward_mode TEXT",
+)
+
 
 class FeedbackError(Exception):
     """Carries the HTTP status the handler should return."""
@@ -86,9 +99,15 @@ def rating_to_reward(rating: Any) -> float | None:
     return None
 
 
+def _apply_schema(cur: Any) -> None:
+    cur.execute(SCHEMA_SQL)
+    for stmt in MIGRATION_SQL:
+        cur.execute(stmt)
+
+
 def ensure_schema(conn: Any) -> None:
     with conn.cursor() as cur:
-        cur.execute(SCHEMA_SQL)
+        _apply_schema(cur)
     conn.commit()
 
 
@@ -100,17 +119,24 @@ def record_decision(
     strategy: str,
     propensity: float | None,
     confidence: float | None,
+    grounding: float | None = None,
+    judge: float | None = None,
+    reward: float | None = None,
+    reward_mode: str | None = None,
 ) -> None:
     """Persist the routing decision behind an answer so a later rating can reach it."""
     with conn.cursor() as cur:
-        cur.execute(SCHEMA_SQL)
+        _apply_schema(cur)
         cur.execute(
             """
-            INSERT INTO routing_decisions (query_id, question_type, strategy, propensity, confidence)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO routing_decisions
+                (query_id, question_type, strategy, propensity, confidence,
+                 grounding, judge, reward, reward_mode)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (query_id) DO NOTHING
             """,
-            (query_id, question_type, strategy, propensity, confidence),
+            (query_id, question_type, strategy, propensity, confidence,
+             grounding, judge, reward, reward_mode),
         )
     conn.commit()
 

@@ -1,5 +1,13 @@
 # What the numbers mean: confidence semantics across the weave systems
 
+> **Update (September 2026).** ContextWeave's router no longer learns from the
+> synthesiser's self-reported `confidence` by default. The reward is built in
+> `src/query_api/verified_reward.py` from grounding against the retrieved
+> passages and a sampled independent judge, with unobserved signals left as
+> `None` rather than filled in. Self-confidence is still recorded (and is the
+> reward under `ROUTER_REWARD_SOURCE=self`). The inventory below describes the
+> self-confidence path as it was when this document was written.
+
 Three systems on this account each emit a number in `[0, 1]` and call it, or
 treat it as, a confidence:
 

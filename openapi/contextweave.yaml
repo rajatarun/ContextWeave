@@ -124,9 +124,34 @@ paths:
                     type: boolean
                     description: |
                       False when the model omitted a confidence and a fallback
-                      constant was substituted. The router is NOT updated in
-                      that case — a constant the code chose is not an
-                      observation.
+                      constant was substituted. A fallback is never a reward —
+                      a constant the code chose is not an observation.
+                  routingDecision:
+                    type: object
+                    description: |
+                      The strategy that answered and the reward the router
+                      learned from it. A cached answer carries the decision
+                      that produced it, without `reward` (written before the
+                      reward is assessed).
+                    properties:
+                      strategy: { type: string }
+                      questionType: { type: string }
+                      selectionPropensity: { type: number }
+                      reward:
+                        type: object
+                        nullable: true
+                        description: |
+                          `reward` is null when no signal was observed, and the
+                          router is then not updated. `signals` always carries
+                          `self` and `grounding` (the fraction of the answer's
+                          claims supported by the retrieved passages), and
+                          `judge` on the sampled queries; `sources` names the
+                          ones the reward was made of under `mode`.
+                        properties:
+                          mode: { type: string, enum: [verified, self, verified+self] }
+                          reward: { type: number, nullable: true }
+                          sources: { type: array, items: { type: string } }
+                          signals: { type: object }
                   questionType: { type: string }
                   cacheHit: { type: boolean }
                   latencyMs: { type: integer }

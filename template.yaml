@@ -36,6 +36,30 @@ Parameters:
       Bedrock inference profile ID used by the Query API for answer synthesis.
       Must use cross-region inference profile (us. prefix) for on-demand throughput.
 
+  RouterJudgeModelId:
+    Type: String
+    Default: ''
+    Description: >
+      Bedrock inference profile ID (us. prefix) of the independent judge that
+      grades a sample of answers for the routing reward (verified_reward.py).
+      Should be a different, stronger model than GenerationModelId -- a model
+      grading its own answers is self-assessment again. Empty disables the
+      judge; the reward is then grounding (plus human ratings) alone.
+
+  RouterJudgeSampleRate:
+    Type: String
+    Default: '0.05'
+    Description: Fraction of answered queries the judge grades (0 to 1).
+
+  RouterRewardSource:
+    Type: String
+    Default: verified
+    AllowedValues: [verified, self, verified+self]
+    Description: >
+      What the routing posterior learns from. verified = grounding against the
+      retrieved passages plus the sampled judge; self = the synthesiser's own
+      confidence (the previous behaviour, kept as a rollback).
+
   LogRetentionDays:
     Type: Number
     Default: 3
@@ -141,6 +165,7 @@ Parameters:
 Conditions:
   DeployStepFunctions: !Equals [!Ref EnableStepFunctions, 'true']
   HasEC2KeyPair: !Not [!Equals [!Ref EC2KeyPairName, '']]
+  HasRouterJudge: !Not [!Equals [!Ref RouterJudgeModelId, '']]
   # True when a Graviton (arm64) instance family is selected for Memgraph
   MemgraphIsGraviton: !Or
     - !Equals [!Select [0, !Split ['.', !Ref MemgraphInstanceType]], 't4g']
@@ -928,6 +953,29 @@ Resources:
                   # Nova Micro used for question classification (regional, no inference profile)
                   - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-micro-v1:0
                   - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0
+        # The routing reward's judge. Invoking through an inference profile
+        # needs the profile and its underlying foundation models; the models are
+        # granted only when the call goes through *this* profile, so the judge
+        # parameter cannot become direct access to every model in the catalogue.
+        - !If
+          - HasRouterJudge
+          - PolicyName: BedrockRouterJudge
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Sid: JudgeInferenceProfile
+                  Effect: Allow
+                  Action: [bedrock:InvokeModel]
+                  Resource:
+                    - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${RouterJudgeModelId}
+                - Sid: JudgeFoundationModelsViaProfile
+                  Effect: Allow
+                  Action: [bedrock:InvokeModel]
+                  Resource: arn:aws:bedrock:*::foundation-model/*
+                  Condition:
+                    StringEquals:
+                      bedrock:InferenceProfileArn: !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${RouterJudgeModelId}
+          - !Ref AWS::NoValue
         - PolicyName: S3ReadDerived
           PolicyDocument:
             Version: '2012-10-17'
@@ -1137,6 +1185,9 @@ Resources:
           LOG_LEVEL: DEBUG
           CACHE_SIMILARITY_THRESHOLD: "0.95"
           CACHE_TTL_DAYS: "7"
+          ROUTER_REWARD_SOURCE: !Ref RouterRewardSource
+          ROUTER_JUDGE_MODEL_ID: !Ref RouterJudgeModelId
+          ROUTER_JUDGE_SAMPLE_RATE: !Ref RouterJudgeSampleRate
       Events:
         # The well-known URI every A2A client fetches first. It is how a
         # caller learns the routes below exist, rather than hardcoding one --
