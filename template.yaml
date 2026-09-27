@@ -38,13 +38,18 @@ Parameters:
 
   RouterJudgeModelId:
     Type: String
-    Default: ''
+    Default: us.anthropic.claude-sonnet-4-6
     Description: >
       Bedrock inference profile ID (us. prefix) of the independent judge that
       grades a sample of answers for the routing reward (verified_reward.py).
       Should be a different, stronger model than GenerationModelId -- a model
-      grading its own answers is self-assessment again. Empty disables the
-      judge; the reward is then grounding (plus human ratings) alone.
+      grading its own answers is self-assessment again. Sonnet 4.6 grades
+      Nova Pro's answers: stronger, a different model family, and already
+      enabled on this account (TeamWeave's model map calls the same US
+      profile; Sonnet 5 and Opus 5 are unavailable here). At the 5% sample
+      and ~3k tokens of evidence per call that is about $0.0006 per query on
+      average. Empty disables the judge; the reward is then grounding (plus
+      human ratings) alone.
 
   RouterJudgeSampleRate:
     Type: String
