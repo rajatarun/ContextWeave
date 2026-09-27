@@ -31,13 +31,13 @@ off-policy evaluation, safe deployment, contextual bandits, bootstrap, retrieval
 ContextWeave's router selects retrieval strategies by Thompson sampling and records, for every decision, the probability $p_i$ that the sampler had of choosing the strategy it chose~\cite{prior-router}. That makes counterfactual evaluation possible: the value of a candidate policy $\pi$ can be estimated from the log without deploying it~\cite{horvitz1952,dudik2011}. This paper turns such an estimate into a deployment decision that can itself be audited afterwards.
 
 \section{Estimator and Gate}
-For logged records $(x_i,a_i,p_i,r_i)$, $i=1..n$ (question type, strategy, propensity, reward), with $w_i=\pi(a_i\mid x_i)/p_i$, the self-normalized estimator~\cite{swaminathan2015} is
+For logged records $(x_i,a_i,p_i,r_i)$, $i=1,\dots,n$ (question type, strategy, propensity, reward), with $w_i=\pi(a_i\mid x_i)/p_i$, the self-normalized estimator~\cite{swaminathan2015} is
 \begin{equation}
 \hat V_{\mathrm{SN}}(\pi)=\frac{\sum_iw_ir_i}{\sum_iw_i}.
 \end{equation}
 The incumbent's value is the log's own mean, $\hat V_0=\frac1n\sum_ir_i$. The effective sample size is $\mathrm{ESS}=(\sum w_i)^2/\sum w_i^2$~\cite{kish1965}. The reward is the verified reward~\cite{comp-verified} when the log carries it, and the self-confidence otherwise; the verdict records which one was used.
 
-\textbf{Gate.} Draw $B$ bootstrap resamples of the \emph{rows}. On each, compute both $\hat V_{\mathrm{SN}}$ and $\hat V_0$, and take the difference $D^{(b)}$. PROMOTE iff $\mathrm{ESS}\ge m$ and the $2.5$th percentile of $\{D^{(b)}\}$ exceeds the minimum lift $\ell$. Otherwise HOLD, with the reason.
+\textbf{Gate.} Draw $N_b$ bootstrap resamples of the \emph{rows}. On each, compute both $\hat V_{\mathrm{SN}}$ and $\hat V_0$, and take the difference $D^{(b)}$, $b=1,\dots,N_b$. PROMOTE iff $\mathrm{ESS}\ge m$ and the $2.5$th percentile of $\{D^{(b)}\}$ exceeds the minimum lift $\ell$. Otherwise HOLD, with the reason.
 
 \textbf{Verify.} After deployment, compute the live mean $\bar r$ with a normal 95\% interval. The verdict is CONFIRMED if that interval overlaps the predicted interval for $\hat V_{\mathrm{SN}}$ and lies above $\hat V_0$; MISCALIBRATED if it does not overlap the prediction; and INCONCLUSIVE otherwise.
 
@@ -56,12 +56,14 @@ Since $\rho\ge-1$, $\sigma_D^2\le\sigma_A^2+\sigma_B^2+2\sigma_A\sigma_B=(\sigma
 \end{proof}
 Both estimates are computed on the same rows, so they are positively correlated. The more the candidate agrees with the logging policy, the larger $\rho$, and $\sigma_D$ is then much smaller than $\sigma_A+\sigma_B$. That is exactly the regime of a converged router, where the lift to be detected is small.
 
+The gate itself uses a percentile bootstrap rather than the normal interval of Proposition~\ref{prop:paired}. Because each resample recomputes both estimates on the same rows, the spread of $\{D^{(b)}\}$ estimates $\sigma_D$, correlation included; asymptotically its $2.5$th percentile is $\hat A-\hat B-1.96\,\sigma_D$, so the gate is the paired rule of the proposition with $z=1.96$, and the unpaired baseline is the same construction applied to the two marginal bootstrap distributions.
+
 \section{Evaluation Against Known Truth}
-Using the deployed router in-process, we generated logs of $n\in\{500,1500,3000\}$ decisions for two truths. In \emph{separated}, strategy success rates are 0.90/0.85/0.55/0.50; in \emph{close}, 0.78/0.75/0.72/0.70. We used 12 seeds each, and gated all four fixed-strategy candidates against the log's own policy, with $\ell=0$, $m=50$ and $B=400$. A candidate \emph{should} be promoted iff its true success rate exceeds the logging policy's true mean. Each promotion was then verified against 400 queries of simulated live traffic, drawn from the same known truth under the candidate policy.
+Using the deployed router in-process, we generated logs of $n\in\{500,1500,3000\}$ decisions for two truths. In \emph{separated}, strategy success rates are 0.90/0.85/0.55/0.50; in \emph{close}, 0.78/0.75/0.72/0.70. We used 12 seeds each, and gated all four fixed-strategy candidates against the log's own policy, with $\ell=0$, $m=50$ and $N_b=400$. A candidate \emph{should} be promoted iff its true success rate exceeds the logging policy's true mean. Each promotion was then verified against 400 queries of simulated live traffic, drawn from the same known truth under the candidate policy.
 
 \begin{table}[t]
 \centering
-\caption{Gate decisions over 48 candidates per row (12 should be promoted). ``unpaired'': promotions under the separate-interval rule. C/I/M: verify outcomes (confirmed / inconclusive / miscalibrated). ``cover.'': fraction of the 48 lift intervals containing the true lift (nominal 0.95).}
+\caption{Gate decisions over 48 candidates per row (12 should be promoted). ``prom.'': candidates the gate promoted; ``false'': promotions of candidates that should not have been promoted; ``missed'': candidates that should have been promoted but were held. ``unpaired'': promotions under the separate-interval rule. C/I/M: verify outcomes (confirmed / inconclusive / miscalibrated). ``cover.'': fraction of the 48 lift intervals containing the true lift (nominal 0.95).}
 \label{tab:gate}
 \setlength{\tabcolsep}{4pt}
 \begin{tabular}{lrrrrlr}
@@ -82,6 +84,7 @@ close, 3000 & 12 & 0 & 0 & 12 & 9/3/0 & 0.979\\
 \begin{itemize}
 \item The gate promoted exactly the 72 candidates that should have been promoted, and none that should not.
 \item In \emph{separated}, the logging policy converges toward the best strategy, so the lift shrinks as $n$ grows. The unpaired rule promoted only 8, 5 and then 2 of 12 real improvements, as Proposition~\ref{prop:paired} predicts. The paired rule promoted all 12 at every size.
+\item In \emph{close}, the unpaired rule promoted 10, 12 and 12 of 12. There the logging policy keeps spreading its choices over four near-equal strategies, so the lift of the best candidates over the log's mean likely stays larger than in \emph{separated}, and both rules detect it once $n\ge1500$.
 \item The lift interval covered the true lift in 89.6--97.9\% of candidates across rows (last column). Coverage is below nominal at the smallest logs, as expected of a percentile bootstrap on a ratio estimator.
 \item Of the 72 promotions verified, one was MISCALIBRATED. Two valid 95\% intervals fail to overlap far less often than 5\% of the time, so this one flag is more than chance alone predicts. The likeliest cause is the bootstrap's undercoverage in that row (0.917); we did not investigate the case further. Many were INCONCLUSIVE at large $n$: the true lift over a near-converged incumbent is below 0.01, and 400 live queries cannot resolve it. That is the verdict working as intended.
 \end{itemize}
@@ -89,12 +92,15 @@ close, 3000 & 12 & 0 & 0 & 12 & 9/3/0 & 0.979\\
 \section{Limitations}
 The gate decides; deploying a promoted policy remains a manual change. Proposition~\ref{prop:paired} is asymptotic. For candidates the logger rarely chose, the ESS floor, not the interval, is what holds them.
 
+\section{Conclusion}
+A logged propensity makes a candidate routing policy estimable; a paired interval with an ESS floor makes that estimate a decision, and a post-deployment check makes the decision auditable. Pairing costs nothing and matters most when the router has converged and the lifts are small. Against known truth the gate made no false promotions and missed no improvements, while the unpaired rule missed most improvements over a converged incumbent. The one miscalibrated verdict points to the bootstrap's undercoverage on small logs as the next thing to fix.
+
 \begin{thebibliography}{9}
 \bibitem{prior-router} T.~Raja, \pend{title of the adaptive RAG router paper}, \pend{venue, year}.
 \bibitem{comp-verified} T.~Raja, ``Learning to route without trusting the model: Verified rewards for adaptive retrieval routers,'' companion paper, \pend{venue, year}.
 \bibitem{horvitz1952} D.~G. Horvitz and D.~J. Thompson, ``A generalization of sampling without replacement from a finite universe,'' \emph{J. Amer. Statist. Assoc.}, vol.~47, pp.~663--685, 1952.
-\bibitem{dudik2011} M.~Dud{\'i}k, J.~Langford, and L.~Li, ``Doubly robust policy evaluation and learning,'' in \emph{Proc. ICML}, 2011.
-\bibitem{swaminathan2015} A.~Swaminathan and T.~Joachims, ``The self-normalized estimator for counterfactual learning,'' in \emph{Proc. NeurIPS}, 2015.
+\bibitem{dudik2011} M.~Dud{\'i}k, J.~Langford, and L.~Li, ``Doubly robust policy evaluation and learning,'' in \emph{Proc. ICML}, 2011, pp.~1097--1104.
+\bibitem{swaminathan2015} A.~Swaminathan and T.~Joachims, ``The self-normalized estimator for counterfactual learning,'' in \emph{Proc. NeurIPS}, 2015, pp.~3231--3239.
 \bibitem{kish1965} L.~Kish, \emph{Survey Sampling}. New York: Wiley, 1965.
 \end{thebibliography}
 \end{document}

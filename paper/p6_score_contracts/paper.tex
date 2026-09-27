@@ -18,7 +18,7 @@
 \maketitle
 
 \begin{abstract}
-Composed agent systems pass around many numbers in $[0,1]$: a model's self-reported confidence, an embedding similarity, a weighted risk indicator, a posterior mean, a selection propensity. They look interchangeable, and they are routinely thresholded, averaged and multiplied as if they were probabilities. We propose a typed contract. Every emitted score declares its kind (\emph{probability}, \emph{posterior mean}, \emph{score}, \emph{similarity} or \emph{risk indicator}), its source, its range, whether and against what it is calibrated, and the code that produces it. Five rules then govern combination. We prove the rules' premises: averaging or taking the maximum across producers is not invariant under monotone reparametrization, so the combined ranking can flip while every input's ranking is unchanged; products of calibrated, conditionally independent probabilities are calibrated for the conjunction; isotonic regression makes a score calibrated in-sample; and substituting defaults for absent values biases every mean toward the default. Across three systems we find 13 declared scores. Exactly one is a calibrated probability, and none of the 78 pairs of scores (50 of them across systems) may be combined numerically. The contract is enforced by a conformance test in each system's repository. On a synthetic overconfident score, an isotonic fit reduces held-out ECE from 0.277 to 0.018.
+Composed agent systems pass around many numbers in $[0,1]$: a model's self-reported confidence, an embedding similarity, a weighted risk indicator, a posterior mean, a selection propensity. They look interchangeable, and they are routinely thresholded, averaged and multiplied as if they were probabilities. We propose a typed contract. Every emitted score declares its kind (\emph{probability}, \emph{posterior mean}, \emph{score}, \emph{similarity} or \emph{risk indicator}), its source, its range, whether and against what it is calibrated, and the code that produces it. Five rules then govern combination. We prove the premises of four of the five rules (R4 is a design requirement): averaging or taking the maximum across producers is not invariant under monotone reparametrization, so the combined ranking can flip while every input's ranking is unchanged; products of calibrated, conditionally independent probabilities are calibrated for the conjunction; isotonic regression makes a score calibrated in-sample; and substituting defaults for absent values biases every mean toward the default. Across three systems we find 13 declared scores. Exactly one is a calibrated probability, and none of the 78 pairs of scores (50 of them across systems) may be combined numerically. The contract is enforced by a conformance test in each system's repository. On a synthetic overconfident score, an isotonic fit reduces held-out expected calibration error (ECE) from 0.277 to 0.018.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -26,7 +26,7 @@ calibration, confidence scores, measurement scales, isotonic regression, compose
 \end{IEEEkeywords}
 
 \section{Introduction}
-In three of the author's systems, ContextWeave rewards a retrieval router with a model's self-confidence~\cite{prior-router,comp-verified}. DeviceWeave executes a command when $\alpha\cdot\text{cosine}+(1-\alpha)\cdot\text{behavior}\ge0.4$~\cite{prior-device}. CipherWeave overrides to post-quantum encryption when a maximum of standardized deviations exceeds 3~\cite{prior-cipher,comp-drift}. Each number lives in $[0,1]$, or looks like it does, and each means something different. When systems compose, these numbers meet. Nothing in their type says whether $0.7\times0.8$ or $\frac12(0.7+0.8)$ means anything.
+Consider three of our systems. ContextWeave's retrieval router was rewarded with a model's self-confidence~\cite{prior-router} until a verified reward replaced it~\cite{comp-verified}; the self-confidence is still emitted and logged. DeviceWeave executes a command when $\alpha\cdot\text{cosine}+(1-\alpha)\cdot\text{behavior}\ge0.4$~\cite{prior-device}. CipherWeave overrides to post-quantum encryption when a maximum of standardized deviations exceeds 3~\cite{prior-cipher,comp-drift}. Each number lives in $[0,1]$, or looks like it does, and each means something different. When systems compose, these numbers meet. Nothing in their type says whether $0.7\times0.8$ or $\frac12(0.7+0.8)$ means anything.
 
 \section{The Contract}
 \begin{definition}[Score envelope]
@@ -44,13 +44,13 @@ An unobserved score has value null and observed false.
 \textbf{Rules.}
 \begin{itemize}
 \item[R1] Only probabilities compose by probability rules.
-\item[R2] A probability must be calibrated, and name against what.
+\item[R2] A probability must be calibrated, and must name the event it is calibrated against.
 \item[R3] Never average, add or max scores of different kinds or producers; combine \emph{decisions} instead. Within one producer, whose outputs share a scale by construction, these operations are allowed; for example, a drift detector may take the maximum of its own standardized channels.
 \item[R4] Carry the evidence count when reliability depends on it.
 \item[R5] Absence is not zero.
 \end{itemize}
 
-Each repository declares its scores in a registry that names the producing function. A conformance test checks the registry against the contract, imports every producer (so a declaration cannot outlive its code), and pins the contract file's hash, so vendored copies cannot drift. The checker \texttt{can\_combine(a,b,op)} names the rule that forbids an operation.
+Each repository declares its scores in a registry that names the producing function. A conformance test (\texttt{tests/test\_score\_contract.py} in each repository) checks the registry against the contract, imports every producer (so a declaration cannot outlive its code), and pins the contract file's hash, so vendored copies cannot drift. The checker \texttt{can\_combine(a,b,op)} names the rule that forbids an operation.
 
 \section{Why the Rules Hold}
 \begin{proposition}[Cross-producer averages are not ordinal]\label{prop:avg}
@@ -59,7 +59,7 @@ Let $u,v$ be scores from different producers, each meaningful only up to a stric
 \begin{proof}
 Take $u_A>u_B$ and $v_A<v_B$ with $\alpha(u_A-u_B)<(1-\alpha)(v_B-v_A)$, so that $B$ ranks higher. Choose $f$ strictly increasing with $f(u_A)-f(u_B)>\frac{1-\alpha}{\alpha}(v_B-v_A)$, for example a steep enough power. Then $A$ ranks higher. Neither input's own ordering has changed.
 \end{proof}
-Concretely, with $\alpha=\tfrac12$, $A=(0.90,0.10)$ and $B=(0.60,0.50)$: the raw averages rank $B$ first (0.550 vs.\ 0.500). Cubing the similarity, a monotone change that could come from simply switching embedding models, ranks $A$ first (0.414 vs.\ 0.358). This is DeviceWeave's \texttt{final\_score} pattern. The same construction applies to $\max$, by choosing $f$ to lift $u_A$ above $v_B$.
+Concretely, write each candidate as (similarity $u$, behavior score $v$) and take $\alpha=\tfrac12$, $A=(0.90,0.10)$ and $B=(0.60,0.50)$: the raw averages rank $B$ first (0.550 vs.\ 0.500). Cubing the similarity $u$, a monotone change that could come from simply switching embedding models, ranks $A$ first (0.414 vs.\ 0.358). This is DeviceWeave's \texttt{final\_score} pattern. The same construction applies to $\max$, by choosing $f$ to lift $u_A$ above $v_B$.
 
 \begin{proposition}[Calibrated products are calibrated]\label{prop:prod}
 If $q_1,q_2$ are calibrated probabilities for events $E_1,E_2$, i.e.\ $P(E_i\mid q_i)=q_i$, and $E_1,E_2$ are conditionally independent given $(q_1,q_2)$, with $P(E_i\mid q_1,q_2)=P(E_i\mid q_i)$, then $P(E_1\wedge E_2\mid q_1,q_2)=q_1q_2$.
