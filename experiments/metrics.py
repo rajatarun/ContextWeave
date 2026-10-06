@@ -51,7 +51,28 @@ def score_answer(answer: str, gold_answers: Sequence[str], unanswerable: bool) -
         "f1": f1,
         "correct": 1 if f1 >= F1_CORRECT_THRESHOLD else 0,
         "abstained": is_abstention(answer),
+        # Secondary only. ``correct`` stays token F1. Null when there is no gold span.
+        "gold_contained": gold_contained(answer, gold),
     }
+
+
+def gold_contained(answer: str, gold_answers: Sequence[str]) -> int | None:
+    """1 when a normalised gold string is a substring of the normalised answer.
+
+    This is a sensitivity check for long answers that still contain the gold
+    span. It is not a correctness label and it does not change ``correct``.
+    Unanswerable questions have no gold span, so the value is null.
+    """
+    if not gold_answers:
+        return None
+    norm_answer = B.normalize_answer(answer)
+    found = False
+    for gold in gold_answers:
+        norm_gold = B.normalize_answer(gold)
+        if norm_gold and norm_gold in norm_answer:
+            found = True
+            break
+    return 1 if found else 0
 
 
 def kendall_tau(ranking_a: Sequence[str], ranking_b: Sequence[str]) -> float | None:

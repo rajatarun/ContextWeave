@@ -1,10 +1,12 @@
 """Generate an answer for every (question, arm) with Bedrock Converse.
 
-Self-confidence is the generator's verbalized number, parsed by
-``experiments.confidence`` to the same decision table as
-``synthesizer._confidence_from``. Parse status is ``ok``, ``omitted``,
-``unparseable``, ``failed``, or ``truncated``. Truncation is the output-token
-cap and is not stored as a fallback confidence.
+Self-confidence is the generator's verbalized number. The robust reading
+(first JSON object) is the ``self`` signal. The strict whole-reply reading
+is ``synthesizer._confidence_from`` and is stored beside it for the
+fallback row. Status is ``ok``, ``omitted``, ``unparseable``, ``failed``,
+or ``truncated``. Truncation is the output-token cap and is not stored as
+a fallback confidence. The saved answer is the JSON ``answer`` field, never
+the raw reply.
 
 ``--dry-run`` builds every prompt from the retrieval file and reports an
 input-token estimate plus an output-token upper bound (max output tokens on
@@ -245,6 +247,9 @@ def generate_rows(
             "self_confidence": parsed["value"],
             "self_reported": parsed["reported"],
             "self_status": parsed["status"],
+            "deployed_self_confidence": parsed["deployed_value"],
+            "deployed_self_reported": parsed["deployed_reported"],
+            "deployed_self_status": parsed["deployed_status"],
             "stop_reason": stop_reason,
             "input_tokens": int(in_tok),
             "output_tokens": int(out_tok),

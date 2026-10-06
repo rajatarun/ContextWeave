@@ -56,6 +56,36 @@ def test_a_number_the_passages_never_mention_is_not_supported():
     assert s.value == 0.0
 
 
+def test_abstention_phrases_from_generator_replies():
+    refusals = [
+        "The passages do not contain information about the date.",
+        "The passage does not contain the answer.",
+        "The passages do not provide any information about this.",
+        "The passages do not indicate when it happened.",
+        "The passages do not support an answer.",
+        "The passages don't contain information about the author.",
+        "There is no information about the author.",
+        "It cannot be determined from the passages.",
+        "The date is not mentioned in the passages.",
+        "I can't answer that from these passages.",
+        "insufficient evidence",
+    ]
+    for text in refusals:
+        assert V._ABSTAIN_RE.search(text), text
+        assert V.grounding_signal(text, [PASSAGE]).value is None
+    factual = [
+        "Paris",
+        "November 11, 1901",
+        "painting, poetry, and calligraphy",
+        "The Analytical Engine was designed by Charles Babbage.",
+        "He supported the bill in 1901.",
+        "The studies do not support the hypothesis.",
+        "Information theory was founded by Shannon.",
+    ]
+    for text in factual:
+        assert V._ABSTAIN_RE.search(text) is None, text
+
+
 def test_no_passages_and_no_claims_are_not_observations():
     assert V.grounding_signal("Anything at all is claimed here.", []).value is None
     assert V.grounding_signal("Anything at all is claimed here.", ["", "  "]).value is None

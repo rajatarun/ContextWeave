@@ -86,23 +86,43 @@ An answerable question is correct when that F1 is at least 0.5. An
 unanswerable question is correct exactly when the answer abstains. Abstention
 is `verified_reward_bench.is_abstention`: the normalised answer is empty, or
 it matches `verified_reward._ABSTAIN_RE` (phrases such as "insufficient
-evidence" and "cannot answer" that the claim splitter already drops).
+evidence", "do not contain", "no information", "not mentioned", and
+"cannot answer" that the claim splitter already drops).
+
+A second rate is stored beside that label: whether the normalised gold string
+is contained in the normalised answer. It is for answers that quote the span
+and then keep writing. It is not a correctness label. Replay, calibration,
+and rankings use token F1 only. The prompt asks for a short extractive span,
+and for the exact phrase `insufficient evidence` when the passages do not
+contain the answer.
 
 ## Self-confidence
 
-The generator returns JSON `{"answer", "confidence"}`. The prompt is
+The generator is asked for JSON `{"answer", "confidence"}`. The prompt is
 `experiments/prompts/generator_system.txt` and is copied into the generation
-artifact. Parsing follows `synthesizer._confidence_from`:
+artifact. The saved answer is the `answer` field of the first JSON object in
+the reply. It is never the raw reply.
 
-| Status | When | Stored number | Used as a reward |
+The robust reading (the `self` signal) is that first JSON object. Prose
+before or after it is ignored. A number in [0, 1] is an observation. Anything
+else stores a null robust value.
+
+The deployed reading is the strict whole-reply parse in
+`synthesizer._confidence_from`, stored as `deployed_self_status` and
+`deployed_self_confidence`. The fallback replay row uses that reading:
+
+| Deployed status | When | Stored number | Fallback row |
 | --- | --- | --- | --- |
-| `ok` | a number in [0, 1] | that number | yes |
-| `omitted` | JSON without a usable confidence | 0.7 | only in the fallback replay row |
-| `unparseable` | output is not a JSON object | 0.5 | only in the fallback replay row |
-| `failed` | the call failed | 0.0 | only in the fallback replay row |
+| `ok` | the whole reply is a JSON object with a number in [0, 1] | that number | that number |
+| `omitted` | JSON without a usable confidence | 0.7 | 0.7 |
+| `unparseable` | the whole reply is not one JSON object | 0.5 | 0.5 |
+| `failed` | the call failed | 0.0 | 0.0 |
 
-The 0.7 / 0.5 / 0.0 values are the deployed fallbacks. The skip-unobserved
-reward leaves every status other than `ok` as missing.
+A reply that is prose around a valid object is robust `ok` and deployed
+`unparseable`. The `self` signal uses the parsed confidence. The fallback
+row uses 0.5, which is what the deployed parser would have substituted.
+Truncation (`maxTokens`) sets both statuses to `truncated` and both values
+to null. It is not one of the three fallback constants.
 
 ## Grounding, NLI, judge
 
@@ -156,8 +176,9 @@ of that history below the current value, with ties counting half. An empty
 history is a missing reward. Confidences from arms that were not selected are
 not used. The definition is stored on the analyses artifact.
 
-`self_with_fallbacks` substitutes 0.7 / 0.5 / 0.0 for omitted / unparseable /
-failed. `oracle` uses binary correctness.
+`self_with_fallbacks` substitutes 0.7 / 0.5 / 0.0 from the deployed strict
+status (omitted / unparseable / failed). `oracle` uses binary token-F1
+correctness, not the gold-contained rate.
 
 ## Calibration and the prediction
 

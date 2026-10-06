@@ -59,6 +59,16 @@ def test_f1_and_abstention_detector():
     assert is_abstention("")
     assert is_abstention("   ")
     assert not is_abstention("Paris")
+    assert not is_abstention("November 11, 1901")
+    long = (
+        "Painting, poetry, and calligraphy were often practiced together "
+        "by scholar officials in imperial China as the related arts of the literati class."
+    )
+    span = score_answer(long, ["painting, poetry, and calligraphy"], False)
+    assert span["f1"] < 0.5 and span["correct"] == 0 and span["gold_contained"] == 1
+    exact = score_answer("painting, poetry, and calligraphy", ["painting, poetry, and calligraphy"], False)
+    assert exact["f1"] == 1.0 and exact["correct"] == 1 and exact["gold_contained"] == 1
+    assert score_answer("sculpture and music", ["painting, poetry, and calligraphy"], False)["gold_contained"] == 0
     unans_ok = score_answer("Insufficient evidence to answer.", [], True)
     unans_bad = score_answer("Paris", [], True)
     assert unans_ok["correct"] == 1 and unans_bad["correct"] == 0
@@ -431,16 +441,56 @@ def test_assumed_slopes_match_the_simulation_source():
 
 
 def test_confidence_statuses_match_synthesizer_constants():
-    assert parse_self_confidence('{"answer": "Paris", "confidence": 0.25}')["status"] == "ok"
+    ok = parse_self_confidence('{"answer": "Paris", "confidence": 0.25}')
+    assert ok["status"] == "ok" and ok["value"] == 0.25 and ok["deployed_status"] == "ok"
     omitted = parse_self_confidence('{"answer": "Paris"}')
-    assert omitted["status"] == "omitted" and omitted["value"] == OMITTED and omitted["reported"] is False
+    assert omitted["status"] == "omitted" and omitted["value"] is None and omitted["reported"] is False
+    assert omitted["deployed_status"] == "omitted" and omitted["deployed_value"] == OMITTED
+    assert omitted["answer"] == "Paris"
     bad = parse_self_confidence("not json")
-    assert bad["status"] == "unparseable" and bad["value"] == UNPARSEABLE
+    assert bad["status"] == "unparseable" and bad["value"] is None and bad["answer"] == ""
+    assert bad["deployed_status"] == "unparseable" and bad["deployed_value"] == UNPARSEABLE
     failed = parse_self_confidence(None, call_failed=True)
-    assert failed["status"] == "failed" and failed["value"] == FAILED
+    assert failed["status"] == "failed" and failed["value"] is None and failed["answer"] == ""
+    assert failed["deployed_status"] == "failed" and failed["deployed_value"] == FAILED
     src = (ROOT / "src" / "query_api" / "synthesizer.py").read_text()
     assert "_OMITTED_CONFIDENCE = 0.7" in src
     assert "_UNPARSED_CONFIDENCE = 0.5" in src
+
+
+def test_prose_around_json_keeps_the_answer_field_and_the_deployed_fallback():
+    raw = (
+        '{"answer": "November 11, 1901", "confidence": 0.95} '
+        "The date is given in the passage."
+    )
+    parsed = parse_self_confidence(raw)
+    assert parsed["answer"] == "November 11, 1901"
+    assert parsed["answer"] != raw
+    assert parsed["status"] == "ok" and parsed["value"] == 0.95 and parsed["reported"] is True
+    assert parsed["deployed_status"] == "unparseable" and parsed["deployed_value"] == UNPARSEABLE
+    leading = parse_self_confidence(
+        'The answer is {"answer": "November 11, 1901", "confidence": 0.95}.'
+    )
+    assert leading["answer"] == "November 11, 1901" and leading["status"] == "ok"
+    assert leading["deployed_status"] == "unparseable"
+    row = {
+        "qid": "q", "arm": "semantic_search", "correct": 1,
+        "self_status": parsed["status"], "self_confidence": parsed["value"],
+        "deployed_self_status": parsed["deployed_status"],
+        "deployed_self_confidence": parsed["deployed_value"],
+        "lexical_grounding": 1.0, "judge": None, "judge_reason": "not_sampled",
+    }
+    rewards = build_rewards(row, load_config())
+    assert rewards["self"] == 0.95
+    assert rewards["self_with_fallbacks"] == 0.5
+    # The smoke failure mode, repeated: prose around an object must not become the answer.
+    wrapped = [
+        f'Note. {{"answer": "span {i}", "confidence": 0.8}} Done.'
+        for i in range(19)
+    ] + ["no json object here at all"]
+    robust_ok = sum(parse_self_confidence(text)["status"] == "ok" for text in wrapped)
+    assert robust_ok / len(wrapped) >= 0.95
+    assert all(parse_self_confidence(text)["answer"] != text for text in wrapped)
 
 
 def _client_error(code: str, message: str):

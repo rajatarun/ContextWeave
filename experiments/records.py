@@ -52,27 +52,57 @@ def _pending_keys(path: Path) -> dict[tuple[str, str], str]:
     return out
 
 
+def _require_status(status: str, where: str) -> None:
+    if status not in ("ok", "omitted", "unparseable", "failed", "truncated"):
+        raise ProtocolError(f"{where}: unknown status {status!r}")
+
+
+def _fallback_from_status(status: str, value: Any, cfg: dict[str, Any], where: str) -> float | None:
+    """Deployed fallback row. ``ok`` keeps the reported number. Truncation stays missing."""
+    _require_status(status, where)
+    if status == "ok":
+        if value is None:
+            raise ProtocolError(f"{where}: status ok stored no confidence")
+        return float(value)
+    if status == "truncated":
+        if value is not None:
+            raise ProtocolError(f"{where}: truncated rows store no confidence")
+        return None
+    expected = float(cfg[f"fallback_{status}"])
+    if value is None or abs(float(value) - _FALLBACK[status]) > 1e-9:
+        raise ProtocolError(
+            f"{where}: status {status} stored {value} but the deployed fallback is {_FALLBACK[status]}"
+        )
+    return expected
+
+
 def build_rewards(row: dict[str, Any], cfg: dict[str, Any]) -> dict[str, float | None]:
     status = row["self_status"]
-    if status not in ("ok", "omitted", "unparseable", "failed", "truncated"):
-        raise ProtocolError(f"qid={row['qid']} arm={row['arm']}: unknown self_status {status!r}")
-    self_ok = float(row["self_confidence"]) if status == "ok" else None
+    where = f"qid={row['qid']} arm={row['arm']}"
+    _require_status(status, where)
     if status == "ok":
-        fallback = float(row["self_confidence"])
-    elif status == "truncated":
-        # Not one of the deployed fallback constants. Leave it unobserved.
-        fallback = None
-        if row["self_confidence"] is not None:
-            raise ProtocolError(
-                f"qid={row['qid']} arm={row['arm']}: truncated rows store no confidence"
-            )
+        if row["self_confidence"] is None:
+            raise ProtocolError(f"{where}: status ok stored no confidence")
+        self_ok = float(row["self_confidence"])
     else:
-        fallback = float(cfg[f"fallback_{status}"])
-        if abs(float(row["self_confidence"]) - _FALLBACK[status]) > 1e-9:
-            raise ProtocolError(
-                f"qid={row['qid']} arm={row['arm']}: status {status} stored self_confidence "
-                f"{row['self_confidence']} but the deployed fallback is {_FALLBACK[status]}"
-            )
+        # Robust non-ok is not an observation. Older rows stored the fallback
+        # constant on self_confidence; newer rows store null. Neither is a reward.
+        self_ok = None
+        if status == "truncated" and row["self_confidence"] is not None:
+            raise ProtocolError(f"{where}: truncated rows store no confidence")
+        if status != "truncated" and row["self_confidence"] is not None:
+            if abs(float(row["self_confidence"]) - _FALLBACK[status]) > 1e-9:
+                raise ProtocolError(
+                    f"{where}: status {status} stored self_confidence "
+                    f"{row['self_confidence']} but the deployed fallback is {_FALLBACK[status]}"
+                )
+    if "deployed_self_status" in row:
+        fallback = _fallback_from_status(
+            row["deployed_self_status"], row.get("deployed_self_confidence"), cfg,
+            f"{where} deployed",
+        )
+    else:
+        fallback = _fallback_from_status(status, row["self_confidence"], cfg, where)
     g_w = float(cfg["grounding_weight"])
     j_w = float(cfg["judge_weight"])
     s_w = float(cfg["self_weight"])
@@ -182,8 +212,16 @@ def load_joined(results: Path, cfg: dict[str, Any], datasets: Sequence[str] | No
                 "self_confidence": gen["self_confidence"],
                 "self_reported": gen["self_reported"],
                 "self_status": gen["self_status"],
+                **(
+                    {
+                        "deployed_self_confidence": gen.get("deployed_self_confidence"),
+                        "deployed_self_status": gen["deployed_self_status"],
+                    }
+                    if "deployed_self_status" in gen else {}
+                ),
                 "f1": scored["f1"],
                 "correct": scored["correct"],
+                "gold_contained": scored["gold_contained"],
                 "passages": [p["text"] for p in retrieval[key]["passages"]],
             }
             for kind, table in signals.items():

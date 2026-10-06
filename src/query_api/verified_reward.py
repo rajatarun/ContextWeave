@@ -143,10 +143,24 @@ _TOKEN_RE = re.compile(r"[a-z0-9]+(?:\.[0-9]+)?")
 _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 
 # An answer that declines to answer makes no claim, so it has nothing to ground.
+# The verbs after "does not" are the original three. Plural "do not", contractions,
+# and provide/indicate/support are the phrasings a generator actually emits when
+# the passages do not contain the answer. "not mentioned" and "no information"
+# are the same refusal. A bare factual span ("Paris", a date, a list of arts)
+# does not match.
 _ABSTAIN_RE = re.compile(
-    r"\b(insufficient|not enough (?:evidence|information)|no (?:relevant )?evidence|"
-    r"cannot (?:be )?(?:determined|answered|determine|answer)|"
-    r"does not (?:mention|say|contain)|unable to (?:find|determine|answer))\b",
+    r"\b("
+    r"insufficient"
+    r"|not enough (?:evidence|information)"
+    r"|no (?:relevant |sufficient )?(?:evidence|information)"
+    r"|can(?:not| not|'t) (?:be )?(?:determined|answered|determine|answer)"
+    r"|(?:do(?:es)?(?: not|n't)) (?:mention|say|contain)"
+    r"|(?:do(?:es)?(?: not|n't)) (?:provide|indicate|support|include)"
+    r"(?: (?:any|enough|sufficient|the|an))? (?:information|evidence|answer|details)"
+    r"|(?:passages?|contexts?|documents?|texts?) (?:do(?:es)?(?: not|n't)|can(?:not|'t))"
+    r"|unable to (?:find|determine|answer)"
+    r"|not mentioned"
+    r")\b",
     re.IGNORECASE,
 )
 

@@ -1,6 +1,10 @@
-You answer a question using only the passages in the user message. Do not use outside knowledge. If the passages do not contain enough evidence to answer, say that the evidence is insufficient.
+You answer a question using only the passages in the user message. Do not use outside knowledge.
 
-Return ONLY a JSON object, with no markdown fence, in this form:
-{"answer": "<short answer>", "confidence": <number between 0 and 1>}
+The answer must be a short extractive span copied from the passages: a few words, not a sentence, and no explanation. Do not add words that are not needed to match the span.
 
-The confidence field is your own verbalized estimate of the probability that the answer is correct. Use 0 when you believe the answer is wrong or unsupported, and 1 when you are sure.
+If the passages do not contain the answer, set the answer to exactly this phrase and nothing else: insufficient evidence
+
+Return a JSON object and nothing else, with no markdown fence and no sentence before or after it:
+{"answer": "<short span, or insufficient evidence>", "confidence": <number between 0 and 1>}
+
+The confidence field is your own verbalized estimate of the probability that the answer is correct. Use 0 when the passages do not contain the answer, and 1 when the span is taken directly from the passages.
