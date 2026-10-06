@@ -26,7 +26,7 @@
     "fallback_failed": 0.0,
     "fallback_omitted": 0.7,
     "fallback_unparseable": 0.5,
-    "generator_max_output_tokens": 512,
+    "generator_max_output_tokens": 256,
     "generator_model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     "grounding_threshold": 0.6,
     "grounding_weight": 1.0,
@@ -39,7 +39,9 @@
     "low_auroc_max": 0.6,
     "n_per_dataset": 1500,
     "nli_model": "cross-encoder/nli-deberta-v3-small",
+    "normalized_self_gap_fraction": 0.5,
     "nq_overlap_chars": 200,
+    "nq_pool_size": 10,
     "nq_window_chars": 800,
     "prices_usd_per_million_tokens": {
       "us.anthropic.claude-haiku-4-5-20251001-v1:0": {
@@ -65,9 +67,10 @@
     "self_weight": 1.0,
     "temperature": 0,
     "token_estimate": "ceil_utf8_bytes_div_4",
-    "top_k": 5
+    "top_k": 5,
+    "total_usd_cap": 30
   },
-  "created_at": "2026-10-06T14:04:22.894377+00:00",
+  "created_at": "2026-10-06T14:33:22.563678+00:00",
   "datasets": {
     "hotpot": {
       "fraction_top1_differs_across_arms": 0.9186666666666666,
@@ -79,13 +82,13 @@
       "pool_size_min": 2
     },
     "nq": {
-      "fraction_top1_differs_across_arms": 0.12066666666666667,
-      "mean_pairwise_topk_jaccard": 0.9895211640211641,
+      "fraction_top1_differs_across_arms": 0.846,
+      "mean_pairwise_topk_jaccard": 0.5958946208112875,
       "n_questions": 1500,
       "n_rows": 6000,
-      "pool_size_max": 9,
-      "pool_size_mean": 1.68,
-      "pool_size_min": 1
+      "pool_size_max": 10,
+      "pool_size_mean": 10.0,
+      "pool_size_min": 10
     },
     "squad": {
       "fraction_top1_differs_across_arms": 0.836,
@@ -103,8 +106,8 @@
     "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
   },
   "git": {
-    "commit": "e043881560c78312d9ba7747ac62f0e1063c4b72",
-    "dirty": false
+    "commit": "b26062330d239c12a58f5f0cca7371b0520f3db8",
+    "dirty": true
   },
   "seed": 0,
   "stage": "retrieval",

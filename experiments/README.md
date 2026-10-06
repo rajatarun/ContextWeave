@@ -42,9 +42,13 @@ at large.
   Each row has gold short-answer strings and a Wikipedia context that MRQA
   truncated to the first 800 tokens, kept only when the short answer occurs
   in that window. The context is split into overlapping character windows
-  (`nq_window_chars` / `nq_overlap_chars` in `config.yaml`) so the pool has
-  more than one passage. The full Wikipedia page is not in this file.
-  Question type is `nq`.
+  (`nq_window_chars` / `nq_overlap_chars`). The file has no more of the
+  Wikipedia page, and most contexts are one or two windows, so each pool is
+  filled to `nq_pool_size` (10) with hard-negative windows. Those negatives
+  are the top BM25 hits among windows from other documents in the same seeded
+  sample. Ties break by passage id, so the pools are a function of the sample
+  seed. Every gold window stays in the pool; a context that is already longer
+  than `nq_pool_size` is not trimmed. Question type is `nq`.
 
 The sample is a seeded shuffle of question ids, `--n-per-dataset` (default
 1500), written to `results/samples/<dataset>.jsonl` and listed in

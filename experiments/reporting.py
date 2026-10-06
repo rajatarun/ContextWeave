@@ -12,7 +12,9 @@ from pathlib import Path
 from typing import Any
 
 from experiments.assumed import assumed_slopes
-from experiments.common import artifact_meta, read_json, write_json
+from experiments.claims import claim_verdicts
+from experiments.common import artifact_meta, load_config, read_json, write_json
+from experiments.judge_access import access_reason
 
 DATASETS = ("squad", "hotpot", "nq")
 SIGNALS = ("self", "lexical_grounding", "nli_grounding", "judge")
@@ -99,8 +101,31 @@ def write_assumptions(path: Path, cfg: dict[str, Any], seed: int) -> dict[str, A
     return body
 
 
+def _pending_file(doc: _Doc, results: Path, relative: str, table: str) -> None:
+    path = results / relative
+    if not path.is_file():
+        return
+    data = read_json(path)
+    rows = data.get("rows") or []
+    reason = str(data.get("detail") or data.get("reason") or "pending")
+    doc.p(f"`results/{relative}` lists {len(rows)} rows not yet written. {reason}")
+    doc.pending.append({"table": table, "cell": f"{len(rows)} rows", "reason": reason})
+
+
 def render(results: Path) -> tuple[str, str]:
     doc = _Doc()
+    fraction = float(load_config()["normalized_self_gap_fraction"])
+    marker = access_reason(results)
+    doc.h("Claims")
+    for claim in claim_verdicts(results, fraction):
+        doc.p(f"**{claim['id']}**: {claim['verdict']}.")
+        doc.p(claim["because"])
+        doc.p("Artifacts: " + ", ".join(f"`{path}`" for path in claim["artifacts"]) + ".")
+        if claim["verdict"] == "open":
+            doc.pending.append({"table": "claims", "cell": claim["id"], "reason": claim["because"]})
+    _pending_file(doc, results, "generation/pending.json", "generation")
+    _pending_file(doc, results, "signals/judge_pending.json", "judge")
+
     sample = _load(results / "samples" / "sample_manifest.json")
     doc.h("Sample")
     if sample is None:
@@ -167,7 +192,9 @@ def render(results: Path) -> tuple[str, str]:
         for signal in SIGNALS:
             sblock = ((dblock or {}).get("signals") or {}).get(signal) if dblock else None
             if cal is None:
-                reason = "results/calibration/calibration.json is missing"
+                reason = marker if (signal == "judge" and marker) else "results/calibration/calibration.json is missing"
+            elif signal == "judge" and ((cal or {}).get("unavailable_signals") or {}).get("judge") and sblock is None:
+                reason = (cal or {})["unavailable_signals"]["judge"]
             elif dblock is None:
                 reason = f"no calibration block for {name}"
             elif sblock is None:
@@ -238,13 +265,17 @@ def render(results: Path) -> tuple[str, str]:
     for name in DATASETS:
         for signal in SIGNALS:
             block = (((analyses or {}).get("datasets") or {}).get(name) or {}).get(signal) if analyses else None
-            slope = (block or {}).get("slope") if block else None
-            if analyses is None:
-                reason = "results/analyses/analyses.json is missing"
-            elif block is None:
-                reason = f"no analyses block for {name} {signal}"
+            if isinstance(block, dict) and block.get("unavailable"):
+                slope = None
+                reason = str(block["unavailable"])
             else:
-                reason = f"slope block missing for {name} {signal}"
+                slope = (block or {}).get("slope") if block else None
+                if analyses is None:
+                    reason = marker if (signal == "judge" and marker) else "results/analyses/analyses.json is missing"
+                elif block is None:
+                    reason = f"no analyses block for {name} {signal}"
+                else:
+                    reason = f"slope block missing for {name} {signal}"
             slope_rows.append([
                 name, signal,
                 doc.ci_cell("slopes", f"{name} {signal} c0", (slope or {}).get("c0") if slope else None, reason),
@@ -281,7 +312,12 @@ def render(results: Path) -> tuple[str, str]:
                 block = ((((replay or {}).get("datasets") or {}).get(name) or {}).get(reward) or {}).get(update) if replay else None
                 cell = f"{name} {reward} {update}"
                 if replay is None:
-                    reason = "results/replay/replay_summary.json is missing"
+                    if marker and reward in ("verified", "verified_plus_self"):
+                        reason = marker
+                    else:
+                        reason = "results/replay/replay_summary.json is missing"
+                elif reward in ((replay or {}).get("unavailable_rewards") or {}) and block is None:
+                    reason = (replay or {})["unavailable_rewards"][reward]
                 elif block is None:
                     reason = f"no replay block for {cell}"
                 else:

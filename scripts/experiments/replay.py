@@ -11,8 +11,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from experiments.common import (
-    DATASETS, RESULTS, ProtocolError, artifact_meta, load_config, parse_seed_list, write_json,
+    DATASETS, RESULTS, ProtocolError, artifact_meta, load_config, parse_seed_list, read_jsonl, write_json,
 )
+from experiments.judge_access import access_reason
 from experiments.records import load_joined
 from experiments.replay_stage import REWARDS, UPDATES, empirical_mu, general_priors, run_one
 
@@ -54,14 +55,28 @@ def main(argv: list[str] | None = None) -> int:
     seeds = parse_seed_list(args.seeds) if args.seeds else [int(s) for s in cfg["replay_seeds"]]
     names = [p.strip() for p in args.datasets.split(",") if p.strip()]
     try:
+        blocked = access_reason(args.results)
         for name in names:
-            for fname in ("lexical.jsonl", "judge.jsonl"):
-                path = args.results / "signals" / fname
-                if not path.is_file():
-                    raise ProtocolError(f"replay needs {path}. Run the signals stage first.")
-            if not (args.results / "generation" / f"{name}.jsonl").is_file():
-                raise ProtocolError(f"generation output missing for {name}")
+            try:
+                read_jsonl(args.results / "signals" / "lexical.jsonl")
+            except ProtocolError as exc:
+                raise ProtocolError(f"replay needs lexical grounding. {exc}") from exc
+            if not blocked:
+                try:
+                    read_jsonl(args.results / "signals" / "judge.jsonl")
+                except ProtocolError as exc:
+                    pending = args.results / "signals" / "judge_pending.json"
+                    if not pending.is_file():
+                        raise ProtocolError(f"replay needs the judge file. {exc}") from exc
+            try:
+                read_jsonl(args.results / "generation" / f"{name}.jsonl")
+            except ProtocolError:
+                if not (args.results / "generation" / "pending.json").is_file():
+                    raise ProtocolError(f"generation output missing for {name}")
         joined = load_joined(args.results, cfg, names)
+        if not joined:
+            raise ProtocolError("no completed rows to replay")
+        rewards = [r for r in REWARDS if not (blocked and r in ("verified", "verified_plus_self"))]
         import rag_router as R
         priors = general_priors()
         strength = float(R._PRIOR_STRENGTH)
@@ -90,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
                         "best_arm_share", "selected_arm", "applied_reward",
                     ])
                     writer.writeheader()
-                    for reward in REWARDS:
+                    for reward in rewards:
                         pseudos, realizeds, shares = [], [], []
                         for seed in seeds:
                             run = run_one(questions, by_qid, reward, update, seed, mu, priors, strength)
@@ -114,7 +129,13 @@ def main(argv: list[str] | None = None) -> int:
                 png = out_dir / f"{name}_{update}.png"
                 _plot(png, curves)
                 print(f"wrote {csv_path} and {png}", flush=True)
-        body = artifact_meta(cfg, seeds, stage="replay", priors=priors, prior_strength=strength, **summary)
+        unavailable = {}
+        if blocked:
+            unavailable = {"verified": blocked, "verified_plus_self": blocked}
+        body = artifact_meta(
+            cfg, seeds, stage="replay", priors=priors, prior_strength=strength,
+            unavailable_rewards=unavailable, **summary,
+        )
         write_json(out_dir / "replay_summary.json", body)
         print(f"wrote {out_dir / 'replay_summary.json'}")
     except ProtocolError as exc:

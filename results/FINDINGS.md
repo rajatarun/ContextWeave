@@ -2,6 +2,44 @@
 
 Every number is copied from a file under `results/`. A cell whose artifact is missing or whose estimate is null is `pending`.
 
+## Claims
+
+**Assumption 1**: open.
+
+analyses artifact is missing
+
+Artifacts: `results/analyses/analyses.json`.
+
+**Proposition 1**: open.
+
+calibration artifact is missing
+
+Artifacts: `results/calibration/calibration.json`.
+
+**Proposition 2**: open.
+
+analyses artifact is missing
+
+Artifacts: `results/analyses/analyses.json`.
+
+**Theorem 1 scale objection**: open.
+
+analyses or replay artifact is missing
+
+Artifacts: `results/analyses/analyses.json`, `results/replay/replay_summary.json`.
+
+**Proposition 3**: open.
+
+analyses artifact is missing
+
+Artifacts: `results/analyses/analyses.json`, `results/signals/judge_unavailable.json`.
+
+**Section 6 prediction**: open.
+
+calibration artifact is missing
+
+Artifacts: `results/calibration/calibration.json`.
+
 ## Sample
 
 ### Sampled questions
@@ -22,7 +60,7 @@ Seed stored in the manifest: `0`.
 | --- | --- | --- | --- | --- | --- | --- |
 | squad | 1500 | 21 | 36.7473 | 49 | 0.8360 | 0.4349 |
 | hotpot | 1500 | 2 | 9.9560 | 10 | 0.9187 | 0.5717 |
-| nq | 1500 | 1 | 1.6800 | 9 | 0.1207 | 0.9895 |
+| nq | 1500 | 10 | 10.0000 | 10 | 0.8460 | 0.5959 |
 
 ## Generation dry-run
 
@@ -32,9 +70,9 @@ Seed stored in the manifest: `0`.
 | --- | --- |
 | model | us.anthropic.claude-haiku-4-5-20251001-v1:0 |
 | calls | 18000 |
-| input tokens (estimate) | 15386077 |
-| output tokens (upper bound) | 9216000 |
-| USD upper bound | 61.4661 |
+| input tokens (estimate) | 18275359 |
+| output tokens (upper bound) | 4608000 |
+| USD upper bound | 41.3154 |
 
 ceil(utf-8 bytes / 4) summed over the system prompt and the user message
 

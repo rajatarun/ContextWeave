@@ -30,8 +30,16 @@ generator_model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
 judge_model_id: us.meta.llama3-3-70b-instruct-v1:0
 region: us-east-1
 temperature: 0
-generator_max_output_tokens: 512
+# One JSON object: a short answer plus a confidence. 256 tokens is several
+# times a long sentence plus the JSON wrapper. 512 charged for output this
+# format does not use. A response that stops on this cap is self_status
+# truncated and is not treated as a reported confidence.
+generator_max_output_tokens: 256
 judge_max_output_tokens: 300
+
+# Hard ceiling for generation and the judge together, USD. The shared
+# cost_ledger is what both stages read. A stage also has its own --max-usd.
+total_usd_cap: 30
 
 # Token estimates use ceil(utf-8 bytes / 4). That is an approximation, not a
 # provider tokenizer. Dry-run output cost charges the max output length.
@@ -42,9 +50,16 @@ bm25_k1: 1.5
 bm25_b: 0.75
 
 # NQ contexts from the MRQA release are split into windows of this many
-# characters, with this overlap, so the candidate pool has more than one passage.
+# characters, with this overlap. The file has no more of the Wikipedia page,
+# so each pool is filled to nq_pool_size with BM25 hard negatives from other
+# documents in the same seeded sample. Gold windows are never dropped.
 nq_window_chars: 800
 nq_overlap_chars: 200
+nq_pool_size: 10
+
+# Per-arm rank normalization closes the self-vs-grounding regret gap by at
+# least this fraction, on every dataset, before the scale objection is supported.
+normalized_self_gap_fraction: 0.5
 
 # Deployed fallback constants (synthesizer.py). Used only by the
 # self_with_fallbacks replay row. The skip-unobserved row does not use them.

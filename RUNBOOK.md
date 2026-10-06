@@ -26,9 +26,11 @@ Writes `results/samples/{squad,hotpot,nq}.jsonl` and
 python3 scripts/experiments/retrieve.py --seed 0 --top-k 5
 ```
 
-Writes `results/retrieval/{squad,hotpot,nq}.jsonl` and
+Writes one retrieval file per dataset, plus
 `results/retrieval/retrieval_stats.json`. This does not call a hosted model.
-Re-running skips `(qid, arm)` rows already in the file.
+Re-running skips `(qid, arm)` rows already in the file. A new file is
+`.jsonl.gz`; an existing `.jsonl` is left as it is. Passing `--datasets nq`
+keeps the other datasets' stat blocks.
 
 ## 3. Generation dry-run, then generation
 
@@ -36,17 +38,34 @@ Re-running skips `(qid, arm)` rows already in the file.
 python3 scripts/experiments/generate.py --dry-run --seed 0
 ```
 
-Writes `results/generation/dry_run_cost.json`. Read the USD upper bound, then
-pick a cap at or above it.
+Writes `results/generation/dry_run_cost.json`. The upper bound charges
+`generator_max_output_tokens` on every call, so it can sit above the stage
+budget below. The run still uses those caps and stops cleanly when the ledger
+reaches one.
 
 ```bash
-python3 scripts/experiments/generate.py --seed 0 --max-usd <CAP>
+python3 scripts/experiments/generate.py --seed 0 --max-usd 27 --total-usd-cap 30
 ```
 
 Requires AWS credentials that can call Bedrock Converse in `us-east-1`.
 The generator id is `us.anthropic.claude-haiku-4-5-20251001-v1:0` (override
-with `--model-id`). Temperature is 0. Rows already written are skipped.
-`results/generation/cost_log.jsonl` is the running spend.
+with `--model-id`). Temperature is 0. `maxTokens` is 256: the reply is one
+JSON object with a short answer and a confidence, and a response that stops
+because it hit that cap is stored with `self_status` `truncated` rather than
+parsed as a confidence. Rows already written are skipped.
+
+Generation and the judge share `results/cost_ledger.jsonl` (gzipped when the
+file is new). `--total-usd-cap` defaults to 30 and is the sum of both stages.
+`--max-usd 27` reserves the generation stage; the judge's stage budget is the
+remainder, $3. The ledger is what the judge reads, so a judge call is also
+refused when generation spend plus that call would cross $30. If generation
+stops under $27, the unused part of the $30 can be given to the judge by
+raising its `--max-usd` up to `30` minus the ledger total.
+
+If a stage hits either cap it stops before the next call, keeps the rows it
+already wrote, and lists the rest in `results/generation/pending.json` or
+`results/signals/judge_pending.json`. That stop is not an error. A row named
+there is pending, and later stages score only the completed rows.
 
 ## 4. Signals
 
@@ -57,8 +76,21 @@ separate Bedrock model, `us.meta.llama3-3-70b-instruct-v1:0`.
 python3 scripts/experiments/signals.py lexical --seed 0
 python3 scripts/experiments/signals.py nli --seed 0
 python3 scripts/experiments/signals.py judge --dry-run --seed 0
-python3 scripts/experiments/signals.py judge --seed 0 --max-usd <JUDGE_CAP>
+python3 scripts/experiments/signals.py judge --seed 0 --max-usd 3 --total-usd-cap 30
 ```
+
+Lexical grounding and calibration, replay, analyses, and `write_results` read
+only the committed sample, the retrieval files, and the generation output.
+The judge calls Bedrock. The NLI stage downloads its pinned cross-encoder
+from Hugging Face. Nothing else in those stages uses the network.
+
+If the judge model returns access denied, the stage exits non-zero and writes
+`results/signals/judge_unavailable.json`. Calibration, replay, analyses, and
+`write_results` still run. Judge cells and verified-reward cells stay pending
+with the reason `judge model access not yet granted`.
+
+New raw outputs (generation, signals, and a retrieval file that does not
+already exist) are written as `.jsonl.gz`. Readers accept either suffix.
 
 The judge dry-run counts sampled calls. It does not price them, because the
 prompt contains the generated answer and the dry-run does not invent one.
@@ -91,10 +123,10 @@ SMOKE=results/smoke
 python3 scripts/experiments/sample_datasets.py --seed 0 --n-per-dataset 10 --results "$SMOKE"
 python3 scripts/experiments/retrieve.py --seed 0 --results "$SMOKE"
 python3 scripts/experiments/generate.py --dry-run --seed 0 --results "$SMOKE"
-python3 scripts/experiments/generate.py --seed 0 --max-usd 1 --results "$SMOKE"
+python3 scripts/experiments/generate.py --seed 0 --max-usd 1 --total-usd-cap 2 --results "$SMOKE"
 python3 scripts/experiments/signals.py lexical --seed 0 --results "$SMOKE"
 python3 scripts/experiments/signals.py nli --seed 0 --results "$SMOKE"
-python3 scripts/experiments/signals.py judge --seed 0 --max-usd 1 --results "$SMOKE"
+python3 scripts/experiments/signals.py judge --seed 0 --max-usd 1 --total-usd-cap 2 --results "$SMOKE"
 python3 scripts/experiments/calibrate.py --seed 0 --bootstrap 200 --results "$SMOKE"
 python3 scripts/experiments/replay.py --seeds 0,1 --results "$SMOKE"
 python3 scripts/experiments/analyses.py --seed 0 --bootstrap 200 --results "$SMOKE"

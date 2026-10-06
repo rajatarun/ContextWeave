@@ -8,10 +8,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from experiments.common import DATASETS, RESULTS, ProtocolError, artifact_meta, load_config, write_json
+from experiments.common import (
+    DATASETS, RESULTS, ProtocolError, artifact_meta, done_keys, load_config, stage_jsonl, write_json,
+)
 from experiments.generate_stage import (
     dry_run, generate_rows, load_retrieval, make_client, system_prompt, write_dry_run_artifact,
 )
+from experiments.ledger import SPEND_CAP_REASON, Budget
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -23,6 +26,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--model-id", default=None)
     ap.add_argument("--region", default=None)
     ap.add_argument("--max-usd", type=float, default=None)
+    ap.add_argument("--total-usd-cap", type=float, default=None,
+                    help="shared generation+judge ceiling (default: config total_usd_cap)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
     cfg = load_config(args.config)
@@ -48,21 +53,46 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.max_usd is None:
             raise ProtocolError("--max-usd is required for a real generation run. Use --dry-run to estimate first.")
+        total_cap = float(cfg["total_usd_cap"]) if args.total_usd_cap is None else args.total_usd_cap
         client = make_client(cfg["region"])
+        budget = Budget(args.results, "generate", args.max_usd, total_cap)
+        pending: list[dict] = []
+        stop_reason = None
         total_written = 0
-        for name in names:
+        for i, name in enumerate(names):
             subset = [r for r in rows if r["dataset"] == name]
             summary = generate_rows(
-                cfg, subset,
-                args.results / "generation" / f"{name}.jsonl",
-                args.results / "generation" / "cost_log.jsonl",
-                model_id=model_id, max_usd=args.max_usd, client=client,
+                cfg, subset, stage_jsonl(args.results / "generation", name), budget,
+                model_id=model_id, client=client,
             )
             total_written += summary["written"]
-            print(f"{name}: wrote {summary['written']} skipped {summary['skipped']} spent ${summary['spent_usd']:.6f}")
+            print(
+                f"{name}: wrote {summary['written']} skipped {summary['skipped']} "
+                f"ledger ${summary['spent_usd']:.6f}"
+            )
+            if summary["stopped"]:
+                stop_reason = summary["stop_reason"]
+                pending.extend(summary["pending"])
+                for later in names[i + 1:]:
+                    already = done_keys(stage_jsonl(args.results / "generation", later), ("qid", "arm"))
+                    pending.extend(
+                        {"qid": r["qid"], "arm": r["arm"], "dataset": r["dataset"]}
+                        for r in rows
+                        if r["dataset"] == later and (r["qid"], r["arm"]) not in already
+                    )
+                break
+        pending_path = args.results / "generation" / "pending.json"
+        if pending:
+            write_json(pending_path, {"reason": SPEND_CAP_REASON, "detail": stop_reason, "rows": pending})
+            print(f"spend cap: kept {total_written} rows, {len(pending)} left pending")
+            print(stop_reason)
+        elif pending_path.is_file():
+            pending_path.unlink()
         meta = artifact_meta(
             cfg, seed, stage="generate", model_id=model_id,
             prompts={"generator_system": system_prompt()}, called_model=True,
+            total_usd_cap=total_cap, max_usd=args.max_usd,
+            stopped=bool(stop_reason), stop_reason=stop_reason, n_pending=len(pending),
         )
         write_json(args.results / "generation" / "generation_meta.json", meta)
     except ProtocolError as exc:

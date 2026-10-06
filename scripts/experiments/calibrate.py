@@ -10,7 +10,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from experiments.calibrate_stage import SIGNALS, calibrate_all
-from experiments.common import DATASETS, RESULTS, ProtocolError, artifact_meta, load_config, write_json
+from experiments.common import DATASETS, RESULTS, ProtocolError, artifact_meta, load_config, read_jsonl, write_json
+from experiments.judge_access import access_reason
+from experiments.ledger import SPEND_CAP_REASON
 from experiments.records import load_joined
 
 
@@ -22,8 +24,10 @@ def _signal_frame(rows: list[dict], signal: str) -> list[dict] | None:
             reason = None if value is not None else row["self_status"]
         else:
             reason = row.get(f"{signal}_reason")
-            if reason == "signal_file_missing":
+            if reason == "signal_file_missing" or reason == "judge model access not yet granted":
                 return None
+            if isinstance(reason, str) and reason.startswith(SPEND_CAP_REASON):
+                continue
             value = row.get(signal)
         frame.append({
             "qid": row["qid"], "arm": row["arm"], "f1": row["f1"],
@@ -45,10 +49,19 @@ def main(argv: list[str] | None = None) -> int:
     n_boot = cfg["bootstrap_samples"] if args.bootstrap is None else args.bootstrap
     names = [p.strip() for p in args.datasets.split(",") if p.strip()]
     try:
-        gen = args.results / "generation" / f"{names[0]}.jsonl"
-        if not gen.is_file():
-            raise ProtocolError(f"generation output not found: {gen}")
+        found_generation = False
+        for name in names:
+            try:
+                read_jsonl(args.results / "generation" / f"{name}.jsonl")
+                found_generation = True
+            except ProtocolError:
+                continue
+        pending_gen = args.results / "generation" / "pending.json"
+        if not found_generation and not pending_gen.is_file():
+            raise ProtocolError(f"generation output not found under {args.results / 'generation'}")
         joined = load_joined(args.results, cfg, names)
+        if not joined:
+            raise ProtocolError("no completed generation rows to calibrate")
         present = []
         for signal in SIGNALS:
             if _signal_frame(joined, signal) is None:
@@ -68,9 +81,12 @@ def main(argv: list[str] | None = None) -> int:
         result = calibrate_all(
             by_dataset, seed, n_boot, float(cfg["high_coverage"]), float(cfg["low_auroc_max"]),
         )
+        blocked = access_reason(args.results)
         body = artifact_meta(
             cfg, seed, stage="calibration", bootstrap_samples=n_boot,
-            signals_present=present, **result,
+            signals_present=present,
+            unavailable_signals={"judge": blocked} if blocked else {},
+            **result,
         )
         path = args.results / "calibration" / "calibration.json"
         write_json(path, body)

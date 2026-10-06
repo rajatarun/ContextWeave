@@ -90,31 +90,52 @@ def graph_scores(question: str, passages: Sequence[dict[str, str]]) -> list[floa
     return scores
 
 
+class BM25Index:
+    """Okapi BM25 over a fixed document set. ``scores`` is the query-only half.
+
+    Document frequency depends only on the documents, so a caller that ranks
+    many queries against one corpus (NQ hard negatives, one index per source
+    document) builds this once.
+    """
+
+    def __init__(self, docs: Sequence[Sequence[str]], k1: float, b: float):
+        self.k1 = k1
+        self.b = b
+        self.n = len(docs)
+        self.avgdl = (sum(len(doc) for doc in docs) / self.n) if self.n else 0.0
+        self.df: Counter[str] = Counter()
+        self.tfs: list[Counter[str]] = []
+        self.dls: list[int] = []
+        for doc in docs:
+            self.df.update(set(doc))
+            self.tfs.append(Counter(doc))
+            self.dls.append(len(doc))
+
+    def scores(self, query: Sequence[str]) -> list[float]:
+        if self.n == 0:
+            return []
+        out = []
+        k1, b, avgdl, n, df = self.k1, self.b, self.avgdl, self.n, self.df
+        for tf, dl in zip(self.tfs, self.dls):
+            score = 0.0
+            for term in query:
+                freq = tf.get(term, 0)
+                if freq == 0:
+                    continue
+                n_q = df[term]
+                idf = math.log(1.0 + (n - n_q + 0.5) / (n_q + 0.5))
+                denom = freq + k1 * (1.0 - b + b * dl / avgdl) if avgdl else freq + k1
+                score += idf * (freq * (k1 + 1.0)) / denom
+            out.append(score)
+        return out
+
+
+def bm25_from_tokens(query: Sequence[str], docs: Sequence[Sequence[str]], k1: float, b: float) -> list[float]:
+    return BM25Index(docs, k1, b).scores(query)
+
+
 def bm25_scores(question: str, passages: Sequence[dict[str, str]], k1: float, b: float) -> list[float]:
-    docs = [tokenize(p["text"]) for p in passages]
-    query = tokenize(question)
-    n = len(docs)
-    if n == 0:
-        return []
-    avgdl = sum(len(d) for d in docs) / n
-    df: Counter[str] = Counter()
-    for doc in docs:
-        df.update(set(doc))
-    scores = []
-    for doc in docs:
-        tf = Counter(doc)
-        dl = len(doc)
-        score = 0.0
-        for term in query:
-            freq = tf.get(term, 0)
-            if freq == 0:
-                continue
-            n_q = df[term]
-            idf = math.log(1.0 + (n - n_q + 0.5) / (n_q + 0.5))
-            denom = freq + k1 * (1.0 - b + b * dl / avgdl) if avgdl else freq + k1
-            score += idf * (freq * (k1 + 1.0)) / denom
-        scores.append(score)
-    return scores
+    return bm25_from_tokens(tokenize(question), [tokenize(p["text"]) for p in passages], k1, b)
 
 
 def _minmax(xs: Sequence[float]) -> list[float]:

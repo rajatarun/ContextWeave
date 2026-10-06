@@ -1,6 +1,7 @@
 """Shared config, artifact metadata, JSONL resume, and cost accounting."""
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import re
@@ -51,7 +52,8 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
         "fallback_omitted", "fallback_unparseable", "fallback_failed",
         "keyword_weight", "bm25_k1", "bm25_b", "bootstrap_samples",
         "replay_seeds", "high_coverage", "low_auroc_max",
-        "nq_window_chars", "nq_overlap_chars",
+        "nq_window_chars", "nq_overlap_chars", "nq_pool_size",
+        "normalized_self_gap_fraction", "total_usd_cap",
     )
     missing = [k for k in required if k not in data]
     if missing:
@@ -166,11 +168,49 @@ def read_json(path: Path) -> Any:
         raise ProtocolError(f"{path}: invalid JSON: {exc}") from exc
 
 
+def locate_jsonl(path: Path) -> Path:
+    """Find ``path`` or its ``.jsonl`` / ``.jsonl.gz`` sibling.
+
+    Readers accept either spelling so a stage can resume a plain file written
+    earlier and still open a gzipped file written later.
+    """
+    if path.is_file():
+        return path
+    text = str(path)
+    alt = Path(text[:-3]) if text.endswith(".gz") else Path(text + ".gz")
+    if alt.is_file():
+        return alt
+    raise ProtocolError(f"missing JSONL file: {path}")
+
+
+def stage_jsonl(directory: Path, stem: str) -> Path:
+    """Where a raw stage file is read or appended.
+
+    An existing ``.jsonl`` or ``.jsonl.gz`` is kept. A new file is gzipped.
+    Both present at once is an error: the reader would have to guess which
+    copy is current.
+    """
+    plain = directory / f"{stem}.jsonl"
+    gz = directory / f"{stem}.jsonl.gz"
+    if plain.is_file() and gz.is_file():
+        raise ProtocolError(f"both {plain} and {gz} exist; refusing to guess which is current")
+    if gz.is_file():
+        return gz
+    if plain.is_file():
+        return plain
+    return gz
+
+
+def _open_jsonl(path: Path):
+    if str(path).endswith(".gz"):
+        return gzip.open(path, "rt", encoding="utf-8")
+    return path.open(encoding="utf-8")
+
+
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.is_file():
-        raise ProtocolError(f"missing JSONL file: {path}")
+    path = locate_jsonl(path)
     rows: list[dict[str, Any]] = []
-    with path.open() as fh:
+    with _open_jsonl(path) as fh:
         for i, line in enumerate(fh, 1):
             if not line.strip():
                 continue
@@ -192,20 +232,26 @@ def validate_rows(rows: Sequence[dict[str, Any]], required: Sequence[str], path:
 
 
 def done_keys(path: Path, fields: Sequence[str]) -> set[tuple]:
-    if not path.is_file():
+    try:
+        actual = locate_jsonl(path)
+    except ProtocolError:
         return set()
     keys = set()
-    for row in read_jsonl(path):
-        validate_rows([row], fields, path)
+    for row in read_jsonl(actual):
+        validate_rows([row], fields, actual)
         keys.add(tuple(row[f] for f in fields))
     return keys
 
 
 def append_jsonl(path: Path, row: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a") as fh:
-        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-        fh.flush()
+    line = json.dumps(row, ensure_ascii=False) + "\n"
+    if str(path).endswith(".gz"):
+        with gzip.open(path, "at", encoding="utf-8") as fh:
+            fh.write(line)
+    else:
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(line)
 
 
 def parse_seed_list(text: str) -> list[int]:

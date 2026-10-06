@@ -12,8 +12,11 @@ the gold passage is inside the pool. It is not retrieval over Wikipedia at large
 * Natural Questions, tractable form: the MRQA 2019 in-domain dev file
   ``NaturalQuestionsShort.jsonl.gz`` (gold short answers, Wikipedia context
   truncated to the first 800 tokens, kept when the short answer is inside that
-  window). The context is split into overlapping character windows so the pool
-  has more than one passage. The full Wikipedia page is not in this file.
+  window). The context is split into overlapping character windows. That file
+  has no more of the Wikipedia page, and most contexts fit in one or two
+  windows, so the pool is filled out to ``nq_pool_size`` with hard-negative
+  windows. Negatives are the top BM25 hits from other documents in the same
+  seeded sample, tie-broken by passage id. Every gold window stays in the pool.
 """
 from __future__ import annotations
 
@@ -26,7 +29,10 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from experiments.common import DATASETS, ProtocolError, artifact_meta, sha256_file, write_json
+from experiments.common import (
+    DATASETS, ProtocolError, artifact_meta, read_json, sha256_file, write_json,
+)
+from experiments.retrieve_stage import BM25Index, tokenize
 
 NQ_URL_DEFAULT = "https://s3.us-east-2.amazonaws.com/mrqa/release/v2/dev/NaturalQuestionsShort.jsonl.gz"
 NQ_MD5_DEFAULT = "c0347eebbca02d10d1b07b9a64efe61d"
@@ -71,6 +77,9 @@ def _record(dataset: str, qid: str, question: str, question_type: str,
         raise ProtocolError(f"{dataset}: a question has an empty id")
     if not pool:
         raise ProtocolError(f"{dataset}:{qid}: candidate pool is empty")
+    # A context shared by several questions must not share one list: later
+    # pool edits (NQ hard negatives) would otherwise land on every question.
+    pool = [dict(p) for p in pool]
     return {
         "qid": qid,
         "dataset": dataset,
@@ -204,10 +213,13 @@ def load_nq(cfg: dict[str, Any], cache_dir: Path) -> tuple[list[dict[str, Any]],
             n_lines += 1
             context = obj.get("context") or ""
             pieces = chunk_windows(context, window, overlap)
+            source = _pid("nq-src", context)
             pool = [{
                 "id": _pid("nq", context + f"\n{i}"),
                 "title": "",
                 "text": piece,
+                "source": source,
+                "role": "gold",
             } for i, piece in enumerate(pieces)]
             for qa in obj["qas"]:
                 gold = [a for a in qa.get("answers") or [] if isinstance(a, str) and a.strip()]
@@ -225,10 +237,97 @@ def load_nq(cfg: dict[str, Any], cache_dir: Path) -> tuple[list[dict[str, Any]],
         "limitation": (
             "Wikipedia context is the MRQA truncation (first 800 tokens, answer "
             "inside the window), then split into overlapping character windows. "
-            "The full Wikipedia page is not in this file."
+            "The full Wikipedia page is not in this file. The candidate pool "
+            "keeps every gold window and adds BM25 hard-negative windows from "
+            "other documents in the seeded sample until the pool reaches "
+            "nq_pool_size. Ranking ties break by passage id."
         ),
     }
     return rows, info
+
+
+def expand_nq_pools(rows: list[dict[str, Any]], target: int, k1: float, b: float) -> dict[str, Any]:
+    """Fill each NQ pool to ``target`` passages. Gold windows are kept.
+
+    Hard negatives are windows from other sampled documents, ranked by BM25
+    against the question. The ranking is a pure function of the sampled
+    corpus: score descending, passage id ascending. The sample seed is what
+    makes the corpus, and therefore the pools, reproducible.
+    """
+    if target < 2:
+        raise ProtocolError("nq_pool_size must be at least 2 so a negative can be added")
+    corpus: dict[str, dict[str, str]] = {}
+    for row in rows:
+        if row.get("dataset") != "nq":
+            raise ProtocolError("expand_nq_pools received a non-NQ row")
+        if not row["pool"]:
+            raise ProtocolError(f"nq {row['qid']}: gold pool is empty")
+        for passage in row["pool"]:
+            if passage.get("role") not in (None, "gold"):
+                raise ProtocolError(f"nq {row['qid']}: expand expects gold windows only")
+            source = passage.get("source")
+            if not source:
+                raise ProtocolError(f"nq {row['qid']}: gold window has no source id")
+            passage["role"] = "gold"
+            previous = corpus.get(passage["id"])
+            if previous is None:
+                corpus[passage["id"]] = passage
+            elif previous["text"] != passage["text"] or previous.get("source") != source:
+                raise ProtocolError(f"nq passage {passage['id']} has two different texts")
+    tokens = {pid: tokenize(p["text"]) for pid, p in corpus.items()}
+    # One index per source document. Every question from that document has the
+    # same gold windows, so the candidate set (and its document frequencies)
+    # does not change from question to question.
+    indexes: dict[str, tuple[list[dict[str, str]], BM25Index]] = {}
+    added = 0
+    sizes = []
+    gold_sizes = []
+    for row in rows:
+        gold = list(row["pool"])
+        gold_ids = {p["id"] for p in gold}
+        gold_text = {p["text"] for p in gold}
+        source = gold[0]["source"]
+        if any(p.get("source") != source for p in gold):
+            raise ProtocolError(f"nq {row['qid']}: gold windows come from more than one document")
+        gold_sizes.append(len(gold))
+        need = target - len(gold)
+        if need > 0:
+            prepared = indexes.get(source)
+            if prepared is None:
+                candidates = [
+                    p for p in corpus.values()
+                    if p.get("source") != source and p["id"] not in gold_ids and p["text"] not in gold_text
+                ]
+                candidates.sort(key=lambda p: p["id"])
+                prepared = (candidates, BM25Index([tokens[p["id"]] for p in candidates], k1, b))
+                indexes[source] = prepared
+            candidates, index = prepared
+            scores = index.scores(tokenize(row["question"]))
+            order = sorted(range(len(candidates)), key=lambda i: (-scores[i], candidates[i]["id"]))
+            for i in order[:need]:
+                picked = dict(candidates[i])
+                picked["role"] = "hard_negative"
+                row["pool"].append(picked)
+                added += 1
+        if len(row["pool"]) < target:
+            raise ProtocolError(
+                f"nq {row['qid']}: pool has {len(row['pool'])} passages and nq_pool_size is {target}. "
+                "The sampled documents did not contain enough hard-negative windows."
+            )
+        sizes.append(len(row["pool"]))
+    return {
+        "nq_pool_size": target,
+        "negative_selection": (
+            "BM25 over windows from other documents in the seeded sample; "
+            "ties break by passage id. Every gold window is kept, so a "
+            "document that already has more windows than nq_pool_size stays larger."
+        ),
+        "pool_size_min": min(sizes),
+        "pool_size_max": max(sizes),
+        "pool_size_mean": sum(sizes) / len(sizes),
+        "gold_windows_mean": sum(gold_sizes) / len(gold_sizes),
+        "hard_negatives_added": added,
+    }
 
 
 LOADERS = {"squad": load_squad, "hotpot": load_hotpot}
@@ -259,21 +358,49 @@ def write_sample(rows: list[dict[str, Any]], path: Path) -> None:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def _qid_list(manifest: dict[str, Any], dataset: str) -> list[str] | None:
+    for block in manifest.get("qids") or []:
+        if block.get("dataset") == dataset:
+            qids = block.get("qids")
+            return list(qids) if isinstance(qids, list) else None
+    return None
+
+
 def build_sample(cfg: dict[str, Any], results: Path, n: int, seed: int,
                  datasets: tuple[str, ...] = DATASETS) -> dict[str, Any]:
     cache = results / "cache"
+    out_dir = results / "samples"
+    manifest_path = out_dir / "sample_manifest.json"
+    previous = read_json(manifest_path) if manifest_path.is_file() else None
     per_info = {}
     counts = {}
-    out_dir = results / "samples"
     all_qids = []
+    requested = []
     for name in datasets:
         if name not in DATASETS:
             raise ProtocolError(f"unknown dataset {name!r}")
+        if name in requested:
+            raise ProtocolError(f"dataset {name} was requested twice")
+        requested.append(name)
+    for name in requested:
         if name == "nq":
             rows, info = load_nq(cfg, cache)
         else:
             rows, info = LOADERS[name](cfg)
         picked = sample_rows(rows, n, seed, name)
+        if name == "nq":
+            pool_info = expand_nq_pools(
+                picked, int(cfg["nq_pool_size"]), float(cfg["bm25_k1"]), float(cfg["bm25_b"]),
+            )
+            info.update(pool_info)
+        if previous is not None and previous.get("seed") == seed:
+            old_qids = _qid_list(previous, name)
+            new_qids = [r["qid"] for r in picked]
+            if old_qids is not None and old_qids != new_qids:
+                raise ProtocolError(
+                    f"{name}: question ids changed under seed {seed}. "
+                    "Refusing to replace a committed sample."
+                )
         path = out_dir / f"{name}.jsonl"
         write_sample(picked, path)
         info["sha256"] = sha256_file(path)
@@ -282,6 +409,22 @@ def build_sample(cfg: dict[str, Any], results: Path, n: int, seed: int,
         per_info[name] = info
         counts[name] = len(picked)
         all_qids.append({"dataset": name, "qids": [r["qid"] for r in picked]})
+    if previous is not None:
+        for name in DATASETS:
+            if name in requested:
+                continue
+            old_info = (previous.get("datasets") or {}).get(name)
+            old_count = (previous.get("counts") or {}).get(name)
+            old_qids = _qid_list(previous, name)
+            if not old_info or old_count is None or old_qids is None:
+                raise ProtocolError(
+                    f"sample rebuild asked only for {requested}, and the existing "
+                    f"manifest has no complete entry for {name}."
+                )
+            per_info[name] = old_info
+            counts[name] = old_count
+            all_qids.append({"dataset": name, "qids": old_qids})
+    all_qids.sort(key=lambda block: DATASETS.index(block["dataset"]))
     manifest = artifact_meta(
         cfg, seed,
         n_per_dataset=n,

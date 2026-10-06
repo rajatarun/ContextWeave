@@ -2,6 +2,12 @@
 
 | table | cell | why |
 | --- | --- | --- |
+| claims | Assumption 1 | analyses artifact is missing |
+| claims | Proposition 1 | calibration artifact is missing |
+| claims | Proposition 2 | analyses artifact is missing |
+| claims | Theorem 1 scale objection | analyses or replay artifact is missing |
+| claims | Proposition 3 | analyses artifact is missing |
+| claims | Section 6 prediction | calibration artifact is missing |
 | calibration | squad self coverage | results/calibration/calibration.json is missing |
 | calibration | squad self brier | results/calibration/calibration.json is missing |
 | calibration | squad self ece | results/calibration/calibration.json is missing |
