@@ -28,7 +28,7 @@ and a corrected combination rule}
 \maketitle
 
 \begin{abstract}
-The paper's Theorem~1 lower-bounds correctness regret of a self-confidence router by a constant times $\ln T$, with that constant proportional to $1/s^2$ and $s=(1-\rho)(c_1-c_0')$. The factor $(c_1-c_0')$ is a numeric scale of the confidence encoding. This note proves a scale-free replacement: any learner whose observation is a garbling of the honest-wrong event pays
+The paper's Theorem~1 lower-bounds correctness regret by a constant times $\ln T$. That constant is proportional to $1/s^2$, with $s=(1-\rho)(c_1-c_0')$. The factor $(c_1-c_0')$ is a numeric scale of the confidence encoding. This note proves a scale-free replacement: any learner whose observation is a garbling of the honest-wrong event pays
 \[
 \liminf_{T\to\infty}\frac{\E[\Reg_Y(T)]}{\ln T}
 \ge\sum_{a\neq a^\star}
@@ -114,11 +114,12 @@ The right-hand side does not depend on $(P_0,P_1)$ or on any encoding of $C$.
 
 \begin{proof}
 The joint law of $(W,X)$ factors as $\mathrm{Bernoulli}(\alpha)\otimes K(dx\mid w)$ with a kernel $K$ free of the arm, by Assumption~\ref{ass:channel}. The chain rule gives
-\[
+\begin{align*}
 \KL\!\big(\mathcal L_\mu(W,X)\,\|\,\mathcal L_{\mu'}(W,X)\big)
-=\kl(\alpha\|\alpha')+\E_{\mu}\!\big[\KL(K(\cdot\mid W)\|K(\cdot\mid W))\big]
-=\kl(\alpha\|\alpha').
-\]
+&=\kl(\alpha\|\alpha')\\
+&\quad+\E_{\mu}\big[\KL\big(K(\cdot\mid W)\,\|\,K(\cdot\mid W)\big)\big]\\
+&=\kl(\alpha\|\alpha').
+\end{align*}
 $X$ is a coordinate of $(W,X)$, so the data-processing inequality yields the claim.
 \end{proof}
 
@@ -190,12 +191,12 @@ The hypothesis $q_T\ge 1-T^{\eps-1}$ gives $-\ln(1-q_T)\ge(1-\eps)\ln T$. Also $
 \[
 \kl(p_T\|q_T)\ge(1-\eps)\ln T-o(\ln T).
 \]
-Combine with~\eqref{eq:transport}:
+Combine with~\eqref{eq:transport}. For every fixed alternative $\mu_a'$ and every $\eps>0$,
 \[
 \liminf_{T\to\infty}\frac{\E_\nu[N_a(T)]}{\ln T}
 \ge\frac{1-\eps}{\kl(\alpha_a\|\alpha_a')}.
 \]
-Let $\eps\downarrow 0$ and then $\mu_a'\downarrow\mu_{a^\star}$. Continuity of $\kl(\alpha_a\|\cdot)$ on $(0,1)$ gives $\kl(\alpha_a\|\alpha_a')\downarrow\kl(\alpha_a\|\alpha_{a^\star})$, and therefore
+The right-hand side may be sent to $1/\kl(\alpha_a\|\alpha_a')$ by letting $\eps\downarrow 0$. This holds for every $\mu_a'\in(\mu_{a^\star},1)$. Continuity of $\kl(\alpha_a\|\cdot)$ on $(0,1)$ gives $\kl(\alpha_a\|\alpha_a')\downarrow\kl(\alpha_a\|\alpha_{a^\star})$ as $\mu_a'\downarrow\mu_{a^\star}$, so the liminf is at least every number strictly below $1/\kl(\alpha_a\|\alpha_{a^\star})$, and therefore
 \[
 \liminf_{T\to\infty}\frac{\E_\nu[N_a(T)]}{\ln T}
 \ge\frac{1}{\kl(\alpha_a\|\alpha_{a^\star})}.
@@ -376,7 +377,7 @@ c_1-c_0
 \end{align*}
 where $c_0(s)=\sum_{i\in s}w_i c_{i,0}/\sum_{i\in s}w_i$. The second sum can dominate.
 
-Concrete counterexample. Two signals, equal weights. Signal $A$ has $(c_1,c_0)=(0.1,0.0)$, so $s_A=0.1$. Signal $B$ has $(c_1,c_0)=(0.95,0.9)$, so $s_B=0.05$. Given $Y=1$, the mask is $\{A\}$ almost surely; given $Y=0$, the mask is $\{B\}$ almost surely. Then $S$ is a function of $Y$, so Assumption~\ref{ass:mask} holds, and both signals satisfy Assumption~\ref{ass:signal}. The combined reward is observed on every round, with
+Example. Two signals, equal weights. Signal $A$ has $(c_1,c_0)=(0.1,\,0)$, so $s_A=0.1$. Signal $B$ has $(c_1,c_0)=(0.95,\,0.9)$, so $s_B=0.05$. Given $Y=1$, the mask is $\{A\}$ almost surely. Given $Y=0$, the mask is $\{B\}$ almost surely. Then $S$ is a function of $Y$, so Assumption~\ref{ass:mask} holds, and both signals satisfy Assumption~\ref{ass:signal}. The combined reward is observed on every round, with
 \[
 \E[R\mid Y=1]=0.1,\qquad\E[R\mid Y=0]=0.9.
 \]
@@ -408,12 +409,18 @@ Signal slopes are $s_G=0.02$ and $s_J=1$, both positive and arm-free. Direct exp
 \end{align*}
 So $r_b>r_{a^\star}$ while $\mu_b<\mu_{a^\star}$. Each signal alone would have preserved the order: the $G$-only means are $0.518$ and $0.514$, and the $J$-only means are $0.9$ and $0.7$. The reversal is produced entirely by which signal the arm makes available.
 
-The same construction is what ``one retrieval strategy yields claim-extractable answers more often'' does to a two-signal reward. Grounding plays the role of $G$ when a verbose strategy extracts claims on almost every round, and the judge plays the role of $J$ when it is the only signal left on rounds the terse strategy does not make claim-extractable.
+The same construction is what arm-dependent grounding coverage does to a two-signal reward. One strategy extracts claims on almost every round, so grounding is almost always the observed signal. The other strategy rarely extracts a claim, so the remaining signal is the one that enters the average.
 \end{remark}
 
-\begin{proposition}[What remains true, and the inverse-propensity correction]\label{prop:ipw}
+\begin{proposition}[What survives]\label{prop:ipw}
 \begin{enumerate}
-\item \emph{Single signal, missingness independent of $Y$ given the arm.} Suppose $m=1$, Assumption~\ref{ass:signal} holds with slope $s>0$, and $\P(S=\emptyset\mid Y,\,a)=\P(S=\emptyset\mid a)$. Skipping unobserved rounds yields
+\item \emph{Single signal.}
+Let $m=1$, and let Assumption~\ref{ass:signal} hold with slope $s>0$.
+Let the miss probability be free of $Y$:
+\[
+\P(1\notin S\mid Y,\,a)=\P(1\notin S\mid a).
+\]
+Skipping unobserved rounds yields
 \[
 \E[V\mid a,\,S\neq\emptyset]=c_0+s\mu_a.
 \]

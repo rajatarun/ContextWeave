@@ -1,6 +1,6 @@
 # Proof note
 
-`tightened_claims.tex` is a standalone note. It does not replace the paper. The statements below use the paper's numbering (one counter per environment).
+`tightened_claims.tex` is a standalone note, compiled as `tightened_claims.pdf`. It does not replace the paper. The statements below use the paper's numbering (one counter per environment).
 
 | Note | Paper | Status |
 |---|---|---|
