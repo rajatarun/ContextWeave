@@ -224,6 +224,30 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def sample_qids_by_dataset(results: Path, datasets: Sequence[str]) -> dict[str, set[str]]:
+    """Question ids in ``results/samples/<dataset>.jsonl`` for each dataset."""
+    out: dict[str, set[str]] = {}
+    for name in datasets:
+        path = results / "samples" / f"{name}.jsonl"
+        rows = read_jsonl(path)
+        qids: list[Any] = []
+        for i, row in enumerate(rows, 1):
+            qid = row.get("qid")
+            if qid is None or qid == "":
+                raise ProtocolError(f"{path}:{i}: sample row has no qid")
+            qids.append(qid)
+        if len(qids) != len(set(qids)):
+            raise ProtocolError(f"{path}: duplicate question ids in the sample")
+        out[name] = set(qids)
+    return out
+
+
+def in_sample(row: dict[str, Any], qids_by_dataset: dict[str, set[str]]) -> bool:
+    """True when ``row`` is a question id written under ``results/samples/``."""
+    dataset = row.get("dataset")
+    return dataset in qids_by_dataset and row.get("qid") in qids_by_dataset[dataset]
+
+
 def validate_rows(rows: Sequence[dict[str, Any]], required: Sequence[str], path: Path) -> None:
     for i, row in enumerate(rows, 1):
         missing = [k for k in required if k not in row]

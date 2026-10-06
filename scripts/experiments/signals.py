@@ -15,8 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from experiments.common import (
     DATASETS, RESULTS, ProtocolError, append_jsonl, artifact_meta, cost_usd,
-    done_keys, estimate_tokens, load_config, price_for, read_jsonl, stage_jsonl,
-    validate_rows, write_json,
+    done_keys, estimate_tokens, in_sample, load_config, price_for, read_jsonl,
+    sample_qids_by_dataset, stage_jsonl, validate_rows, write_json,
 )
 from experiments.generate_stage import make_client
 from experiments.judge_access import clear_marker, write_marker
@@ -87,8 +87,11 @@ def main(argv: list[str] | None = None) -> int:
         judge_model = args.judge_model_id or cfg["judge_model_id"]
         price_for(cfg, judge_model)
         gen_ids = set()
+        allowed = sample_qids_by_dataset(args.results, names)
         for name in names:
             for row in read_jsonl(args.results / "generation" / f"{name}.jsonl"):
+                if not in_sample(row, allowed):
+                    continue
                 validate_rows([row], ("model_id",), args.results / "generation" / f"{name}.jsonl")
                 gen_ids.add(row["model_id"])
         if len(gen_ids) != 1:

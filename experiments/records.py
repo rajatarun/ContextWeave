@@ -4,6 +4,9 @@ The verified reward is ``verified_reward.combine``: a weighted mean of the
 signals that were observed, and missing when none were. Judge weight and
 grounding weight come from the config. Self-confidence enters only when its
 parse status is ``ok``.
+
+Joined rows are the question ids in ``results/samples/``. Retrieval,
+generation, and signal rows for any other question id are ignored.
 """
 from __future__ import annotations
 
@@ -16,7 +19,7 @@ sys.path.insert(0, str(_ROOT / "src" / "query_api"))
 
 import verified_reward as V  # noqa: E402
 
-from experiments.common import ProtocolError, read_json, read_jsonl, validate_rows
+from experiments.common import ProtocolError, in_sample, read_json, read_jsonl, validate_rows
 from experiments.confidence import FAILED, OMITTED, UNPARSEABLE
 from experiments.judge_access import JUDGE_ACCESS_REASON, access_reason
 from experiments.ledger import SPEND_CAP_REASON
@@ -145,11 +148,13 @@ def load_joined(results: Path, cfg: dict[str, Any], datasets: Sequence[str] | No
         raise ProtocolError(f"sample directory not found: {sample_dir}")
     names = list(datasets) if datasets else ["squad", "hotpot", "nq"]
     questions = []
+    allowed: dict[str, set[str]] = {}
     for name in names:
         path = sample_dir / f"{name}.jsonl"
         rows = read_jsonl(path)
         validate_rows(rows, ("qid", "dataset", "question", "question_type", "gold_answers", "unanswerable"), path)
         questions.extend(rows)
+        allowed[name] = {row["qid"] for row in rows}
     gen_pending = _pending_keys(results / "generation" / "pending.json")
     judge_pending = _pending_keys(results / "signals" / "judge_pending.json")
     judge_blocked = access_reason(results)
@@ -164,6 +169,8 @@ def load_joined(results: Path, cfg: dict[str, Any], datasets: Sequence[str] | No
         except ProtocolError:
             if not gen_pending:
                 raise
+    retrieval_rows = [row for row in retrieval_rows if in_sample(row, allowed)]
+    generation_rows = [row for row in generation_rows if in_sample(row, allowed)]
     if generation_rows:
         validate_rows(generation_rows, ("qid", "arm", "answer", "self_confidence", "self_status", "self_reported"), results / "generation")
     validate_rows(retrieval_rows, ("qid", "arm", "passages"), results / "retrieval")
@@ -184,6 +191,7 @@ def load_joined(results: Path, cfg: dict[str, Any], datasets: Sequence[str] | No
         except ProtocolError:
             signals[kind] = None
             continue
+        rows = [row for row in rows if in_sample(row, allowed)]
         validate_rows(rows, ("qid", "arm", "value", "reason"), path)
         signals[kind] = _index(rows, path)
     joined = []

@@ -19,7 +19,7 @@ from experiments.assumed import SELF_C1, SELF_LOW_MEAN, assumed_slopes
 from experiments.calibrate_stage import calibrate_dataset
 from experiments.common import ProtocolError, load_config, price_for, validate_rows
 from experiments.confidence import FAILED, OMITTED, UNPARSEABLE, parse_self_confidence
-from experiments.data import chunk_windows, sample_rows
+from experiments.data import SAMPLE_ORDER, chunk_windows, sample_rows, seeded_order
 from experiments.generate_stage import build_user_message, dry_run, generate_rows, system_prompt
 from experiments.metrics import is_abstention, kendall_tau, score_answer, signal_metrics
 from experiments.prediction import dataset_verdict, overall_verdict
@@ -419,6 +419,10 @@ def test_same_judge_is_refused_and_schema_and_sample_are_strict():
     b = sample_rows(rows, 3, 11, "squad")
     assert [r["qid"] for r in a] == [r["qid"] for r in b]
     assert len(a) == 3
+    order = seeded_order(rows, 11, "squad")
+    assert {r["qid"] for r in a} == {r["qid"] for r in order[:3]}
+    wider = sample_rows(rows, 4, 11, "squad")
+    assert {r["qid"] for r in a} < {r["qid"] for r in wider}
     with pytest.raises(ProtocolError):
         sample_rows(rows, 9, 1, "squad")
     assert chunk_windows("abcdefghij", 4, 1)[0] == "abcd"
@@ -562,7 +566,14 @@ def test_judge_score_is_compared_to_correctness_as_stored():
     assert '{"answer": "insufficient evidence", "confidence": <0-1>}' in prompt
     assert "nothing before or after it" in prompt
     assert "answer yes or no" in prompt
+    assert (
+        "The confidence field is your own verbalized estimate of the probability "
+        "that the answer is correct."
+    ) in prompt
+    assert "Use 0 when" not in prompt
+    assert "taken directly" not in prompt
     assert load_config()["generator_max_output_tokens"] == 256
+    assert load_config()["n_per_dataset"] == 1200
 
 
 def _client_error(code: str, message: str):
@@ -742,6 +753,11 @@ def test_spend_cap_stops_cleanly_and_lists_the_rest_pending(tmp_path: Path):
                 "usage": {"inputTokens": in_tok, "outputTokens": out_tok},
             }
 
+    _write_jsonl(tmp_path / "samples" / "squad.jsonl", [{
+        "qid": "q1", "dataset": "squad", "question": "Where?",
+        "question_type": "answerable", "gold_answers": ["Paris"], "unanswerable": False,
+        "pool": [],
+    }])
     _write_jsonl(tmp_path / "retrieval" / "squad.jsonl", rows)
     gen = _script("generate")
     gen.make_client = lambda region: Client()
@@ -968,3 +984,142 @@ def test_post_generation_stages_do_not_fetch_datasets():
     judge = (ROOT / "experiments" / "signals_stage.py").read_text()
     assert "sentence_transformers" in judge
     assert "urllib" not in judge
+
+
+def test_twelve_hundred_is_the_prefix_of_the_fifteen_hundred_draw():
+    """1200 with a seed is the first 1200 of the 1500 draw with that seed."""
+    rows = [{"qid": f"q{i:05d}", "dataset": "squad"} for i in range(2000)]
+    order = seeded_order(rows, 0, "squad")
+    large = sample_rows(rows, 1500, 0, "squad")
+    small = sample_rows(rows, 1200, 0, "squad")
+    assert {r["qid"] for r in large} == {r["qid"] for r in order[:1500]}
+    assert {r["qid"] for r in small} == {r["qid"] for r in order[:1200]}
+    assert {r["qid"] for r in small} < {r["qid"] for r in large}
+    assert [r["qid"] for r in small] == sorted(r["qid"] for r in order[:1200])
+
+
+def _plain_row(dataset: str, qid: str, pool: list[dict]) -> dict:
+    return {
+        "qid": qid, "dataset": dataset, "question": f"question {qid}",
+        "question_type": "answerable" if dataset != "nq" else "nq",
+        "gold_answers": ["answer"], "unanswerable": False, "pool": pool,
+    }
+
+
+def test_smaller_n_keeps_the_seeded_prefix_and_the_previous_pools(tmp_path, monkeypatch):
+    """A same-seed shrink keeps written rows, so NQ pools are not drawn again."""
+    import json as jsonlib
+    from experiments import data as data_mod
+    from experiments.common import read_jsonl
+
+    cfg = load_config()
+    cfg["nq_pool_size"] = 2
+    squad = [_plain_row("squad", f"s{i}", [{"id": f"sp{i}", "text": f"squad {i}"}]) for i in range(6)]
+    hotpot = [_plain_row("hotpot", f"h{i}", [{"id": f"hp{i}", "text": f"hotpot {i}"}]) for i in range(6)]
+    nq = [
+        _plain_row("nq", f"n{i}", [{
+            "id": f"g{i}", "title": "", "text": f"unique gold window {i} alpha",
+            "source": f"src{i}", "role": "gold",
+        }])
+        for i in range(6)
+    ]
+
+    def _copy(rows, info):
+        return jsonlib.loads(jsonlib.dumps(rows)), dict(info)
+
+    monkeypatch.setitem(data_mod.LOADERS, "squad", lambda _cfg: _copy(squad, {"name": "squad"}))
+    monkeypatch.setitem(data_mod.LOADERS, "hotpot", lambda _cfg: _copy(hotpot, {"name": "hotpot"}))
+    monkeypatch.setattr(data_mod, "load_nq", lambda _cfg, _cache: _copy(nq, {"name": "nq"}))
+    calls = {"n": 0}
+    real_expand = data_mod.expand_nq_pools
+
+    def _counting(rows, target, k1, b):
+        calls["n"] += 1
+        return real_expand(rows, target, k1, b)
+
+    monkeypatch.setattr(data_mod, "expand_nq_pools", _counting)
+    names = ("squad", "hotpot", "nq")
+    first = data_mod.build_sample(cfg, tmp_path, 4, 0, names)
+    assert calls["n"] == 1
+    assert first["seed"] == 0
+    assert first["sampling"]["seed"] == 0
+    assert first["sampling"]["order"] == SAMPLE_ORDER
+    assert first["sampling"]["prefix_of_n"] is None
+    before = {
+        row["qid"]: [passage["id"] for passage in row["pool"]]
+        for row in read_jsonl(tmp_path / "samples" / "nq.jsonl")
+    }
+    assert len(before) == 4
+    assert all(len(ids) == 2 for ids in before.values())
+
+    second = data_mod.build_sample(cfg, tmp_path, 2, 0, names)
+    assert calls["n"] == 1
+    assert second["sampling"]["prefix_of_n"] == {"squad": 4, "hotpot": 4, "nq": 4}
+    assert second["n_per_dataset"] == 2
+    assert second["datasets"]["nq"]["rows_kept_from_previous_sample"] is True
+    order = seeded_order(nq, 0, "nq")
+    kept_ids = [row["qid"] for row in read_jsonl(tmp_path / "samples" / "nq.jsonl")]
+    assert kept_ids == sorted(row["qid"] for row in order[:2])
+    after = {
+        row["qid"]: [passage["id"] for passage in row["pool"]]
+        for row in read_jsonl(tmp_path / "samples" / "nq.jsonl")
+    }
+    assert set(after) < set(before)
+    for qid, ids in after.items():
+        assert ids == before[qid]
+    with pytest.raises(ProtocolError, match="question ids changed"):
+        data_mod.build_sample(cfg, tmp_path, 4, 0, names)
+    still = [row["qid"] for row in read_jsonl(tmp_path / "samples" / "nq.jsonl")]
+    assert still == kept_ids
+
+
+def test_stages_ignore_retrieval_rows_outside_the_sample(tmp_path):
+    """Generation and the stages that join records stay inside results/samples/."""
+    from experiments.common import read_jsonl
+    from experiments.records import load_joined
+
+    _mini_squad(tmp_path)
+    passages = [{"id": "p", "title": "France", "text": "Paris is the capital of France."}]
+    extra_retrieval = []
+    extra_generation = []
+    for arm in ("semantic_search", "graph_first", "keyword_boosted", "hybrid"):
+        extra_retrieval.append({
+            "qid": "q_extra", "dataset": "squad", "arm": arm, "question_type": "answerable",
+            "question": "Outside the sample?", "passages": passages, "pool_size": 1,
+        })
+        extra_generation.append({
+            "qid": "q_extra", "dataset": "squad", "arm": arm, "question_type": "answerable",
+            "answer": "no", "raw_response": '{"answer": "no", "confidence": 0.2}',
+            "self_confidence": 0.2, "self_reported": True, "self_status": "ok",
+            "input_tokens": 10, "output_tokens": 20,
+            "model_id": "some-other-model", "error": None,
+        })
+    retrieval = read_jsonl(tmp_path / "retrieval" / "squad.jsonl") + extra_retrieval
+    generation = read_jsonl(tmp_path / "generation" / "squad.jsonl") + extra_generation
+    _write_jsonl(tmp_path / "retrieval" / "squad.jsonl", retrieval)
+    _write_jsonl(tmp_path / "generation" / "squad.jsonl", generation)
+
+    gen = _script("generate")
+    assert gen.main(["--results", str(tmp_path), "--datasets", "squad", "--seed", "0", "--dry-run"]) == 0
+    estimate = json.loads((tmp_path / "generation" / "dry_run_cost.json").read_text())
+    assert estimate["estimate"]["n_calls"] == 4
+
+    signals = _script("signals")
+    assert signals.main(["lexical", "--results", str(tmp_path), "--datasets", "squad", "--seed", "0"]) == 0
+    lexical = read_jsonl(tmp_path / "signals" / "lexical.jsonl")
+    assert {row["qid"] for row in lexical} == {"q1"}
+    assert len(lexical) == 4
+
+    joined = load_joined(tmp_path, load_config(), ["squad"])
+    assert {row["qid"] for row in joined} == {"q1"}
+    assert len(joined) == 4
+
+    sample = read_jsonl(tmp_path / "samples" / "squad.jsonl")
+    sample[0]["pool"] = [{"id": "p", "text": "Paris is the capital of France."}]
+    _write_jsonl(tmp_path / "samples" / "squad.jsonl", sample)
+    retrieve = _script("retrieve")
+    retrieve.load_embedder = lambda model: (lambda texts: [[0.0] for _ in texts], {"revision": "test"})
+    assert retrieve.main(["--results", str(tmp_path), "--datasets", "squad", "--seed", "0"]) == 0
+    stats = json.loads((tmp_path / "retrieval" / "retrieval_stats.json").read_text())
+    assert stats["datasets"]["squad"]["n_questions"] == 1
+    assert stats["seed"] == 0

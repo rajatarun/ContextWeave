@@ -59,7 +59,15 @@ def main(argv: list[str] | None = None) -> int:
                         continue
                     append_jsonl(out, row)
                     done.add((row["qid"], row["arm"]))
-            written = read_jsonl(out)
+            allowed = {q["qid"] for q in questions}
+            written_all = read_jsonl(out)
+            written = [row for row in written_all if row.get("qid") in allowed]
+            outside = len({row.get("qid") for row in written_all} - allowed)
+            if outside:
+                print(
+                    f"  {outside} question ids outside the sample stay in the file and are left out of the stats",
+                    flush=True,
+                )
             validate_rows(written, ("qid", "dataset", "arm", "question_type", "passages", "pool_size"), out)
             per[name] = retrieval_stats(written)
             print(f"  pool mean {per[name]['pool_size_mean']:.2f}  "

@@ -140,6 +140,9 @@ def render(results: Path) -> tuple[str, str]:
             rows.append([name, doc.cell("sample", f"{name} n", n, f"no count for {name}")])
         doc.table("Sampled questions", ["dataset", "n"], rows)
         doc.p(f"Seed stored in the manifest: `{sample.get('seed')}`.")
+        order = (sample.get("sampling") or {}).get("order")
+        if isinstance(order, str) and order:
+            doc.p(order)
 
     doc.h("Retrieval")
     stats = _load(results / "retrieval" / "retrieval_stats.json")

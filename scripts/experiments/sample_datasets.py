@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Download SQuAD 2.0, HotpotQA, and the MRQA Natural Questions dev file, and write a seeded sample."""
+"""Download SQuAD 2.0, HotpotQA, and the MRQA Natural Questions dev file, and write a seeded sample.
+
+The sample is the first ``--n-per-dataset`` questions after sorting by qid
+and shuffling with ``random.Random(seed)``. A smaller n with the same seed
+is that prefix. The seed is stored on the sample manifest.
+"""
 from __future__ import annotations
 
 import argparse

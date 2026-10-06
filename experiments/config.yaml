@@ -13,7 +13,9 @@
 # 2026-10-05T21:04:10Z. On-demand price $0.00072 per 1K tokens.
 
 seed: 0
-n_per_dataset: 1500
+# First n of the seeded shuffle: sort by qid, then random.Random(seed).
+# 1200 is the prefix of a 1500 draw with the same seed.
+n_per_dataset: 1200
 top_k: 5
 bootstrap_samples: 1000
 replay_seeds: [0, 1, 2, 3, 4]

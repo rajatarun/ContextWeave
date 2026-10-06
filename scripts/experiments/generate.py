@@ -9,7 +9,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from experiments.common import (
-    DATASETS, RESULTS, ProtocolError, artifact_meta, done_keys, load_config, stage_jsonl, write_json,
+    DATASETS, RESULTS, ProtocolError, artifact_meta, done_keys, in_sample, load_config,
+    sample_qids_by_dataset, stage_jsonl, write_json,
 )
 from experiments.generate_stage import (
     dry_run, generate_rows, load_retrieval, make_client, system_prompt, write_dry_run_artifact,
@@ -37,9 +38,15 @@ def main(argv: list[str] | None = None) -> int:
     model_id = args.model_id or cfg["generator_model_id"]
     names = [p.strip() for p in args.datasets.split(",") if p.strip()]
     try:
+        allowed = sample_qids_by_dataset(args.results, names)
         rows = []
         for name in names:
-            rows.extend(load_retrieval(args.results / "retrieval" / f"{name}.jsonl"))
+            loaded = load_retrieval(args.results / "retrieval" / f"{name}.jsonl")
+            kept = [row for row in loaded if in_sample(row, allowed)]
+            left_out = len(loaded) - len(kept)
+            if left_out:
+                print(f"{name}: left {left_out} retrieval rows outside the sample", flush=True)
+            rows.extend(kept)
         if args.dry_run:
             estimate = dry_run(cfg, rows, model_id)
             path = args.results / "generation" / "dry_run_cost.json"

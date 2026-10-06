@@ -8,4 +8,4 @@ If the passages do not contain the answer, abstain with exactly this JSON object
 Output exactly one JSON object and nothing before or after it, including when abstaining. No markdown fence and no sentence before or after the object:
 {"answer": "<short span, or yes, or no, or insufficient evidence>", "confidence": <0-1>}
 
-The confidence field is your own verbalized estimate of the probability that the answer is correct. Use 0 when the passages do not contain the answer, and 1 when the span is taken directly from the passages.
+The confidence field is your own verbalized estimate of the probability that the answer is correct.

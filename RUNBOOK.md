@@ -7,18 +7,26 @@ pip install -r experiments/requirements.txt
 ```
 
 Every command is run from the repository root. `--seed` defaults to 0 and
-`--n-per-dataset` defaults to 1500. A missing dataset file, price, or
+`--n-per-dataset` defaults to 1200. A missing dataset file, price, or
 credential stops the script with an error. Do not fill a missing stage with
 stand-in model output.
 
 ## 1. Sample
 
 ```bash
-python3 scripts/experiments/sample_datasets.py --seed 0 --n-per-dataset 1500
+python3 scripts/experiments/sample_datasets.py --seed 0 --n-per-dataset 1200
 ```
 
 Writes `results/samples/{squad,hotpot,nq}.jsonl` and
-`results/samples/sample_manifest.json`.
+`results/samples/sample_manifest.json`. The draw sorts question ids, shuffles
+those positions with `random.Random(seed)`, and keeps the first
+`--n-per-dataset`. The files are written sorted by qid. 1200 with seed 0 is
+the first 1200 of the 1500 draw with seed 0. Re-running at that smaller n,
+with the same seed, over a sample already on disk keeps the previously
+written rows for the prefix, including NQ pools, so retrieval for those
+questions stays valid. The seed is stored on the manifest (`seed`, and again
+under `sampling`). Generation, signals, calibration, replay, and analyses
+read only question ids in `results/samples/`.
 
 ## 2. Retrieval
 
@@ -28,9 +36,10 @@ python3 scripts/experiments/retrieve.py --seed 0 --top-k 5
 
 Writes one retrieval file per dataset, plus
 `results/retrieval/retrieval_stats.json`. This does not call a hosted model.
-Re-running skips `(qid, arm)` rows already in the file. A new file is
-`.jsonl.gz`; an existing `.jsonl` is left as it is. Passing `--datasets nq`
-keeps the other datasets' stat blocks.
+Re-running skips `(qid, arm)` rows already in the file. Rows for question
+ids outside the current sample stay in the file and are left out of the
+stats. A new file is `.jsonl.gz`; an existing `.jsonl` is left as it is.
+Passing `--datasets nq` keeps the other datasets' stat blocks.
 
 ## 3. Generation dry-run, then generation
 
