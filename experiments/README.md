@@ -50,10 +50,20 @@ at large.
   seed. Every gold window stays in the pool; a context that is already longer
   than `nq_pool_size` is not trimmed. Question type is `nq`.
 
-The sample is a seeded shuffle of question ids, `--n-per-dataset` (default
-1500), written to `results/samples/<dataset>.jsonl` and listed in
-`results/samples/sample_manifest.json`. Fewer questions than requested is an
-error. The script does not pad.
+The sample is a seeded shuffle. Questions are sorted by qid, then
+`random.Random(seed)` shuffles those positions, and the sample is the first
+`--n-per-dataset` of that order (config default 1200). The files are written
+sorted by qid, so file order is not shuffle order. A smaller n with the same
+seed is that prefix: 1200 is the first 1200 of the 1500 draw. Re-running
+`sample_datasets.py` at that smaller n, over a sample already on disk, keeps
+the previously written rows for the prefix, including NQ hard-negative pools,
+so retrieval already stored for those questions still matches.
+`retrieve.py` skips `(qid, arm)` rows it has already written. The seed is
+stored on `results/samples/sample_manifest.json` (`seed`, and again under
+`sampling`). Fewer questions than requested is an error. The script does not
+pad. A same-seed run replaces a committed sample only when the question ids
+are unchanged or are this prefix. Generation, signals, calibration, replay,
+analyses, and retrieval stats read only question ids in `results/samples/`.
 
 ## Retrieval arms
 
@@ -101,7 +111,10 @@ the answer, for the object `{"answer": "insufficient evidence", "confidence": <0
 The generator is asked for JSON `{"answer", "confidence"}`. The prompt is
 `experiments/prompts/generator_system.txt` and is copied into the generation
 artifact. The saved answer is the `answer` field of the first JSON object in
-the reply. It is never the raw reply.
+the reply. It is never the raw reply. The confidence sentence asks for the
+model's own probability and leaves the number unassigned, so the logged self
+signal stays unshaped, as the deployed synthesizer does when it asks for a
+confidence in [0, 1].
 
 The robust reading (the `self` signal) is that first JSON object. Prose
 before or after it is ignored. A number in [0, 1] is an observation. Anything

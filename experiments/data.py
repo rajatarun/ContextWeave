@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from experiments.common import (
-    DATASETS, ProtocolError, artifact_meta, read_json, sha256_file, write_json,
+    DATASETS, ProtocolError, artifact_meta, read_json, read_jsonl, sha256_file, write_json,
 )
 from experiments.retrieve_stage import BM25Index, tokenize
 
@@ -332,23 +332,95 @@ def expand_nq_pools(rows: list[dict[str, Any]], target: int, k1: float, b: float
 
 LOADERS = {"squad": load_squad, "hotpot": load_hotpot}
 
+# Logged on the sample manifest as sampling.order. The seed is stored beside it.
+SAMPLE_ORDER = (
+    "Questions are sorted by qid, then random.Random(seed) shuffles those "
+    "positions. The sample is the first n_per_dataset of that order and is "
+    "written sorted by qid. A smaller n with the same seed is that prefix. "
+    "When a larger sample with this seed is already on disk, the prefix keeps "
+    "the previously written rows, including NQ pools, so retrieval for those "
+    "questions still matches. The seed is stored on this manifest."
+)
 
-def sample_rows(rows: list[dict[str, Any]], n: int, seed: int, dataset: str) -> list[dict[str, Any]]:
+
+def seeded_order(rows: list[dict[str, Any]], seed: int, dataset: str) -> list[dict[str, Any]]:
+    """Shuffle order for ``seed``.
+
+    Rows are sorted by qid first, so the order does not depend on the loader.
+    ``random.Random(seed)`` then shuffles those positions. A sample of size n
+    is the first n rows of this list.
+    """
     qids = [r["qid"] for r in rows]
     if len(qids) != len(set(qids)):
         raise ProtocolError(f"{dataset}: duplicate question ids; refusing to sample")
-    if len(rows) < n:
-        raise ProtocolError(
-            f"{dataset} has {len(rows)} questions and --n-per-dataset is {n}. "
-            "Refusing to pad the sample."
-        )
     ordered = sorted(rows, key=lambda r: r["qid"])
     rng = random.Random(seed)
     idx = list(range(len(ordered)))
     rng.shuffle(idx)
-    picked = [ordered[i] for i in idx[:n]]
+    return [ordered[i] for i in idx]
+
+
+def sample_rows(rows: list[dict[str, Any]], n: int, seed: int, dataset: str) -> list[dict[str, Any]]:
+    """First ``n`` rows of :func:`seeded_order`, returned sorted by qid.
+
+    The same rows and seed make a smaller n the question ids of that prefix.
+    The returned list is sorted by qid, so the written file is not in shuffle order.
+    """
+    order = seeded_order(rows, seed, dataset)
+    if len(order) < n:
+        raise ProtocolError(
+            f"{dataset} has {len(order)} questions and --n-per-dataset is {n}. "
+            "Refusing to pad the sample."
+        )
+    picked = list(order[:n])
     picked.sort(key=lambda r: r["qid"])
     return picked
+
+
+def summarize_nq_pools(rows: list[dict[str, Any]], target: int) -> dict[str, Any]:
+    """Pool-size stats for rows whose hard negatives were already chosen."""
+    if not rows:
+        raise ProtocolError("nq sample is empty")
+    sizes = []
+    gold_sizes = []
+    added = 0
+    for row in rows:
+        pool = row.get("pool") or []
+        if not pool:
+            raise ProtocolError(f"nq {row.get('qid')}: pool is empty")
+        sizes.append(len(pool))
+        gold_sizes.append(sum(1 for passage in pool if passage.get("role") == "gold"))
+        added += sum(1 for passage in pool if passage.get("role") == "hard_negative")
+    return {
+        "nq_pool_size": target,
+        "negative_selection": (
+            "BM25 over windows from other documents in the seeded sample; "
+            "ties break by passage id. Every gold window is kept, so a "
+            "document that already has more windows than nq_pool_size stays larger."
+        ),
+        "pool_size_min": min(sizes),
+        "pool_size_max": max(sizes),
+        "pool_size_mean": sum(sizes) / len(sizes),
+        "gold_windows_mean": sum(gold_sizes) / len(gold_sizes),
+        "hard_negatives_added": added,
+    }
+
+
+def _rows_for_qids(path: Path, qids: list[str]) -> list[dict[str, Any]] | None:
+    """Rows from an existing sample file, in ``qids`` order."""
+    try:
+        rows = read_jsonl(path)
+    except ProtocolError:
+        return None
+    by_qid: dict[Any, dict[str, Any]] = {}
+    for row in rows:
+        qid = row.get("qid")
+        if qid in by_qid:
+            return None
+        by_qid[qid] = row
+    if any(qid not in by_qid for qid in qids):
+        return None
+    return [by_qid[qid] for qid in qids]
 
 
 def write_sample(rows: list[dict[str, Any]], path: Path) -> None:
@@ -382,30 +454,57 @@ def build_sample(cfg: dict[str, Any], results: Path, n: int, seed: int,
         if name in requested:
             raise ProtocolError(f"dataset {name} was requested twice")
         requested.append(name)
+    # Resolve every dataset before writing, so a refused id change leaves the
+    # committed files untouched.
+    prepared = []
+    shrunk_from: dict[str, int] = {}
     for name in requested:
         if name == "nq":
             rows, info = load_nq(cfg, cache)
         else:
             rows, info = LOADERS[name](cfg)
         picked = sample_rows(rows, n, seed, name)
-        if name == "nq":
-            pool_info = expand_nq_pools(
-                picked, int(cfg["nq_pool_size"]), float(cfg["bm25_k1"]), float(cfg["bm25_b"]),
-            )
-            info.update(pool_info)
+        preserved = False
         if previous is not None and previous.get("seed") == seed:
             old_qids = _qid_list(previous, name)
             new_qids = [r["qid"] for r in picked]
-            if old_qids is not None and old_qids != new_qids:
-                raise ProtocolError(
-                    f"{name}: question ids changed under seed {seed}. "
-                    "Refusing to replace a committed sample."
+            if old_qids is not None and list(old_qids) != new_qids:
+                old_n = len(old_qids)
+                expected_old = None
+                if 0 < n < old_n and len(rows) >= old_n:
+                    expected_old = [r["qid"] for r in sample_rows(rows, old_n, seed, name)]
+                if expected_old != list(old_qids):
+                    raise ProtocolError(
+                        f"{name}: question ids changed under seed {seed}. "
+                        "Refusing to replace a committed sample."
+                    )
+                path = out_dir / f"{name}.jsonl"
+                kept = _rows_for_qids(path, new_qids)
+                if kept is None:
+                    raise ProtocolError(
+                        f"{name}: the first {n} questions of the seed-{seed} shuffle "
+                        f"are not all in {path.name}. Refusing to rebuild pools for a committed sample."
+                    )
+                picked = kept
+                preserved = True
+                shrunk_from[name] = old_n
+        if name == "nq":
+            if preserved:
+                info.update(summarize_nq_pools(picked, int(cfg["nq_pool_size"])))
+            else:
+                pool_info = expand_nq_pools(
+                    picked, int(cfg["nq_pool_size"]), float(cfg["bm25_k1"]), float(cfg["bm25_b"]),
                 )
+                info.update(pool_info)
+        prepared.append((name, picked, info, preserved))
+    for name, picked, info, preserved in prepared:
         path = out_dir / f"{name}.jsonl"
         write_sample(picked, path)
         info["sha256"] = sha256_file(path)
         info["n_sampled"] = len(picked)
         info["path"] = str(path.relative_to(results.parent)) if path.is_absolute() else str(path)
+        if preserved:
+            info["rows_kept_from_previous_sample"] = True
         per_info[name] = info
         counts[name] = len(picked)
         all_qids.append({"dataset": name, "qids": [r["qid"] for r in picked]})
@@ -431,6 +530,12 @@ def build_sample(cfg: dict[str, Any], results: Path, n: int, seed: int,
         datasets=per_info,
         counts=counts,
         stage="sample",
+        sampling={
+            "seed": seed,
+            "n_per_dataset": n,
+            "order": SAMPLE_ORDER,
+            "prefix_of_n": shrunk_from or None,
+        },
     )
     # qids are part of the manifest so the sample can be checked without
     # re-reading every pool.
