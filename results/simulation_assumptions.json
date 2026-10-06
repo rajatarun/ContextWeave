@@ -50,7 +50,7 @@
     "fallback_failed": 0.0,
     "fallback_omitted": 0.7,
     "fallback_unparseable": 0.5,
-    "generator_max_output_tokens": 512,
+    "generator_max_output_tokens": 256,
     "generator_model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     "grounding_threshold": 0.6,
     "grounding_weight": 1.0,
@@ -63,7 +63,9 @@
     "low_auroc_max": 0.6,
     "n_per_dataset": 1500,
     "nli_model": "cross-encoder/nli-deberta-v3-small",
+    "normalized_self_gap_fraction": 0.5,
     "nq_overlap_chars": 200,
+    "nq_pool_size": 10,
     "nq_window_chars": 800,
     "prices_usd_per_million_tokens": {
       "us.anthropic.claude-haiku-4-5-20251001-v1:0": {
@@ -89,12 +91,13 @@
     "self_weight": 1.0,
     "temperature": 0,
     "token_estimate": "ceil_utf8_bytes_div_4",
-    "top_k": 5
+    "top_k": 5,
+    "total_usd_cap": 30
   },
-  "created_at": "2026-10-06T14:04:24.390260+00:00",
+  "created_at": "2026-10-06T14:33:42.727508+00:00",
   "git": {
-    "commit": "e043881560c78312d9ba7747ac62f0e1063c4b72",
-    "dirty": false
+    "commit": "b26062330d239c12a58f5f0cca7371b0520f3db8",
+    "dirty": true
   },
   "seed": 0,
   "stage": "simulation_assumptions"

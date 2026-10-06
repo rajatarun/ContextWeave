@@ -26,7 +26,7 @@
     "fallback_failed": 0.0,
     "fallback_omitted": 0.7,
     "fallback_unparseable": 0.5,
-    "generator_max_output_tokens": 512,
+    "generator_max_output_tokens": 256,
     "generator_model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     "grounding_threshold": 0.6,
     "grounding_weight": 1.0,
@@ -39,7 +39,9 @@
     "low_auroc_max": 0.6,
     "n_per_dataset": 1500,
     "nli_model": "cross-encoder/nli-deberta-v3-small",
+    "normalized_self_gap_fraction": 0.5,
     "nq_overlap_chars": 200,
+    "nq_pool_size": 10,
     "nq_window_chars": 800,
     "prices_usd_per_million_tokens": {
       "us.anthropic.claude-haiku-4-5-20251001-v1:0": {
@@ -65,14 +67,15 @@
     "self_weight": 1.0,
     "temperature": 0,
     "token_estimate": "ceil_utf8_bytes_div_4",
-    "top_k": 5
+    "top_k": 5,
+    "total_usd_cap": 30
   },
   "counts": {
     "hotpot": 1500,
     "nq": 1500,
     "squad": 1500
   },
-  "created_at": "2026-10-06T13:50:57.413302+00:00",
+  "created_at": "2026-10-06T14:32:24.115769+00:00",
   "datasets": {
     "hotpot": {
       "config": "distractor",
@@ -85,15 +88,22 @@
       "split": "validation"
     },
     "nq": {
-      "limitation": "Wikipedia context is the MRQA truncation (first 800 tokens, answer inside the window), then split into overlapping character windows. The full Wikipedia page is not in this file.",
+      "gold_windows_mean": 1.68,
+      "hard_negatives_added": 12480,
+      "limitation": "Wikipedia context is the MRQA truncation (first 800 tokens, answer inside the window), then split into overlapping character windows. The full Wikipedia page is not in this file. The candidate pool keeps every gold window and adds BM25 hard-negative windows from other documents in the seeded sample until the pool reaches nq_pool_size. Ranking ties break by passage id.",
       "md5": "c0347eebbca02d10d1b07b9a64efe61d",
       "n_contexts": 12836,
       "n_raw": 12836,
       "n_sampled": 1500,
       "name": "mrqa-natural-questions-short-dev",
+      "negative_selection": "BM25 over windows from other documents in the seeded sample; ties break by passage id. Every gold window is kept, so a document that already has more windows than nq_pool_size stays larger.",
+      "nq_pool_size": 10,
       "overlap_chars": 200,
       "path": "results/samples/nq.jsonl",
-      "sha256": "11daf71d572a99715a1b95db102e7d48e6df6c48cac63845ef92b09935f01b4c",
+      "pool_size_max": 10,
+      "pool_size_mean": 10.0,
+      "pool_size_min": 10,
+      "sha256": "fc69231914f48a4784f7fa4f141a1ec466988c209a6cdc2e00c919023d756862",
       "url": "https://s3.us-east-2.amazonaws.com/mrqa/release/v2/dev/NaturalQuestionsShort.jsonl.gz",
       "window_chars": 800
     },
@@ -108,8 +118,8 @@
     }
   },
   "git": {
-    "commit": "d91a5de1b7cb788b7949acafad95ccf6759ceadb",
-    "dirty": false
+    "commit": "b26062330d239c12a58f5f0cca7371b0520f3db8",
+    "dirty": true
   },
   "n_per_dataset": 1500,
   "qids": [
