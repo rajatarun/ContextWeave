@@ -129,23 +129,56 @@ def _order(stats: dict[str, dict[str, Any]], key: str) -> list[str]:
     return [arm for arm, _ in pairs]
 
 
+def _skip_confidence(row: dict[str, Any]) -> float | None:
+    """Confidence the skip-unobserved row would have used.
+
+    When the generation row recorded the deployed strict parser, that parser's
+    observed number is the one Prop 2 skips. Otherwise the robust status is
+    the only one the row has.
+    """
+    if "deployed_self_status" in row:
+        if row.get("deployed_self_status") == "ok" and row.get("deployed_self_confidence") is not None:
+            return float(row["deployed_self_confidence"])
+        return None
+    if row.get("self_status") == "ok" and row.get("self_confidence") is not None:
+        return float(row["self_confidence"])
+    return None
+
+
+def _sensitivity(group: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Primary token-F1 rate, and the gold-contained rate beside it.
+
+    The secondary rate is not a correctness label. Rows with no gold span
+    (unanswerable questions) are left out of it.
+    """
+    primary = [row for row in group if "correct" in row]
+    secondary = [row for row in group if row.get("gold_contained") is not None]
+    return {
+        "primary_rule": "token_f1 >= 0.5; an unanswerable question is correct only when the answer abstains",
+        "primary_rate": (sum(int(row["correct"]) for row in primary) / len(primary)) if primary else None,
+        "secondary_rule": "normalized gold string contained in the normalized answer",
+        "secondary_rate": (
+            sum(int(row["gold_contained"]) for row in secondary) / len(secondary)
+        ) if secondary else None,
+        "n": len(primary),
+        "n_with_gold": len(secondary),
+    }
+
+
 def _fallback(group: Sequence[dict[str, Any]]) -> dict[str, Any]:
     by_arm: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in group:
         by_arm[row["arm"]].append(row)
     stats: dict[str, Any] = {}
     for arm, rows in by_arm.items():
-        observed = [
-            row for row in rows
-            if row.get("self_status") == "ok" and row.get("self_confidence") is not None
-        ]
+        observed = [value for value in (_skip_confidence(row) for row in rows) if value is not None]
         filled = [
             row["rewards"]["self_with_fallbacks"]
             for row in rows
             if row.get("rewards", {}).get("self_with_fallbacks") is not None
         ]
         stats[arm] = {
-            "mean_skip": (sum(row["self_confidence"] for row in observed) / len(observed)) if observed else None,
+            "mean_skip": (sum(observed) / len(observed)) if observed else None,
             "mean_fallback": (sum(filled) / len(filled)) if filled else None,
         }
     skip = _order(stats, "mean_skip")
@@ -204,6 +237,7 @@ def analyse(rows: Sequence[dict[str, Any]], seed: int, n_boot: int) -> dict[str,
             }
         signals["fallback"] = _fallback(group)
         signals["combination"] = _combination(group, rng, n_boot)
+        signals["correctness_sensitivity"] = _sensitivity(group)
         datasets[name] = signals
     return {
         "datasets": datasets,

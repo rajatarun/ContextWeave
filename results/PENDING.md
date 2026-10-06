@@ -268,5 +268,11 @@
 | replay | nq oracle bernoulli realized | results/replay/replay_summary.json is missing |
 | replay | nq oracle bernoulli best share | results/replay/replay_summary.json is missing |
 | replay | curves | results/replay/replay_summary.json is missing |
+| correctness | squad primary | results/analyses/analyses.json is missing |
+| correctness | squad gold contained | results/analyses/analyses.json is missing |
+| correctness | hotpot primary | results/analyses/analyses.json is missing |
+| correctness | hotpot gold contained | results/analyses/analyses.json is missing |
+| correctness | nq primary | results/analyses/analyses.json is missing |
+| correctness | nq gold contained | results/analyses/analyses.json is missing |
 | assumption | all | results/analyses/analyses.json is missing |
 | missingness | all | results/analyses/analyses.json is missing |

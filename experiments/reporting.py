@@ -337,6 +337,34 @@ def render(results: Path) -> tuple[str, str]:
     if replay is None:
         doc.pending.append({"table": "replay", "cell": "curves", "reason": "results/replay/replay_summary.json is missing"})
 
+    doc.h("Correctness sensitivity")
+    doc.p(
+        "Primary correctness is token F1 at least 0.5 "
+        "(an unanswerable question counts only when the answer abstains). "
+        "The secondary rate is how often the normalised gold string is contained "
+        "in the normalised answer. It does not replace the primary label, and "
+        "replay, calibration, and rankings do not use it."
+    )
+    sens_rows = []
+    for name in DATASETS:
+        block = (((analyses or {}).get("datasets") or {}).get(name) or {}).get("correctness_sensitivity") if analyses else None
+        if analyses is None:
+            reason = "results/analyses/analyses.json is missing"
+        elif not isinstance(block, dict):
+            reason = f"no correctness sensitivity block for {name}"
+        else:
+            reason = ""
+        sens_rows.append([
+            name,
+            doc.cell("correctness", f"{name} primary", (block or {}).get("primary_rate") if block else None, reason or "primary rate null"),
+            doc.cell("correctness", f"{name} gold contained", (block or {}).get("secondary_rate") if block else None, reason or "secondary rate null"),
+        ])
+    doc.table(
+        "Token F1 and gold contained in the answer",
+        ["dataset", "primary rate (token F1 >= 0.5)", "secondary rate (gold contained)"],
+        sens_rows,
+    )
+
     doc.h("Assumption check and missingness")
     if analyses is None:
         doc.p("Analyses artifact is missing.")

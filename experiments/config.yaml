@@ -30,15 +30,17 @@ generator_model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
 judge_model_id: us.meta.llama3-3-70b-instruct-v1:0
 region: us-east-1
 temperature: 0
-# One JSON object: a short answer plus a confidence. 256 tokens is several
-# times a long sentence plus the JSON wrapper. 512 charged for output this
-# format does not use. A response that stops on this cap is self_status
-# truncated and is not treated as a reported confidence.
-generator_max_output_tokens: 256
+# A short extractive span plus the JSON object is a few dozen tokens. 128
+# leaves room for one stray sentence around that object. 256 charged for
+# output this format does not use. A response that stops on this cap is
+# self_status truncated and is not treated as a reported confidence.
+generator_max_output_tokens: 128
 judge_max_output_tokens: 300
 
 # Hard ceiling for generation and the judge together, USD. The shared
 # cost_ledger is what both stages read. A stage also has its own --max-usd.
+# The full run passes --total-usd-cap 29.80: a 10-question smoke already
+# spent $0.19 of this $30.
 total_usd_cap: 30
 
 # Token estimates use ceil(utf-8 bytes / 4). That is an approximation, not a

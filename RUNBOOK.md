@@ -44,23 +44,29 @@ budget below. The run still uses those caps and stops cleanly when the ledger
 reaches one.
 
 ```bash
-python3 scripts/experiments/generate.py --seed 0 --max-usd 27 --total-usd-cap 30
+python3 scripts/experiments/generate.py --seed 0 --max-usd 27 --total-usd-cap 29.80
 ```
 
 Requires AWS credentials that can call Bedrock Converse in `us-east-1`.
 The generator id is `us.anthropic.claude-haiku-4-5-20251001-v1:0` (override
-with `--model-id`). Temperature is 0. `maxTokens` is 256: the reply is one
-JSON object with a short answer and a confidence, and a response that stops
-because it hit that cap is stored with `self_status` `truncated` rather than
-parsed as a confidence. Rows already written are skipped.
+with `--model-id`). Temperature is 0. `maxTokens` is 128: the reply is one
+JSON object whose answer is a few words, or the fixed phrase
+`insufficient evidence` when the passages do not contain the answer. A
+response that stops because it hit that cap is stored with `self_status`
+`truncated` rather than parsed as a confidence. The saved answer is the
+JSON `answer` field. A confidence is also read from the first JSON object
+when the model writes prose around it; the strict whole-reply parse is
+stored as `deployed_self_status` and is what the fallback row uses. Rows
+already written are skipped.
 
 Generation and the judge share `results/cost_ledger.jsonl` (gzipped when the
-file is new). `--total-usd-cap` defaults to 30 and is the sum of both stages.
-`--max-usd 27` reserves the generation stage; the judge's stage budget is the
-remainder, $3. The ledger is what the judge reads, so a judge call is also
-refused when generation spend plus that call would cross $30. If generation
-stops under $27, the unused part of the $30 can be given to the judge by
-raising its `--max-usd` up to `30` minus the ledger total.
+file is new). `--total-usd-cap` defaults to 30. The full run passes
+`--total-usd-cap 29.80` because a 10-question smoke on this budget already
+spent $0.19. `--max-usd 27` reserves the generation stage. The ledger is what
+the judge reads, so a judge call is refused when generation spend plus that
+call would cross $29.80. If generation stops under $27, the unused part of
+the $29.80 can be given to the judge by raising its `--max-usd` up to
+`29.80` minus the ledger total.
 
 If a stage hits either cap it stops before the next call, keeps the rows it
 already wrote, and lists the rest in `results/generation/pending.json` or
@@ -76,7 +82,7 @@ separate Bedrock model, `us.meta.llama3-3-70b-instruct-v1:0`.
 python3 scripts/experiments/signals.py lexical --seed 0
 python3 scripts/experiments/signals.py nli --seed 0
 python3 scripts/experiments/signals.py judge --dry-run --seed 0
-python3 scripts/experiments/signals.py judge --seed 0 --max-usd 3 --total-usd-cap 30
+python3 scripts/experiments/signals.py judge --seed 0 --max-usd 3 --total-usd-cap 29.80
 ```
 
 Lexical grounding and calibration, replay, analyses, and `write_results` read
