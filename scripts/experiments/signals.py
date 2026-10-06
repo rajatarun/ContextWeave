@@ -14,14 +14,17 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from experiments.common import (
-    DATASETS, RESULTS, ProtocolError, append_jsonl, artifact_meta, done_keys,
-    load_config, price_for, read_jsonl, validate_rows, write_json,
+    DATASETS, RESULTS, ProtocolError, append_jsonl, artifact_meta, cost_usd,
+    done_keys, estimate_tokens, load_config, price_for, read_jsonl, stage_jsonl,
+    validate_rows, write_json,
 )
 from experiments.generate_stage import make_client
+from experiments.judge_access import clear_marker, write_marker
+from experiments.ledger import SPEND_CAP_REASON, Budget
 from experiments.records import load_joined
 from experiments.signals_stage import (
-    JUDGE_PROMPT, check_judge_model, judge_one, judge_sampled, lexical_value,
-    load_nli, nli_value, signal_row,
+    JUDGE_PROMPT, JudgeAccessDenied, check_judge_model, judge_one, judge_sampled,
+    lexical_value, load_nli, nli_value, signal_row,
 )
 
 
@@ -41,6 +44,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--judge-model-id", default=None)
     ap.add_argument("--allow-same-judge", action="store_true")
     ap.add_argument("--max-usd", type=float, default=None)
+    ap.add_argument("--total-usd-cap", type=float, default=None,
+                    help="shared generation+judge ceiling (default: config total_usd_cap)")
     ap.add_argument("--dry-run", action="store_true", help="judge only: count sampled calls, do not call the model")
     args = ap.parse_args(argv)
     cfg = load_config(args.config)
@@ -51,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
         threshold = float(cfg["grounding_threshold"])
         weight = float(cfg["grounding_weight"])
         if args.signal == "lexical":
-            path = args.results / "signals" / "lexical.jsonl"
+            path = stage_jsonl(args.results / "signals", "lexical")
             done = done_keys(path, ("qid", "arm"))
             n = 0
             for row in rows:
@@ -66,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.signal == "nli":
             verifier, info = load_nli(cfg["nli_model"])
-            path = args.results / "signals" / "nli.jsonl"
+            path = stage_jsonl(args.results / "signals", "nli")
             done = done_keys(path, ("qid", "arm"))
             n = 0
             for row in rows:
@@ -104,29 +109,78 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.max_usd is None:
             raise ProtocolError("--max-usd is required for judge calls")
+        total_cap = float(cfg["total_usd_cap"]) if args.total_usd_cap is None else args.total_usd_cap
+        budget = Budget(args.results, "judge", args.max_usd, total_cap)
         client = make_client(cfg["region"])
-        path = args.results / "signals" / "judge.jsonl"
+        path = stage_jsonl(args.results / "signals", "judge")
         done = done_keys(path, ("qid", "arm"))
+        max_out = int(cfg["judge_max_output_tokens"])
         n = 0
-        for row in rows:
+        stop_reason = None
+        pending: list[dict] = []
+        for index, row in enumerate(rows):
             if (row["qid"], row["arm"]) in done:
                 continue
             if row["qid"] not in sampled:
                 append_jsonl(path, signal_row(row, None, "not_sampled", judge_sampled=False, judge_model_id=judge_model))
-            else:
-                value, reason, raw = judge_one(
+                done.add((row["qid"], row["arm"]))
+                n += 1
+                continue
+            evidence = "\n\n".join(row["passages"])[:12000]
+            prompt = JUDGE_PROMPT.format(question=row["question"], evidence=evidence, answer=row["answer"])
+            est = cost_usd(cfg, judge_model, estimate_tokens(prompt), max_out)
+            blocked = budget.blocking_reason(est)
+            if blocked:
+                stop_reason = blocked
+                for item in rows[index:]:
+                    if (item["qid"], item["arm"]) not in done:
+                        pending.append({"qid": item["qid"], "arm": item["arm"], "dataset": item["dataset"]})
+                break
+            try:
+                value, reason, raw, in_tok, out_tok = judge_one(
                     client, judge_model, row["question"], row["answer"], row["passages"],
-                    int(cfg["judge_max_output_tokens"]), sleep=time.sleep,
+                    max_out, sleep=time.sleep,
                 )
-                append_jsonl(path, signal_row(
-                    row, value, reason, judge_sampled=True, judge_model_id=judge_model, raw_response=raw,
-                ))
+            except JudgeAccessDenied as exc:
+                write_marker(args.results, str(exc))
+                print(exc, file=sys.stderr)
+                return 2
+            append_jsonl(path, signal_row(
+                row, value, reason, judge_sampled=True, judge_model_id=judge_model, raw_response=raw,
+            ))
+            done.add((row["qid"], row["arm"]))
+            usd = cost_usd(cfg, judge_model, in_tok, out_tok)
+            budget.record({
+                "qid": row["qid"], "arm": row["arm"], "dataset": row["dataset"],
+                "usd": usd, "input_tokens": in_tok, "output_tokens": out_tok,
+                "model_id": judge_model,
+            })
             n += 1
+            if budget.global_spent > budget.total_usd_cap + 1e-12 or budget.stage_spent > budget.max_usd + 1e-12:
+                stop_reason = (
+                    f"{SPEND_CAP_REASON}: a call under the pre-call estimate crossed the cap "
+                    f"(ledger ${budget.global_spent:.6f}, total cap ${budget.total_usd_cap:.6f})"
+                )
+                for item in rows[index + 1:]:
+                    if (item["qid"], item["arm"]) not in done:
+                        pending.append({"qid": item["qid"], "arm": item["arm"], "dataset": item["dataset"]})
+                break
+        pending_path = args.results / "signals" / "judge_pending.json"
+        if pending:
+            write_json(pending_path, {"reason": SPEND_CAP_REASON, "detail": stop_reason, "rows": pending})
+            print(f"spend cap: kept {n} judge rows, {len(pending)} left pending")
+            print(stop_reason)
+        elif pending_path.is_file():
+            pending_path.unlink()
+        if not stop_reason:
+            clear_marker(args.results)
         meta = artifact_meta(
             cfg, seed, stage="signals_judge", judge_model_id=judge_model,
             allow_same_judge=bool(args.allow_same_judge), generator_model_id=next(iter(gen_ids)),
             prompt=JUDGE_PROMPT, sample_rate=rate, hash="sha256(qid) first 8 hex / 2**32 < rate",
-            written=n,
+            written=n, total_usd_cap=total_cap, max_usd=args.max_usd,
+            stopped=bool(stop_reason), stop_reason=stop_reason, n_pending=len(pending),
+            ledger_usd=budget.global_spent,
         )
         write_json(args.results / "signals" / "judge_meta.json", meta)
         print(f"judge: wrote {n} rows ({len(sampled)} sampled qids)")

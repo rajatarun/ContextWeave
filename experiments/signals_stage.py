@@ -36,6 +36,10 @@ from experiments.generate_stage import (
     FATAL_CODES, THROTTLE_CODES, _error_code, _error_message,
 )
 
+
+class JudgeAccessDenied(ProtocolError):
+    """The judge model rejected the credentials or the model grant."""
+
 JUDGE_PROMPT = V.JUDGE_PROMPT
 
 
@@ -106,10 +110,10 @@ def judge_one(
     *,
     sleep: Callable[[float], None],
     max_attempts: int = 6,
-) -> tuple[float | None, str | None, str]:
+) -> tuple[float | None, str | None, str, int, int]:
     evidence = "\n\n".join(f"[{i}] {p}" for i, p in enumerate(passages, start=1) if p)
     if not evidence:
-        return None, "no_passages", ""
+        return None, "no_passages", "", 0, 0
     prompt = JUDGE_PROMPT.format(question=question, evidence=evidence[:12000], answer=answer)
     delay = 1.0
     for attempt in range(max_attempts):
@@ -123,20 +127,28 @@ def judge_one(
             for block in resp.get("output", {}).get("message", {}).get("content", []):
                 if isinstance(block, dict) and "text" in block:
                     raw += block["text"]
+            usage = resp.get("usage") or {}
+            in_tok, out_tok = usage.get("inputTokens"), usage.get("outputTokens")
+            if in_tok is None or out_tok is None:
+                raise ProtocolError(
+                    "judge response had no usage tokens. Refusing to invent a cost."
+                )
             score = V.parse_judge_score(raw)
             if score is None:
-                return None, "unparseable", raw
-            return score, None, raw
+                return None, "unparseable", raw, int(in_tok), int(out_tok)
+            return score, None, raw, int(in_tok), int(out_tok)
         except Exception as exc:
             code = _error_code(exc)
             if code in FATAL_CODES or "AccessDenied" in code:
-                raise ProtocolError(f"fatal judge error ({code}): {_error_message(exc)}") from exc
+                raise JudgeAccessDenied(
+                    f"judge model access not yet granted ({code}): {_error_message(exc)}"
+                ) from exc
             if code in THROTTLE_CODES and attempt + 1 < max_attempts:
                 sleep(delay)
                 delay *= 2
                 continue
             if code == "ValidationException":
-                return None, "validation_exception", _error_message(exc)
+                return None, "validation_exception", _error_message(exc), 0, 0
             if code in THROTTLE_CODES:
                 raise ProtocolError(f"judge still throttled after {max_attempts} attempts: {code}") from exc
             raise ProtocolError(f"unhandled judge error ({code}): {_error_message(exc)}") from exc

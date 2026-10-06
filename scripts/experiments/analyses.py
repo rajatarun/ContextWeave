@@ -10,7 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from experiments.analyses_stage import analyse
 from experiments.assumed import assumed_slopes
-from experiments.common import DATASETS, RESULTS, ProtocolError, artifact_meta, load_config, write_json
+from experiments.common import DATASETS, RESULTS, ProtocolError, artifact_meta, load_config, read_jsonl, write_json
+from experiments.judge_access import access_reason
 from experiments.records import load_joined
 
 
@@ -27,17 +28,23 @@ def main(argv: list[str] | None = None) -> int:
     n_boot = cfg["bootstrap_samples"] if args.bootstrap is None else args.bootstrap
     names = [p.strip() for p in args.datasets.split(",") if p.strip()]
     try:
-        for name in names:
-            for fname in ("lexical.jsonl", "nli.jsonl", "judge.jsonl"):
-                path = args.results / "signals" / fname
-                if not path.is_file():
-                    raise ProtocolError(
-                        f"analyses needs {path}. A missing signal is left pending rather than scored as all-missing."
-                    )
+        blocked = access_reason(args.results)
+        required = ["lexical.jsonl", "nli.jsonl"] if blocked else ["lexical.jsonl", "nli.jsonl", "judge.jsonl"]
+        for fname in required:
+            try:
+                read_jsonl(args.results / "signals" / fname)
+            except ProtocolError as exc:
+                raise ProtocolError(
+                    f"analyses needs results/signals/{fname}. A missing signal is left pending "
+                    f"rather than scored as all-missing. {exc}"
+                ) from exc
         rows = load_joined(args.results, cfg, names)
+        if not rows:
+            raise ProtocolError("no completed rows to analyse")
         body = artifact_meta(
             cfg, seed, stage="analyses", bootstrap_samples=n_boot,
             assumed_simulation=assumed_slopes(),
+            unavailable_signals={"judge": blocked} if blocked else {},
             **analyse(rows, seed, n_boot),
         )
         path = args.results / "analyses" / "analyses.json"

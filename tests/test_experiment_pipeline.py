@@ -367,11 +367,15 @@ def test_dry_run_does_not_call_a_model_and_price_table_is_closed():
 
 
 def test_generate_records_validation_and_stops_on_access_denied(tmp_path: Path):
+    from experiments.ledger import Budget
     cfg = load_config()
-    rows = [{
-        "qid": "q1", "dataset": "squad", "arm": "semantic_search", "question_type": "answerable",
-        "question": "Where?", "passages": [{"title": "", "text": "Paris is the capital."}],
-    }]
+    rows = [
+        {
+            "qid": "q1", "dataset": "squad", "arm": arm, "question_type": "answerable",
+            "question": "Where?", "passages": [{"title": "", "text": "Paris is the capital."}],
+        }
+        for arm in ("semantic_search", "graph_first")
+    ]
 
     class Client:
         def __init__(self):
@@ -384,9 +388,10 @@ def test_generate_records_validation_and_stops_on_access_denied(tmp_path: Path):
             raise _client_error("AccessDeniedException", "no")
 
     client = Client()
+    budget = Budget(tmp_path, "generate", max_usd=10, total_usd_cap=30)
     with pytest.raises(ProtocolError, match="AccessDenied"):
-        generate_rows(cfg, rows * 2, tmp_path / "g.jsonl", tmp_path / "c.jsonl",
-                      model_id=cfg["generator_model_id"], max_usd=10, client=client, sleep=lambda s: None)
+        generate_rows(cfg, rows, tmp_path / "g.jsonl", budget,
+                      model_id=cfg["generator_model_id"], client=client, sleep=lambda s: None)
     written = [json.loads(line) for line in (tmp_path / "g.jsonl").read_text().splitlines()]
     assert written[0]["self_status"] == "failed"
     assert written[0]["error"]["type"] == "ValidationException"
@@ -448,3 +453,387 @@ def _client_error(code: str, message: str):
                 self.response = response
         return ClientError({"Error": {"Code": code, "Message": message}}, "Converse")
     return ClientError({"Error": {"Code": code, "Message": message}}, "Converse")
+
+
+def _write_jsonl(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+
+def _script(name: str):
+    import importlib.util
+    path = ROOT / "scripts" / "experiments" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"exp_script_{name}", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _gold_window(pid: str, source: str, text: str) -> dict:
+    return {"id": pid, "title": "", "text": text, "source": source, "role": "gold"}
+
+
+def _nq_row(qid: str, question: str, pool: list[dict]) -> dict:
+    return {
+        "qid": qid, "dataset": "nq", "question": question, "question_type": "nq",
+        "gold_answers": ["answer"], "unanswerable": False, "pool": pool,
+    }
+
+
+def test_nq_pools_keep_gold_and_fill_with_deterministic_hard_negatives():
+    from experiments.data import _record, expand_nq_pools
+    rows = [
+        _nq_row("q1", "zzzz", [_gold_window("p1", "s1", "alpha beta")]),
+        _nq_row("q2", "zzzz", [_gold_window("p2", "s2", "gamma delta")]),
+        _nq_row("q3", "zzzz", [_gold_window("p3", "s3", "epsilon zeta")]),
+    ]
+    again = json.loads(json.dumps(rows))
+    info = expand_nq_pools(rows, 3, 1.5, 0.75)
+    expand_nq_pools(again, 3, 1.5, 0.75)
+    assert info["pool_size_min"] == 3
+    assert info["hard_negatives_added"] == 6
+    for left, right in zip(rows, again):
+        assert [p["id"] for p in left["pool"]] == [p["id"] for p in right["pool"]]
+    gold, *negs = rows[0]["pool"]
+    assert gold["role"] == "gold" and gold["text"] == "alpha beta" and gold["source"] == "s1"
+    assert [p["role"] for p in negs] == ["hard_negative", "hard_negative"]
+    assert {p["source"] for p in negs} == {"s2", "s3"}
+    # No query term is in any window, so every score is 0 and the id breaks the tie.
+    assert [p["id"] for p in negs] == sorted(p["id"] for p in negs)
+    wide = [
+        _nq_row("q9", "zzzz", [_gold_window(f"g{i}", "s9", f"gold window {i}") for i in range(4)]),
+        _nq_row("q2", "zzzz", [_gold_window("p2", "s2", "gamma delta")]),
+        _nq_row("q3", "zzzz", [_gold_window("p3", "s3", "epsilon zeta")]),
+    ]
+    kept = expand_nq_pools(wide, 3, 1.5, 0.75)
+    assert len(wide[0]["pool"]) == 4
+    assert all(p["role"] == "gold" for p in wide[0]["pool"])
+    assert kept["pool_size_max"] == 4
+    with pytest.raises(ProtocolError, match="hard-negative"):
+        expand_nq_pools([_nq_row("only", "zzzz", [_gold_window("p1", "s1", "alpha")])], 3, 1.5, 0.75)
+    shared = [_gold_window("p1", "s1", "alpha beta")]
+    copied = _record("nq", "q1", "zzzz", "nq", ["x"], False, shared)
+    copied["pool"].append({"id": "extra"})
+    assert len(shared) == 1
+
+
+def test_new_stage_files_are_gzipped_and_both_spellings_are_refused(tmp_path: Path):
+    from experiments.common import append_jsonl, read_jsonl, stage_jsonl
+    fresh = stage_jsonl(tmp_path, "rows")
+    assert fresh.name == "rows.jsonl.gz"
+    append_jsonl(fresh, {"qid": "a", "arm": "semantic_search"})
+    append_jsonl(fresh, {"qid": "b", "arm": "hybrid"})
+    assert read_jsonl(tmp_path / "rows.jsonl") == [
+        {"qid": "a", "arm": "semantic_search"},
+        {"qid": "b", "arm": "hybrid"},
+    ]
+    kept = tmp_path / "squad.jsonl"
+    kept.write_text('{"qid": "s"}\n')
+    assert stage_jsonl(tmp_path, "squad") == kept
+    (tmp_path / "squad.jsonl.gz").write_bytes(b"")
+    with pytest.raises(ProtocolError, match="both"):
+        stage_jsonl(tmp_path, "squad")
+
+
+def test_shared_ledger_blocks_the_judge_on_the_global_cap(tmp_path: Path):
+    from experiments.ledger import Budget
+    generation = Budget(tmp_path, "generate", max_usd=27, total_usd_cap=30)
+    generation.record({
+        "qid": "q", "arm": "semantic_search", "dataset": "nq",
+        "usd": 28.0, "input_tokens": 1, "output_tokens": 1, "model_id": "m",
+    })
+    judge = Budget(tmp_path, "judge", max_usd=3, total_usd_cap=30)
+    reason = judge.blocking_reason(2.5)
+    assert reason is not None and "total cap" in reason
+    assert judge.blocking_reason(1.0) is None
+
+
+def test_truncation_is_recorded_and_is_not_the_unparseable_fallback(tmp_path: Path):
+    parsed = parse_self_confidence('{"answer": "Paris", "confidence": 0.9}', truncated=True)
+    assert parsed["status"] == "truncated" and parsed["value"] is None and parsed["reported"] is False
+    row = {
+        "qid": "q", "arm": "semantic_search", "self_status": "truncated",
+        "self_confidence": None, "lexical_grounding": 1.0, "judge": None,
+        "judge_reason": "not_sampled", "correct": 1,
+    }
+    rewards = build_rewards(row, load_config())
+    assert rewards["self"] is None and rewards["self_with_fallbacks"] is None
+    cfg = load_config()
+
+    class Client:
+        def converse(self, **kwargs):
+            assert kwargs["inferenceConfig"]["maxTokens"] == cfg["generator_max_output_tokens"]
+            return {
+                "stopReason": "max_tokens",
+                "output": {"message": {"content": [{"text": '{"answer": "Paris", "confidence": 0.9}'}]}},
+                "usage": {"inputTokens": 12, "outputTokens": 256},
+            }
+
+    from experiments.ledger import Budget
+    retrieval = [{
+        "qid": "q1", "dataset": "squad", "arm": "semantic_search", "question_type": "answerable",
+        "question": "Where?", "passages": [{"title": "", "text": "Paris is the capital."}],
+    }]
+    budget = Budget(tmp_path, "generate", max_usd=10, total_usd_cap=30)
+    summary = generate_rows(
+        cfg, retrieval, tmp_path / "g.jsonl", budget,
+        model_id=cfg["generator_model_id"], client=Client(), sleep=lambda _s: None,
+    )
+    assert summary["stopped"] is False and summary["written"] == 1
+    written = json.loads((tmp_path / "g.jsonl").read_text().splitlines()[0])
+    assert written["self_status"] == "truncated"
+    assert written["self_confidence"] is None
+    assert written["stop_reason"] == "max_tokens"
+    assert written["self_confidence"] != UNPARSEABLE
+
+
+def test_spend_cap_stops_cleanly_and_lists_the_rest_pending(tmp_path: Path):
+    from experiments.common import cost_usd, read_jsonl
+    from experiments.generate_stage import build_user_message, prompt_token_estimate
+    from experiments.ledger import Budget, SPEND_CAP_REASON
+    cfg = load_config()
+    passages = [{"title": "", "text": "Paris is the capital."}]
+    rows = [
+        {
+            "qid": "q1", "dataset": "squad", "arm": arm, "question_type": "answerable",
+            "question": "Where?", "passages": passages,
+        }
+        for arm in ("semantic_search", "graph_first")
+    ]
+    user = build_user_message(rows[0]["question"], passages)
+    in_tok = prompt_token_estimate(system_prompt(), user)
+    out_tok = int(cfg["generator_max_output_tokens"])
+    one_call = cost_usd(cfg, cfg["generator_model_id"], in_tok, out_tok)
+
+    class Client:
+        def converse(self, **kwargs):
+            return {
+                "stopReason": "end_turn",
+                "output": {"message": {"content": [{"text": '{"answer": "Paris", "confidence": 0.4}'}]}},
+                "usage": {"inputTokens": in_tok, "outputTokens": out_tok},
+            }
+
+    _write_jsonl(tmp_path / "retrieval" / "squad.jsonl", rows)
+    gen = _script("generate")
+    gen.make_client = lambda region: Client()
+    code = gen.main([
+        "--results", str(tmp_path), "--datasets", "squad", "--seed", "0",
+        "--max-usd", f"{one_call * 1.5:.10f}", "--total-usd-cap", "30",
+    ])
+    assert code == 0
+    written = read_jsonl(tmp_path / "generation" / "squad.jsonl")
+    assert len(written) == 1 and written[0]["arm"] == "semantic_search"
+    pending = json.loads((tmp_path / "generation" / "pending.json").read_text())
+    assert pending["reason"] == SPEND_CAP_REASON
+    assert pending["rows"] == [{"qid": "q1", "arm": "graph_first", "dataset": "squad"}]
+    direct = Budget(tmp_path / "other", "generate", max_usd=one_call * 1.5, total_usd_cap=30)
+    summary = generate_rows(
+        cfg, rows, tmp_path / "other" / "g.jsonl", direct,
+        model_id=cfg["generator_model_id"], client=Client(), sleep=lambda _s: None,
+    )
+    assert summary["stopped"] is True
+    assert [item["arm"] for item in summary["pending"]] == ["graph_first"]
+
+
+def _mini_squad(tmp_path: Path) -> None:
+    cfg = load_config()
+    question = {
+        "qid": "q1", "dataset": "squad", "question": "Where is the capital?",
+        "question_type": "answerable", "gold_answers": ["Paris"], "unanswerable": False,
+    }
+    _write_jsonl(tmp_path / "samples" / "squad.jsonl", [question])
+    passages = [{"id": "p", "title": "France", "text": "Paris is the capital of France."}]
+    retrieval = []
+    generation = []
+    for arm in ("semantic_search", "graph_first", "keyword_boosted", "hybrid"):
+        retrieval.append({
+            "qid": "q1", "dataset": "squad", "arm": arm, "question_type": "answerable",
+            "question": question["question"], "passages": passages, "pool_size": 1,
+        })
+        generation.append({
+            "qid": "q1", "dataset": "squad", "arm": arm, "question_type": "answerable",
+            "answer": "Paris",
+            "raw_response": '{"answer": "Paris", "confidence": 0.8}',
+            "self_confidence": 0.8, "self_reported": True, "self_status": "ok",
+            "input_tokens": 10, "output_tokens": 20,
+            "model_id": cfg["generator_model_id"], "error": None,
+        })
+    _write_jsonl(tmp_path / "retrieval" / "squad.jsonl", retrieval)
+    _write_jsonl(tmp_path / "generation" / "squad.jsonl", generation)
+
+
+def test_judge_access_denied_stays_pending_downstream(tmp_path: Path, capsys):
+    from experiments.judge_access import JUDGE_ACCESS_REASON
+    _mini_squad(tmp_path)
+    signals = _script("signals")
+    assert signals.main(["lexical", "--results", str(tmp_path), "--datasets", "squad", "--seed", "0"]) == 0
+    from experiments.common import read_jsonl
+    lexical = read_jsonl(tmp_path / "signals" / "lexical.jsonl")
+    _write_jsonl(tmp_path / "signals" / "nli.jsonl", [
+        {"qid": row["qid"], "dataset": row["dataset"], "arm": row["arm"],
+         "question_type": row["question_type"], "value": 0.4, "reason": None}
+        for row in lexical
+    ])
+
+    class Client:
+        def converse(self, **kwargs):
+            raise _client_error("AccessDeniedException", "no grant")
+
+    signals.make_client = lambda region: Client()
+    import yaml
+    cfg = yaml.safe_load((ROOT / "experiments" / "config.yaml").read_text())
+    cfg["judge_sample_rate"] = 1
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(cfg))
+    code = signals.main([
+        "judge", "--results", str(tmp_path), "--datasets", "squad", "--seed", "0",
+        "--config", str(config_path), "--max-usd", "3", "--total-usd-cap", "30",
+    ])
+    assert code == 2
+    assert JUDGE_ACCESS_REASON in capsys.readouterr().err
+    marker = json.loads((tmp_path / "signals" / "judge_unavailable.json").read_text())
+    assert marker["reason"] == JUDGE_ACCESS_REASON
+    for name, argv in (
+        ("calibrate", ["--datasets", "squad", "--bootstrap", "20"]),
+        ("replay", ["--datasets", "squad", "--seeds", "0"]),
+        ("analyses", ["--datasets", "squad", "--bootstrap", "20"]),
+        ("write_results", []),
+    ):
+        assert _script(name).main(
+            ["--results", str(tmp_path), "--seed", "0", *argv]
+        ) == 0
+    findings = (tmp_path / "FINDINGS.md").read_text()
+    pending = (tmp_path / "PENDING.md").read_text()
+    assert JUDGE_ACCESS_REASON in findings
+    assert JUDGE_ACCESS_REASON in pending
+    calibration = json.loads((tmp_path / "calibration" / "calibration.json").read_text())
+    assert calibration["unavailable_signals"]["judge"] == JUDGE_ACCESS_REASON
+    replay = json.loads((tmp_path / "replay" / "replay_summary.json").read_text())
+    assert "verified" not in replay["datasets"]["squad"]
+    assert replay["unavailable_rewards"]["verified"] == JUDGE_ACCESS_REASON
+
+
+def test_claim_verdicts_follow_the_artifact_rules(tmp_path: Path):
+    from experiments.claims import claim_verdicts
+    from experiments.common import write_json
+    empty = {item["id"]: item["verdict"] for item in claim_verdicts(tmp_path, 0.5)}
+    assert set(empty.values()) == {"open"}
+
+    def interval(estimate: float) -> dict:
+        return {"estimate": estimate, "lo": estimate - 0.01, "hi": estimate + 0.01}
+
+    def analyses(pairs: list, reversed_order: bool, slopes: tuple[float, float], combo: tuple[float, float, float]) -> dict:
+        datasets = {}
+        for name in ("squad", "hotpot", "nq"):
+            datasets[name] = {
+                "self": {
+                    "assumption": {
+                        "nonoverlapping_pairs": pairs,
+                        "by_arm": {
+                            "semantic_search": {"y0": interval(0.4), "y1": interval(0.8)},
+                            "graph_first": {"y0": interval(0.4), "y1": interval(0.8)},
+                        },
+                    },
+                    "slope": {"s": interval(slopes[0])},
+                },
+                "lexical_grounding": {"slope": {"s": interval(slopes[1])}},
+                "fallback": {
+                    "order_reversed": reversed_order,
+                    "order_skip": ["graph_first", "semantic_search"],
+                    "order_fallback": (
+                        ["semantic_search", "graph_first"] if reversed_order
+                        else ["graph_first", "semantic_search"]
+                    ),
+                },
+                "combination": {
+                    "grounding": {"s": interval(combo[0])},
+                    "judge": {"s": interval(combo[1])},
+                    "verified": {"s": interval(combo[2])},
+                },
+            }
+        return {"datasets": datasets}
+
+    def calibration(agree: bool, verdict: str) -> dict:
+        return {
+            "prediction": {"verdict": verdict},
+            "datasets": {
+                name: {"signals": {"self": {"rank_agrees": agree}}}
+                for name in ("squad", "hotpot", "nq")
+            },
+        }
+
+    def replay(self_r: float, norm_r: float, ground_r: float) -> dict:
+        def block(value: float) -> dict:
+            return {"fractional": {"pseudo_regret_mean": value}}
+        return {
+            "datasets": {
+                name: {
+                    "self": block(self_r),
+                    "normalized_self": block(norm_r),
+                    "lexical_grounding": block(ground_r),
+                }
+                for name in ("squad", "hotpot", "nq")
+            }
+        }
+
+    root = tmp_path / "supported"
+    write_json(root / "analyses" / "analyses.json", analyses([], True, (0.1, 0.5), (0.4, 0.2, 0.3)))
+    write_json(root / "calibration" / "calibration.json", calibration(False, "supported"))
+    write_json(root / "replay" / "replay_summary.json", replay(10.0, 6.0, 2.0))
+    by_id = {item["id"]: item["verdict"] for item in claim_verdicts(root, 0.5)}
+    assert by_id == {
+        "Assumption 1": "supported",
+        "Proposition 1": "supported",
+        "Proposition 2": "supported",
+        "Theorem 1 scale objection": "supported",
+        "Proposition 3": "supported",
+        "Section 6 prediction": "supported",
+    }
+    denied = tmp_path / "denied"
+    write_json(denied / "analyses" / "analyses.json", analyses(
+        [{"y": 1, "arms": ["a", "b"]}], False, (0.1, 0.5), (0.4, 0.2, -0.1),
+    ))
+    write_json(denied / "calibration" / "calibration.json", calibration(True, "contradicted"))
+    write_json(denied / "replay" / "replay_summary.json", replay(10.0, 9.5, 2.0))
+    write_json(denied / "signals" / "judge_unavailable.json", {
+        "reason": "judge model access not yet granted", "detail": "AccessDenied",
+    })
+    by_id = {item["id"]: item for item in claim_verdicts(denied, 0.5)}
+    assert by_id["Assumption 1"]["verdict"] == "contradicted"
+    assert by_id["Proposition 1"]["verdict"] == "contradicted"
+    assert by_id["Proposition 2"]["verdict"] == "contradicted"
+    assert by_id["Theorem 1 scale objection"]["verdict"] == "contradicted"
+    assert by_id["Proposition 3"]["verdict"] == "open"
+    assert by_id["Proposition 3"]["because"] == "judge model access not yet granted"
+    assert by_id["Section 6 prediction"]["verdict"] == "contradicted"
+    combo_bad = tmp_path / "combo"
+    write_json(combo_bad / "analyses" / "analyses.json", analyses([], False, (0.1, 0.5), (0.4, 0.2, -0.1)))
+    write_json(combo_bad / "calibration" / "calibration.json", calibration(True, "pending"))
+    by_id = {item["id"]: item["verdict"] for item in claim_verdicts(combo_bad, 0.5)}
+    assert by_id["Proposition 3"] == "contradicted"
+    assert by_id["Section 6 prediction"] == "open"
+
+
+def test_post_generation_stages_do_not_fetch_datasets():
+    files = [
+        "experiments/calibrate_stage.py",
+        "experiments/replay_stage.py",
+        "experiments/analyses_stage.py",
+        "experiments/reporting.py",
+        "experiments/records.py",
+        "experiments/claims.py",
+        "scripts/experiments/calibrate.py",
+        "scripts/experiments/replay.py",
+        "scripts/experiments/analyses.py",
+        "scripts/experiments/write_results.py",
+    ]
+    for rel in files:
+        text = (ROOT / rel).read_text()
+        assert "urllib" not in text, rel
+        assert "load_nq" not in text, rel
+        assert "import datasets" not in text, rel
+        assert "from datasets" not in text, rel
+    judge = (ROOT / "experiments" / "signals_stage.py").read_text()
+    assert "sentence_transformers" in judge
+    assert "urllib" not in judge

@@ -23,6 +23,7 @@ import random
 from collections import Counter, defaultdict
 from typing import Any, Sequence
 
+from experiments.judge_access import JUDGE_ACCESS_REASON
 from experiments.metrics import cluster_bootstrap, conditional_mean
 from experiments.replay_stage import NORMALIZED_SELF_DEFINITION
 
@@ -122,6 +123,66 @@ def _missingness(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
     return out
 
 
+def _order(stats: dict[str, dict[str, Any]], key: str) -> list[str]:
+    pairs = [(arm, block[key]) for arm, block in stats.items() if block.get(key) is not None]
+    pairs.sort(key=lambda item: (-float(item[1]), item[0]))
+    return [arm for arm, _ in pairs]
+
+
+def _fallback(group: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    by_arm: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in group:
+        by_arm[row["arm"]].append(row)
+    stats: dict[str, Any] = {}
+    for arm, rows in by_arm.items():
+        observed = [
+            row for row in rows
+            if row.get("self_status") == "ok" and row.get("self_confidence") is not None
+        ]
+        filled = [
+            row["rewards"]["self_with_fallbacks"]
+            for row in rows
+            if row.get("rewards", {}).get("self_with_fallbacks") is not None
+        ]
+        stats[arm] = {
+            "mean_skip": (sum(row["self_confidence"] for row in observed) / len(observed)) if observed else None,
+            "mean_fallback": (sum(filled) / len(filled)) if filled else None,
+        }
+    skip = _order(stats, "mean_skip")
+    fallback = _order(stats, "mean_fallback")
+    comparable = len(skip) == len(stats) and len(fallback) == len(stats) and len(stats) > 1
+    return {
+        "by_arm": stats,
+        "order_skip": skip,
+        "order_fallback": fallback,
+        "order_reversed": bool(comparable and skip != fallback),
+    }
+
+
+def _pack(rows: Sequence[dict[str, Any]], values: Sequence[float]) -> list[dict[str, Any]]:
+    return [
+        {"qid": row["qid"], "arm": row["arm"], "correct": int(row["correct"]), "value": value, "reason": None}
+        for row, value in zip(rows, values)
+    ]
+
+
+def _combination(group: Sequence[dict[str, Any]], rng: random.Random, n_boot: int) -> dict[str, Any] | None:
+    both = [
+        row for row in group
+        if row.get("lexical_grounding") is not None and row.get("judge") is not None
+        and row.get("rewards", {}).get("verified") is not None
+    ]
+    if len(both) < 2:
+        return None
+    sub = random.Random(rng.randrange(1 << 30))
+    return {
+        "n": len(both),
+        "grounding": _slope_block(_pack(both, [row["lexical_grounding"] for row in both]), sub, n_boot),
+        "judge": _slope_block(_pack(both, [row["judge"] for row in both]), sub, n_boot),
+        "verified": _slope_block(_pack(both, [row["rewards"]["verified"] for row in both]), sub, n_boot),
+    }
+
+
 def analyse(rows: Sequence[dict[str, Any]], seed: int, n_boot: int) -> dict[str, Any]:
     by_dataset: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -132,12 +193,17 @@ def analyse(rows: Sequence[dict[str, Any]], seed: int, n_boot: int) -> dict[str,
         signals: dict[str, Any] = {}
         for signal in SIGNALS:
             srows = _signal_rows(group, signal)
+            if srows and all(row["reason"] == JUDGE_ACCESS_REASON for row in srows):
+                signals[signal] = {"unavailable": JUDGE_ACCESS_REASON}
+                continue
             sub = random.Random(rng.randrange(1 << 30))
             signals[signal] = {
                 "slope": _slope_block(srows, sub, n_boot),
                 "assumption": _arm_conditional(srows, sub, n_boot),
                 "missingness": _missingness(srows),
             }
+        signals["fallback"] = _fallback(group)
+        signals["combination"] = _combination(group, rng, n_boot)
         datasets[name] = signals
     return {
         "datasets": datasets,

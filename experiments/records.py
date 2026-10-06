@@ -16,8 +16,10 @@ sys.path.insert(0, str(_ROOT / "src" / "query_api"))
 
 import verified_reward as V  # noqa: E402
 
-from experiments.common import ProtocolError, read_jsonl, validate_rows
+from experiments.common import ProtocolError, read_json, read_jsonl, validate_rows
 from experiments.confidence import FAILED, OMITTED, UNPARSEABLE
+from experiments.judge_access import JUDGE_ACCESS_REASON, access_reason
+from experiments.ledger import SPEND_CAP_REASON
 from experiments.metrics import score_answer
 
 _FALLBACK = {"omitted": OMITTED, "unparseable": UNPARSEABLE, "failed": FAILED}
@@ -39,13 +41,31 @@ def combine_reward(parts: dict[str, tuple[float | None, float]]) -> float | None
     return value
 
 
+def _pending_keys(path: Path) -> dict[tuple[str, str], str]:
+    if not path.is_file():
+        return {}
+    data = read_json(path)
+    reason = str(data.get("reason") or SPEND_CAP_REASON)
+    out = {}
+    for row in data.get("rows") or []:
+        out[(row["qid"], row["arm"])] = reason
+    return out
+
+
 def build_rewards(row: dict[str, Any], cfg: dict[str, Any]) -> dict[str, float | None]:
     status = row["self_status"]
-    if status not in ("ok", "omitted", "unparseable", "failed"):
+    if status not in ("ok", "omitted", "unparseable", "failed", "truncated"):
         raise ProtocolError(f"qid={row['qid']} arm={row['arm']}: unknown self_status {status!r}")
     self_ok = float(row["self_confidence"]) if status == "ok" else None
     if status == "ok":
         fallback = float(row["self_confidence"])
+    elif status == "truncated":
+        # Not one of the deployed fallback constants. Leave it unobserved.
+        fallback = None
+        if row["self_confidence"] is not None:
+            raise ProtocolError(
+                f"qid={row['qid']} arm={row['arm']}: truncated rows store no confidence"
+            )
     else:
         fallback = float(cfg[f"fallback_{status}"])
         if abs(float(row["self_confidence"]) - _FALLBACK[status]) > 1e-9:
@@ -58,15 +78,25 @@ def build_rewards(row: dict[str, Any], cfg: dict[str, Any]) -> dict[str, float |
     s_w = float(cfg["self_weight"])
     grounding = row.get("lexical_grounding")
     judge = row.get("judge")
-    verified = combine_reward({
-        "grounding": (grounding, g_w),
-        "judge": (judge, j_w),
-    })
-    verified_self = combine_reward({
-        "grounding": (grounding, g_w),
-        "judge": (judge, j_w),
-        "self": (self_ok, s_w),
-    })
+    judge_reason = row.get("judge_reason")
+    # Access denied, or a row the spend cap stopped before judging: do not
+    # quietly score verified from grounding alone.
+    withhold_verified = judge_reason in (JUDGE_ACCESS_REASON, SPEND_CAP_REASON) or (
+        isinstance(judge_reason, str) and judge_reason.startswith(SPEND_CAP_REASON)
+    )
+    if withhold_verified:
+        verified = None
+        verified_self = None
+    else:
+        verified = combine_reward({
+            "grounding": (grounding, g_w),
+            "judge": (judge, j_w),
+        })
+        verified_self = combine_reward({
+            "grounding": (grounding, g_w),
+            "judge": (judge, j_w),
+            "self": (self_ok, s_w),
+        })
     return {
         "self": self_ok,
         "self_with_fallbacks": fallback,
@@ -90,38 +120,56 @@ def load_joined(results: Path, cfg: dict[str, Any], datasets: Sequence[str] | No
         rows = read_jsonl(path)
         validate_rows(rows, ("qid", "dataset", "question", "question_type", "gold_answers", "unanswerable"), path)
         questions.extend(rows)
+    gen_pending = _pending_keys(results / "generation" / "pending.json")
+    judge_pending = _pending_keys(results / "signals" / "judge_pending.json")
+    judge_blocked = access_reason(results)
     retrieval_rows = []
     generation_rows = []
     for name in names:
         rpath = results / "retrieval" / f"{name}.jsonl"
         gpath = results / "generation" / f"{name}.jsonl"
         retrieval_rows.extend(read_jsonl(rpath))
-        generation_rows.extend(read_jsonl(gpath))
+        try:
+            generation_rows.extend(read_jsonl(gpath))
+        except ProtocolError:
+            if not gen_pending:
+                raise
+    if generation_rows:
+        validate_rows(generation_rows, ("qid", "arm", "answer", "self_confidence", "self_status", "self_reported"), results / "generation")
     validate_rows(retrieval_rows, ("qid", "arm", "passages"), results / "retrieval")
-    validate_rows(generation_rows, ("qid", "arm", "answer", "self_confidence", "self_status", "self_reported"), results / "generation")
     retrieval = _index(retrieval_rows, results / "retrieval")
     generation = _index(generation_rows, results / "generation")
-    signals = {}
+    signals: dict[str, Any] = {}
     for kind, fname in (
         ("lexical_grounding", "lexical.jsonl"),
         ("nli_grounding", "nli.jsonl"),
         ("judge", "judge.jsonl"),
     ):
         path = results / "signals" / fname
-        if not attach_signals:
+        if not attach_signals or (kind == "judge" and judge_blocked):
             signals[kind] = None
-        elif path.is_file():
+            continue
+        try:
             rows = read_jsonl(path)
-            validate_rows(rows, ("qid", "arm", "value", "reason"), path)
-            signals[kind] = _index(rows, path)
-        else:
+        except ProtocolError:
             signals[kind] = None
+            continue
+        validate_rows(rows, ("qid", "arm", "value", "reason"), path)
+        signals[kind] = _index(rows, path)
     joined = []
+    arms = ("semantic_search", "graph_first", "keyword_boosted", "hybrid")
     for q in questions:
-        for arm in ("semantic_search", "graph_first", "keyword_boosted", "hybrid"):
+        keys = [(q["qid"], arm) for arm in arms]
+        if any(key not in retrieval for key in keys):
+            missing = [key for key in keys if key not in retrieval]
+            raise ProtocolError(f"missing retrieval for {missing[0]}")
+        if any(key not in generation for key in keys):
+            absent = [key for key in keys if key not in generation]
+            if all(key in gen_pending for key in absent):
+                continue
+            raise ProtocolError(f"missing generation for {absent[0]}")
+        for arm in arms:
             key = (q["qid"], arm)
-            if key not in retrieval or key not in generation:
-                raise ProtocolError(f"missing retrieval or generation for {key}")
             gen = generation[key]
             scored = score_answer(gen["answer"], q["gold_answers"], bool(q["unanswerable"]))
             rec = {
@@ -139,16 +187,21 @@ def load_joined(results: Path, cfg: dict[str, Any], datasets: Sequence[str] | No
                 "passages": [p["text"] for p in retrieval[key]["passages"]],
             }
             for kind, table in signals.items():
-                if table is None:
+                if kind == "judge" and judge_blocked:
+                    rec[kind] = None
+                    rec[f"{kind}_reason"] = JUDGE_ACCESS_REASON
+                elif table is None:
                     rec[kind] = None
                     rec[f"{kind}_reason"] = "signal_file_missing"
-                else:
-                    if key not in table:
+                elif key not in table:
+                    if kind == "judge" and key in judge_pending:
+                        rec[kind] = None
+                        rec[f"{kind}_reason"] = judge_pending[key]
+                    else:
                         raise ProtocolError(f"signal {kind} missing row for {key}")
+                else:
                     rec[kind] = table[key]["value"]
                     rec[f"{kind}_reason"] = table[key]["reason"]
-            rec["lexical_grounding"] = rec["lexical_grounding"]
-            rec["judge"] = rec["judge"]
             rec["rewards"] = build_rewards(rec, cfg)
             joined.append(rec)
     return joined

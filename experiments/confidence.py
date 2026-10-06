@@ -1,6 +1,8 @@
 """Verbalized self-confidence, parsed the same way as the query synthesizer.
 
-The status is one of ``ok``, ``omitted``, ``unparseable``, ``failed``.
+The status is one of ``ok``, ``omitted``, ``unparseable``, ``failed``,
+``truncated``. Truncation is the generator hitting its output-token cap.
+That row is not an observation and it is not given a fallback constant.
 Fallback numbers are recorded on the response and are not observations:
 the skip-unobserved reward leaves them out, and only the fallback replay
 row substitutes them.
@@ -53,13 +55,22 @@ def status_from_parsed(parsed: dict[str, Any]) -> dict[str, Any]:
     return {"value": value, "reported": True, "status": "ok"}
 
 
-def parse_self_confidence(raw_text: str | None, *, call_failed: bool = False) -> dict[str, Any]:
+def parse_self_confidence(
+    raw_text: str | None,
+    *,
+    call_failed: bool = False,
+    truncated: bool = False,
+) -> dict[str, Any]:
     if call_failed:
         return {"value": FAILED, "reported": False, "status": "failed", "answer": ""}
     parsed = parse_model_json(raw_text or "")
-    out = status_from_parsed(parsed)
     answer = parsed.get("answer")
     if not isinstance(answer, str):
         answer = raw_text or ""
+    if truncated:
+        # The cap cut the response. A confidence parsed from that text would
+        # be a number the model did not finish saying.
+        return {"value": None, "reported": False, "status": "truncated", "answer": answer}
+    out = status_from_parsed(parsed)
     out["answer"] = answer
     return out

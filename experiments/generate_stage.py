@@ -3,7 +3,8 @@
 Self-confidence is the generator's verbalized number, parsed by
 ``experiments.confidence`` to the same decision table as
 ``synthesizer._confidence_from``. Parse status is ``ok``, ``omitted``,
-``unparseable``, or ``failed``.
+``unparseable``, ``failed``, or ``truncated``. Truncation is the output-token
+cap and is not stored as a fallback confidence.
 
 ``--dry-run`` builds every prompt from the retrieval file and reports an
 input-token estimate plus an output-token upper bound (max output tokens on
@@ -26,6 +27,7 @@ from experiments.common import (
     RETRIEVAL_FIELDS,
 )
 from experiments.confidence import parse_self_confidence
+from experiments.ledger import SPEND_CAP_REASON, Budget
 
 PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "generator_system.txt"
 THROTTLE_CODES = {
@@ -117,7 +119,7 @@ def converse_once(client: Any, model_id: str, system: str, user: str, max_tokens
     )
 
 
-def _text_and_usage(resp: dict[str, Any]) -> tuple[str, int | None, int | None]:
+def _text_and_usage(resp: dict[str, Any]) -> tuple[str, int | None, int | None, str | None]:
     parts = []
     for block in resp.get("output", {}).get("message", {}).get("content", []):
         if isinstance(block, dict) and "text" in block:
@@ -125,36 +127,45 @@ def _text_and_usage(resp: dict[str, Any]) -> tuple[str, int | None, int | None]:
     usage = resp.get("usage") or {}
     in_tok = usage.get("inputTokens")
     out_tok = usage.get("outputTokens")
-    return "".join(parts), in_tok, out_tok
+    stop = resp.get("stopReason")
+    return "".join(parts), in_tok, out_tok, stop if isinstance(stop, str) else None
+
+
+def _stop_summary(reason: str, pending: list[dict[str, Any]], n_written: int, n_skipped: int, budget: Budget) -> dict[str, Any]:
+    return {
+        "written": n_written,
+        "skipped": n_skipped,
+        "spent_usd": budget.global_spent,
+        "stage_spent_usd": budget.stage_spent,
+        "stopped": True,
+        "stop_reason": reason,
+        "pending": [
+            {"qid": row["qid"], "arm": row["arm"], "dataset": row.get("dataset")}
+            for row in pending
+        ],
+    }
 
 
 def generate_rows(
     cfg: dict[str, Any],
     retrieval_rows: list[dict[str, Any]],
     out_path: Path,
-    cost_path: Path,
+    budget: Budget,
     *,
     model_id: str,
-    max_usd: float,
     client: Any,
     sleep: Callable[[float], None] = time.sleep,
     max_attempts: int = 6,
 ) -> dict[str, Any]:
-    if max_usd <= 0:
-        raise ProtocolError("--max-usd must be a positive number")
     price_for(cfg, model_id)
     system = system_prompt()
     done = done_keys(out_path, ("qid", "arm"))
-    spent = 0.0
-    if cost_path.is_file():
-        for row in read_jsonl(cost_path):
-            spent += float(row.get("usd", 0.0))
     max_out = int(cfg["generator_max_output_tokens"])
     temperature = float(cfg["temperature"])
     n_written = 0
     n_skipped = 0
     recent_validation: list[str] = []
-    for row in retrieval_rows:
+    for index, row in enumerate(retrieval_rows):
         key = (row["qid"], row["arm"])
         if key in done:
             n_skipped += 1
@@ -162,20 +173,23 @@ def generate_rows(
         user = build_user_message(row["question"], row["passages"])
         est_in = prompt_token_estimate(system, user)
         est_cost = cost_usd(cfg, model_id, est_in, max_out)
-        if spent + est_cost > max_usd:
-            raise ProtocolError(
-                f"spend cap reached: spent ${spent:.6f}, next call estimated ${est_cost:.6f}, "
-                f"cap ${max_usd:.6f}. Stopping before the call."
-            )
+        reason = budget.blocking_reason(est_cost)
+        if reason:
+            pending = [
+                item for item in retrieval_rows[index:]
+                if (item["qid"], item["arm"]) not in done
+            ]
+            return _stop_summary(reason, pending, n_written, n_skipped, budget)
         raw = ""
         in_tok = out_tok = None
+        stop_reason = None
         error = None
         call_failed = False
         delay = 1.0
         for attempt in range(max_attempts):
             try:
                 resp = converse_once(client, model_id, system, user, max_out, temperature)
-                raw, in_tok, out_tok = _text_and_usage(resp)
+                raw, in_tok, out_tok, stop_reason = _text_and_usage(resp)
                 break
             except Exception as exc:
                 code = _error_code(exc)
@@ -219,8 +233,8 @@ def generate_rows(
                 )
             in_tok, out_tok = 0, 0
         usd = cost_usd(cfg, model_id, int(in_tok), int(out_tok))
-        spent += usd
-        parsed = parse_self_confidence(raw, call_failed=call_failed)
+        truncated = stop_reason == "max_tokens"
+        parsed = parse_self_confidence(raw, call_failed=call_failed, truncated=truncated)
         record = {
             "qid": row["qid"],
             "dataset": row["dataset"],
@@ -231,6 +245,7 @@ def generate_rows(
             "self_confidence": parsed["value"],
             "self_reported": parsed["reported"],
             "self_status": parsed["status"],
+            "stop_reason": stop_reason,
             "input_tokens": int(in_tok),
             "output_tokens": int(out_tok),
             "usd": usd,
@@ -240,18 +255,35 @@ def generate_rows(
             "error": error,
         }
         append_jsonl(out_path, record)
-        append_jsonl(cost_path, {
-            "qid": row["qid"], "arm": row["arm"], "usd": usd,
-            "input_tokens": int(in_tok), "output_tokens": int(out_tok),
-            "spent_after": spent, "model_id": model_id,
+        done.add(key)
+        budget.record({
+            "qid": row["qid"], "arm": row["arm"], "dataset": row.get("dataset"),
+            "usd": usd, "input_tokens": int(in_tok), "output_tokens": int(out_tok),
+            "model_id": model_id,
         })
         n_written += 1
-        if spent > max_usd:
-            raise ProtocolError(
-                f"spend cap exceeded after a call that was under the pre-call estimate: "
-                f"spent ${spent:.6f}, cap ${max_usd:.6f}. Stopping."
+        overrun = budget.blocking_reason(0.0)
+        if overrun and budget.global_spent > budget.total_usd_cap + 1e-12:
+            # The call was under the estimate and still crossed the cap.
+            # Keep the row. Do not start another one.
+            pending = [
+                item for item in retrieval_rows[index + 1:]
+                if (item["qid"], item["arm"]) not in done
+            ]
+            return _stop_summary(
+                f"{SPEND_CAP_REASON}: a call under the pre-call estimate crossed the cap "
+                f"(ledger ${budget.global_spent:.6f}, total cap ${budget.total_usd_cap:.6f})",
+                pending, n_written, n_skipped, budget,
             )
-    return {"written": n_written, "skipped": n_skipped, "spent_usd": spent}
+    return {
+        "written": n_written,
+        "skipped": n_skipped,
+        "spent_usd": budget.global_spent,
+        "stage_spent_usd": budget.stage_spent,
+        "stopped": False,
+        "stop_reason": None,
+        "pending": [],
+    }
 
 
 def make_client(region: str) -> Any:
