@@ -1,0 +1,477 @@
+\documentclass{article}
+\usepackage{amsmath,amssymb,amsthm}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{assumption}[theorem]{Assumption}
+\newtheorem{definition}[theorem]{Definition}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+\newtheorem{conjecture}[theorem]{Conjecture}
+
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\kl}{\mathrm{kl}}
+\newcommand{\KL}{\mathrm{KL}}
+\newcommand{\Reg}{\mathrm{Reg}}
+\newcommand{\eps}{\varepsilon}
+\DeclareMathOperator{\supp}{supp}
+
+\title{Scale-free regret for self-confidence rewards\\
+and a corrected combination rule}
+\author{Proof note for the paper accompanying this repository}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+The paper's Theorem~1 lower-bounds correctness regret of a self-confidence router by a constant times $\ln T$, with that constant proportional to $1/s^2$ and $s=(1-\rho)(c_1-c_0')$. The factor $(c_1-c_0')$ is a numeric scale of the confidence encoding. This note proves a scale-free replacement: any learner whose observation is a garbling of the honest-wrong event pays
+\[
+\liminf_{T\to\infty}\frac{\E[\Reg_Y(T)]}{\ln T}
+\ge\sum_{a\neq a^\star}
+\frac{\Delta_a}{\kl\!\big((1-\mu_a)(1-\rho),\,(1-\mu_{a^\star})(1-\rho)\big)},
+\]
+which is of order $\ln T/(1-\rho)$ as $\rho\to 1$. The power $2$ in the paper's $1/s^2$ bound is proved here only under an extra non-vanishing Bernoulli-variance assumption; it is not true for every encoding of the same latent event. The paper's Proposition~3 is restated with an explicit hypothesis on the observation mask. Under that hypothesis the per-mask statement holds. The mask-averaged slope need not be positive when the mask depends on correctness, and arm-dependent grounding coverage can reverse the arm ordering. An inverse-propensity correction restores the affine reward when observation propensities are known and missingness is independent of correctness given the arm.
+\end{abstract}
+
+\section{Setup}
+Fix a question type and a finite set of arms (retrieval strategies) $\{1,\dots,K\}$, $K\ge 2$. Arm $a$ returns a correct answer with probability $\mu_a\in(0,1)$, written $Y\sim\mathrm{Bernoulli}(\mu_a)$. Let $a^\star$ be the unique maximizer of $\mu_a$ and write $\Delta_a=\mu_{a^\star}-\mu_a$. Correctness regret of a (possibly randomized) policy is the random variable
+\[
+\Reg_Y(T)=\sum_{t=1}^T\Delta_{A_t},
+\]
+and statements below refer to its expectation. This is the paper's correctness regret: it charges the gap in $\mu$, not the gap in the scalar the router treats as a reward.
+
+A reward signal takes values in $[0,1]\cup\{\bot\}$. The symbol $\bot$ means ``not observed''; a skipped round does not update the router.
+
+\begin{assumption}[Paper, Assumption~1]\label{ass:ci}
+A reward $R$ depends on the arm only through correctness:
+\[
+\E[R\mid Y,\,a,\,R\neq\bot]=\E[R\mid Y,\,R\neq\bot].
+\]
+\end{assumption}
+
+\begin{lemma}[Paper, Lemma~1]\label{lem:affine}
+Under Assumption~\ref{ass:ci}, with $c_y=\E[R\mid Y=y,\,R\neq\bot]$ and $s=c_1-c_0$,
+\[
+r_a:=\E[R\mid a,\,R\neq\bot]=c_0+s\,\mu_a,
+\]
+whenever $\P(R\neq\bot\mid a)>0$. If this probability does not depend on $Y$ given $a$, the same identity holds for the unconditional mean of the observed samples.
+\end{lemma}
+
+\begin{proof}
+$\E[R\mid a,\,R\neq\bot]=\sum_{y\in\{0,1\}}c_y\,\P(Y=y\mid a,\,R\neq\bot)$. If $\P(R\neq\bot\mid Y,a)=\P(R\neq\bot\mid a)$, then $\P(Y=1\mid a,\,R\neq\bot)=\mu_a$, and the display follows. The paper's one-line proof is the case in which $R\neq\bot$ almost surely, where the conditioning on $Y$ drops out of $c_y$ by Assumption~\ref{ass:ci} alone.
+\end{proof}
+
+The extra clause on $\P(R\neq\bot\mid Y,a)$ is not in the paper's statement of Lemma~1. It is the missing-data hypothesis already used in the paper's Proposition~2 when unobserved rounds are skipped, and it is needed as soon as $\bot$ is allowed inside Lemma~1.
+
+\section{Honest-wrong event}
+\begin{definition}[Overconfidence $\rho$]\label{def:rho}
+Let $P_1$ and $P_0$ be probability measures on a measurable signal space, and let $\rho\in[0,1)$. The \emph{honest-wrong bit} $W\in\{0,1\}$ and the self-signal $C$ are drawn as follows, given arm $a$:
+\begin{align*}
+\P(W=1\mid Y=1,\,a)&=0, &
+\P(W=1\mid Y=0,\,a)&=1-\rho,\\
+\mathcal L(C\mid W=w,\,a)&=P_w.
+\end{align*}
+Thus $\mathcal L(C\mid Y=1,\,a)=P_1$ and $\mathcal L(C\mid Y=0,\,a)=\rho P_1+(1-\rho)P_0$. The bit $W=1$ is the event ``the answer is wrong and the confidence was drawn from the honest-wrong law $P_0$ rather than copied from the correct-answer law $P_1$''.
+\end{definition}
+
+Definition~\ref{def:rho} is the paper's overconfidence model with the mixture written on the whole law rather than only on the mean. If $R$ is a $[0,1]$-valued encoding of $C$ with $\E_{P_1}[R]=c_1$ and $\E_{P_0}[R]=c_0'$, the paper's slope formula is the special case
+\[
+c_0=\rho c_1+(1-\rho)c_0',\qquad s_{\mathrm{self}}=(1-\rho)(c_1-c_0').
+\]
+The quantity $\rho$ is a probability, not a correlation.
+
+\begin{assumption}[Arm enters only through $W$]\label{ass:channel}
+The learner observes a random element $X$ such that $\mathcal L(X\mid W,\,a)=\mathcal L(X\mid W)$. In particular this holds for $X=C$, for $X=W$, and for $X=\phi_a(C)$ whenever $\phi_a$ is a measurable map that may depend on the pulled arm but the conditional law of $C$ given $W$ does not.
+\end{assumption}
+
+Assumption~\ref{ass:channel} is the scale-free form of ``the self-signal's conditional law given correctness depends on the arm only through the honest-wrong event.'' Global rescaling is the case of a single map $\phi$. Per-arm rescaling is the case of a family $(\phi_a)$. Internal normalization computed by the policy from past data is not a change of $X$; the lower bound below applies to every policy, so it already covers that normalization.
+
+Write $\alpha_a=(1-\mu_a)(1-\rho)=\P(W=1\mid a)$ and $\alpha_{a^\star}=(1-\mu_{a^\star})(1-\rho)$. For $\mu_a\in(0,1)$ and $\rho\in[0,1)$ one has $\alpha_a\in(0,1)$. Bernoulli divergence is
+\[
+\kl(p\|q)=p\ln\frac{p}{q}+(1-p)\ln\frac{1-p}{1-q},
+\]
+with the convention $0\ln 0=0$.
+
+\section{Scale-free lower bound}
+The model class $\mathcal M$ consists of every correctness vector $(\mu_a)\in(0,1)^K$, with $\rho$ and the conditional law of $X$ given $W$ held fixed. A policy is \emph{strongly consistent} on $\mathcal M$ if, for every environment in $\mathcal M$ and every $b>0$,
+\[
+\E[\Reg_Y(T)]=o(T^b).
+\]
+This is the uniformly fast convergence hypothesis in Lai and Robbins~\cite{lai1985}. The paper's Theorem~1 uses the same hypothesis, specialized to Bernoulli observations (``consistent on the Bernoulli family'').
+
+\begin{lemma}[Data processing through $W$]\label{lem:dpi}
+Under Definition~\ref{def:rho} and Assumption~\ref{ass:channel}, for any two arms parameters $\mu$ and $\mu'$ in $(0,1)$ with induced honest-wrong probabilities $\alpha$ and $\alpha'$,
+\[
+\KL\!\big(\mathcal L_\mu(X)\,\|\,\mathcal L_{\mu'}(X)\big)
+\le\kl(\alpha\|\alpha').
+\]
+The right-hand side does not depend on $(P_0,P_1)$ or on any encoding of $C$.
+\end{lemma}
+
+\begin{proof}
+The joint law of $(W,X)$ factors as $\mathrm{Bernoulli}(\alpha)\otimes K(dx\mid w)$ with a kernel $K$ free of the arm, by Assumption~\ref{ass:channel}. The chain rule gives
+\[
+\KL\!\big(\mathcal L_\mu(W,X)\,\|\,\mathcal L_{\mu'}(W,X)\big)
+=\kl(\alpha\|\alpha')+\E_{\mu}\!\big[\KL(K(\cdot\mid W)\|K(\cdot\mid W))\big]
+=\kl(\alpha\|\alpha').
+\]
+$X$ is a coordinate of $(W,X)$, so the data-processing inequality yields the claim.
+\end{proof}
+
+\begin{lemma}[History change of measure]\label{lem:com}
+Let $\nu$ and $\nu'$ be two environments in $\mathcal M$ that differ only in the correctness of a single arm $a$, and let $\kappa=\KL(\mathcal L_\nu(X\mid A=a)\,\|\,\mathcal L_{\nu'}(X\mid A=a))$. For any policy and any horizon $T$,
+\[
+\kl\!\left(\frac{\E_\nu[N_a(T)]}{T},\,\frac{\E_{\nu'}[N_a(T)]}{T}\right)
+\le\E_\nu[N_a(T)]\,\kappa,
+\]
+where $N_a(T)=\sum_{t=1}^T\mathbf 1\{A_t=a\}$, provided the two arguments of $\kl$ lie in $(0,1)$. If either argument equals $0$ or $1$, the same bound holds by continuity on $[0,1]$ whenever the left side is finite, and the history measures are singular whenever the left side is infinite.
+\end{lemma}
+
+\begin{proof}
+Let $H_T=(A_1,X_1,\dots,A_T,X_T)$ and write $P,P'$ for its laws under $\nu,\nu'$. The policy kernel of $A_t$ given the past is the same in both environments, so its conditional divergence is zero. The only nonzero one-step divergence is the divergence of $X_t$ given $A_t=a$. The chain rule therefore gives $\KL(P\|P')=\E_\nu[N_a(T)]\,\kappa$.
+
+Let $Z=N_a(T)/T\in[0,1]$ and draw $B\mid Z\sim\mathrm{Bernoulli}(Z)$. Then $B$ is marginally $\mathrm{Bernoulli}(\E[Z])$ under each environment, and $B$ is a randomized function of $H_T$. Data processing gives
+\[
+\kl\!\big(\E_\nu[Z],\,\E_{\nu'}[Z]\big)
+=\KL(\mathcal L(B)\|\mathcal L'(B))
+\le\KL(P\|P').
+\]
+\end{proof}
+
+Lemma~\ref{lem:com} is the change-of-measure step in the form used by Lai and Robbins. Bretagnolle--Huber~\cite{bretagnolle1979} is the sibling inequality that transports a single event rather than the mean of $N_a(T)/T$: for every event $A$,
+\[
+P(A)+P'(A^c)\ge\tfrac12\exp\!\big(-\KL(P\|P')\big).
+\]
+The proofs below do not rely on that form. They use Lemma~\ref{lem:com}, whose proof is the preceding paragraph, together with the elementary bound $\KL\le\chi^2$ recorded in Lemma~\ref{lem:chi2}.
+
+\begin{lemma}[$\KL\le\chi^2$ for a binary experiment]\label{lem:chi2}
+For $p\in[0,1]$ and $q\in(0,1)$, $\kl(p\|q)\le(p-q)^2/(q(1-q))$.
+\end{lemma}
+
+\begin{proof}
+Let $r=\mathrm d\mathrm{Bernoulli}(p)/\mathrm d\mathrm{Bernoulli}(q)$, which exists because $q\in(0,1)$. Then $\kl(p\|q)=\E_q[r\ln r]$ and $\chi^2=(p-q)^2/(q(1-q))=\E_q[(r-1)^2]$. The inequality $\ln r\le r-1$ for $r>0$ gives $r\ln r\le r^2-r$, and taking $\E_q$ produces $\kl(p\|q)\le\E_q[r^2]-1=\chi^2$.
+\end{proof}
+
+\begin{theorem}[Scale-free form of the paper's Theorem~1]\label{thm:scalefree}
+Assume Definition~\ref{def:rho} and Assumption~\ref{ass:channel}, and assume $\rho\in[0,1)$. Let the policy be strongly consistent on $\mathcal M$. Then
+\begin{equation}\label{eq:scalefree}
+\liminf_{T\to\infty}\frac{\E[\Reg_Y(T)]}{\ln T}
+\ge\sum_{a\neq a^\star}
+\frac{\Delta_a}{\kl(\alpha_a\|\alpha_{a^\star})},
+\qquad
+\alpha_b=(1-\mu_b)(1-\rho).
+\end{equation}
+The right-hand side depends on the self-signal only through $\rho$ and $(\mu_b)$. It does not depend on $(P_0,P_1)$, on $(c_1,c_0')$, or on any per-arm or global measurable re-encoding of $C$.
+\end{theorem}
+
+\begin{proof}
+Fix a suboptimal arm $a$ and an alternative correctness $\mu_a'\in(\mu_{a^\star},1)$. Let $\nu$ be the original environment and let $\nu'$ agree with $\nu$ except that arm $a$ has correctness $\mu_a'$. In $\nu'$ the unique optimal arm is $a$, with gap $\Delta'=\mu_a'-\mu_{a^\star}>0$ against every other arm. Strong consistency on $\nu'$ gives, for every $\eps>0$ and all large $T$,
+\[
+\E_{\nu'}[T-N_a(T)]
+\le\frac{\E_{\nu'}[\Reg_Y(T)]}{\Delta'}
+\le T^\eps,
+\]
+and strong consistency on $\nu$ gives $\E_\nu[N_a(T)]\le T^\eps$. Set $p_T=\E_\nu[N_a(T)]/T$ and $q_T=\E_{\nu'}[N_a(T)]/T$, so $p_T\le T^{\eps-1}$ and $q_T\ge 1-T^{\eps-1}$.
+
+Lemma~\ref{lem:dpi} bounds the one-step divergence of $X$ by $\kl(\alpha_a\|\alpha_a')$, where $\alpha_a'=(1-\mu_a')(1-\rho)$. Lemma~\ref{lem:com} therefore yields
+\begin{equation}\label{eq:transport}
+\kl(p_T\|q_T)\le\E_\nu[N_a(T)]\,\kl(\alpha_a\|\alpha_a').
+\end{equation}
+For the binary divergence, using $0\ln 0=0$,
+\begin{align*}
+\kl(p_T\|q_T)
+&=p_T\ln\frac{p_T}{q_T}+(1-p_T)\ln(1-p_T)-(1-p_T)\ln(1-q_T).
+\end{align*}
+The hypothesis $q_T\ge 1-T^{\eps-1}$ gives $-\ln(1-q_T)\ge(1-\eps)\ln T$. Also $p_T\to 0$, so $(1-p_T)\to 1$, the elementary limit $u\ln u\to 0$ as $u\to 0$ gives $p_T\ln(p_T/q_T)\to 0$, and $(1-p_T)\ln(1-p_T)\to 0$. Hence
+\[
+\kl(p_T\|q_T)\ge(1-\eps)\ln T-o(\ln T).
+\]
+Combine with~\eqref{eq:transport}:
+\[
+\liminf_{T\to\infty}\frac{\E_\nu[N_a(T)]}{\ln T}
+\ge\frac{1-\eps}{\kl(\alpha_a\|\alpha_a')}.
+\]
+Let $\eps\downarrow 0$ and then $\mu_a'\downarrow\mu_{a^\star}$. Continuity of $\kl(\alpha_a\|\cdot)$ on $(0,1)$ gives $\kl(\alpha_a\|\alpha_a')\downarrow\kl(\alpha_a\|\alpha_{a^\star})$, and therefore
+\[
+\liminf_{T\to\infty}\frac{\E_\nu[N_a(T)]}{\ln T}
+\ge\frac{1}{\kl(\alpha_a\|\alpha_{a^\star})}.
+\]
+Summing $\Delta_a\E[N_a(T)]$ over suboptimal arms gives~\eqref{eq:scalefree}.
+
+Re-encoding does not appear in the argument. If the learner observes $\phi_a(C)$ instead of $C$, Assumption~\ref{ass:channel} still holds, Lemma~\ref{lem:dpi} still caps every one-step divergence by the same $\kl(\alpha_a\|\alpha_a')$, and the displayed constant is unchanged. A map $\phi_a$ can destroy information and make the true divergence smaller, which can only increase the liminf. It cannot push the liminf below~\eqref{eq:scalefree}.
+\end{proof}
+
+\begin{corollary}[Explicit order $\ln T/(1-\rho)$]\label{cor:order}
+Under the hypotheses of Theorem~\ref{thm:scalefree},
+\begin{equation}\label{eq:order}
+\liminf_{T\to\infty}\frac{\E[\Reg_Y(T)]}{\ln T}
+\ge\sum_{a\neq a^\star}
+\frac{\mu_{a^\star}(1-\mu_{a^\star})}{(1-\rho)\,\Delta_a}.
+\end{equation}
+In particular, for any fixed $(\mu_a)$ with a unique optimum and $\mu_{a^\star}\in(0,1)$, the right-hand side of~\eqref{eq:scalefree} is $\Theta\!\big(1/(1-\rho)\big)$ as $\rho\to 1^-$.
+\end{corollary}
+
+\begin{proof}
+Apply Lemma~\ref{lem:chi2} with $p=\alpha_a$ and $q=\alpha_{a^\star}$:
+\begin{align*}
+\kl(\alpha_a\|\alpha_{a^\star})
+&\le\frac{(\alpha_a-\alpha_{a^\star})^2}{\alpha_{a^\star}(1-\alpha_{a^\star})}
+=\frac{(1-\rho)\,\Delta_a^2}{(1-\mu_{a^\star})\,\big(1-(1-\mu_{a^\star})(1-\rho)\big)}.
+\end{align*}
+The identity $1-(1-\mu_{a^\star})(1-\rho)=\mu_{a^\star}+\rho(1-\mu_{a^\star})\ge\mu_{a^\star}$ gives
+\[
+\kl(\alpha_a\|\alpha_{a^\star})
+\le\frac{(1-\rho)\,\Delta_a^2}{\mu_{a^\star}(1-\mu_{a^\star})},
+\]
+and substituting into~\eqref{eq:scalefree} gives~\eqref{eq:order}.
+
+For the limit, set $t=1-\rho$, $\lambda=\Delta_a/(1-\mu_{a^\star})$, and $\alpha_{a^\star}=(1-\mu_{a^\star})t$, so $\alpha_a=\alpha_{a^\star}(1+\lambda)$. Then
+\begin{align*}
+\frac{\kl(\alpha_a\|\alpha_{a^\star})}{t}
+&=(1-\mu_{a^\star})(1+\lambda)\ln(1+\lambda)\\
+&\quad+\frac{1-\alpha_{a^\star}(1+\lambda)}{t}
+\ln\frac{1-\alpha_{a^\star}(1+\lambda)}{1-\alpha_{a^\star}}.
+\end{align*}
+As $t\to 0$, $\ln\!\big((1-u)/(1-v)\big)=(v-u)+O(t^2)$ with $u=\alpha_{a^\star}(1+\lambda)$ and $v=\alpha_{a^\star}$, and the second term tends to $-(1-\mu_{a^\star})\lambda$. Therefore
+\begin{equation}\label{eq:limit}
+\lim_{\rho\to 1^-}\frac{\kl(\alpha_a\|\alpha_{a^\star})}{1-\rho}
+=(1-\mu_{a^\star})\big[(1+\lambda)\ln(1+\lambda)-\lambda\big],
+\end{equation}
+which is strictly positive for $\lambda>0$. Combined with the $\chi^2$ upper bound, $\kl(\alpha_a\|\alpha_{a^\star})=\Theta(1-\rho)$.
+\end{proof}
+
+\begin{proposition}[Where the paper's power $2$ holds]\label{prop:square}
+Suppose that, in addition to the hypotheses of Theorem~\ref{thm:scalefree}, the learner observes only the Bernoulli trick $B\sim\mathrm{Bernoulli}(R)$ of a reward $R\in[0,1]$ whose means $r_a=\E[R\mid a]$ satisfy $r_{a^\star}-r_a=s\Delta_a$ with
+\[
+0<s\le(1-\rho)(c_1-c_0')
+\]
+and $r_{a^\star}\in[\delta,1-\delta]$ for some $\delta\in(0,1/2]$ independent of $\rho$. Then
+\begin{equation}\label{eq:square}
+\liminf_{T\to\infty}\frac{\E[\Reg_Y(T)]}{\ln T}
+\ge\sum_{a\neq a^\star}
+\frac{\delta(1-\delta)}{(1-\rho)^2(c_1-c_0')^2\,\Delta_a}.
+\end{equation}
+If $R$ itself is i.i.d.\ $\mathrm{Bernoulli}(r_a)$, the same argument with Lemma~\ref{lem:chi2} reproduces the paper's constant:
+\[
+\liminf_{T\to\infty}\frac{\E[\Reg_Y(T)]}{\ln T}
+\ge\sum_{a\neq a^\star}\frac{r_{a^\star}(1-r_{a^\star})}{s^2\Delta_a}.
+\]
+\end{proposition}
+
+\begin{proof}
+The one-step law of $B$ is $\mathrm{Bernoulli}(r_a)$, so Lemma~\ref{lem:com} and the argument of Theorem~\ref{thm:scalefree} give
+\[
+\liminf_{T\to\infty}\frac{\E[N_a(T)]}{\ln T}\ge\frac{1}{\kl(r_a\|r_{a^\star})}.
+\]
+Lemma~\ref{lem:chi2} yields $\kl(r_a\|r_{a^\star})\le(r_{a^\star}-r_a)^2/(r_{a^\star}(1-r_{a^\star}))\le s^2\Delta_a^2/(\delta(1-\delta))$. Insert $s\le(1-\rho)(c_1-c_0')$ and multiply by $\Delta_a$. The second display is the same calculation with the exact factor $r_{a^\star}(1-r_{a^\star})$ left in place, which is the paper's Theorem~1.
+\end{proof}
+
+\begin{remark}[Which power of $(1-\rho)$ is actually proved]\label{rem:power}
+Three statements have different hypotheses, and only the first is scale-free.
+\begin{enumerate}
+\item Theorem~\ref{thm:scalefree} and Corollary~\ref{cor:order} prove the power $1$: order $\ln T/(1-\rho)$, with a constant free of $(c_1,c_0')$. The channel assumption is Definition~\ref{def:rho} plus Assumption~\ref{ass:channel}. This is the bound that survives an arbitrary measurable re-encoding.
+\item Proposition~\ref{prop:square} proves the power $2$, of order $\ln T/(1-\rho)^2$, only when the observation is a Bernoulli trick (or an exact Bernoulli reward) whose mean stays in a $\rho$-independent subinterval of $(0,1)$ and whose mean gap is at most order $(1-\rho)(c_1-c_0')$. The constant depends on the scale $(c_1-c_0')$ and on the variance floor $\delta$. Shrinking all confidence values toward $1/2$ shrinks $c_1-c_0'$ and inflates this particular lower bound; that inflation tracks a real loss of Bernoulli-trick information, not a defect in the $\chi^2$ step. Expanding the encoding inside $[0,1]$ can increase $c_1-c_0'$ up to $1$, but it cannot drive the constant in Theorem~\ref{thm:scalefree} below the honest-wrong divergence.
+\item The universal claim ``every self-confidence encoding pays $\Omega(\ln T/(1-\rho)^2)$'' is false. If $X=W$, then $s=1-\rho$ and $r_{a^\star}(1-r_{a^\star})=\alpha_{a^\star}(1-\alpha_{a^\star})=\Theta(1-\rho)$, so the paper's own formula $r(1-r)/(s^2\Delta)$ is already $\Theta(1/(1-\rho))$, in agreement with~\eqref{eq:limit}. The variance floor $\delta$ independent of $\rho$ fails for this encoding, which is why Proposition~\ref{prop:square} does not apply.
+\end{enumerate}
+A matching upper bound of order $\ln T/(1-\rho)$ holds on the channel $X=W$. For each fixed $\rho\in[0,1)$, the honest-wrong bits are an ordinary Bernoulli bandit with means $\alpha_a\in(0,1)$. KL-UCB~\cite{garivier2011} satisfies
+\[
+\limsup_{T\to\infty}\frac{\E[N_a(T)]}{\ln T}\le\frac{1}{\kl(\alpha_a\|\alpha_{a^\star})}
+\]
+on every such instance. Each pull of arm $a$ costs $\Delta_a$ in correctness regret, so
+\[
+\limsup_{T\to\infty}\frac{\E[\Reg_Y(T)]}{\ln T}
+\le\sum_{a\neq a^\star}\frac{\Delta_a}{\kl(\alpha_a\|\alpha_{a^\star})}.
+\]
+Together with~\eqref{eq:limit}, the leading power of $(1-\rho)$ on this channel is exactly $1$. The square-power expression is a valid lower bound for encodings that keep a $\rho$-independent Bernoulli variance; it is not a lower bound for every function of the honest-wrong event.
+\end{remark}
+
+\begin{proposition}[No information when $\rho=1$]\label{prop:linear}
+If $\rho=1$, then $\mathcal L(X\mid a)$ does not depend on $a$. For any policy,
+\[
+\frac1{K!}\sum_{\sigma}\E_\sigma[\Reg_Y(T)]=\frac{T}{K}\sum_a\Delta_a,
+\]
+where the average is over uniform random relabelings of a fixed correctness vector. In particular some arm labeling forces $\E[\Reg_Y(T)]=\Theta(T)$ whenever $\sum_a\Delta_a>0$.
+\end{proposition}
+
+\begin{proof}
+$\rho=1$ forces $W=0$ almost surely, so Assumption~\ref{ass:channel} makes $X$ independent of the arm. The law of the action sequence is therefore the same under every relabeling. Averaging the nonnegative gaps gives the identity.
+\end{proof}
+
+\begin{conjecture}[Fractional Beta update]\label{conj:fractional}
+Let $R\in[0,1]$ be a non-degenerate encoding of $W$, so that $\P(R\in(0,1))>0$, and let the router apply the fractional update $\alpha\leftarrow\alpha+R$, $\beta\leftarrow\beta+(1-R)$. For each fixed $\rho\in[0,1)$, this policy attains
+\[
+\E[\Reg_Y(T)]=O\!\left(\frac{\ln T}{1-\rho}\right)
+\]
+as $T\to\infty$, with a constant depending on $(\mu_a)$ and on the law of $R$ given $W$, and not growing faster than $1/(1-\rho)$.
+\end{conjecture}
+
+When the reward is already the bit $W\in\{0,1\}$, the fractional update coincides with the integer Beta update, and the $O(\ln T)$ bound of Agrawal and Goyal~\cite{agrawal2017} applies directly; dividing the honest-wrong gap by $1-\rho$ again yields order $\ln T/(1-\rho)$. The open case is a reward that takes values in $(0,1)$. Their proof draws $B\sim\mathrm{Bernoulli}(R)$ first. The conditional expectation of $B$ equals $R$, but the posterior variance and the boundary terms in that proof are statements about $B$, and equality of one-step means does not transfer them to $\alpha\leftarrow\alpha+R$. The paper records that the two updates are close in simulation; that is evidence, not a proof. Theorem~\ref{thm:scalefree} already lower-bounds the fractional update whenever the resulting policy is strongly consistent, because the lower bound does not depend on how the posterior is written.
+
+\section{Combination and the observation mask}
+Let signals $i=1,\dots,m$ have fixed weights $w_i>0$ and potential values $V_i\in[0,1]$. The learner sees a mask $S\subseteq\{1,\dots,m\}$ and the values $\{V_i:i\in S\}$. The combined reward on $\{S=s\}$ for $s\neq\emptyset$ is
+\begin{equation}\label{eq:combine}
+R=\frac{\sum_{i\in s}w_i V_i}{\sum_{i\in s}w_i},
+\end{equation}
+and $R=\bot$ on $\{S=\emptyset\}$, in which case the router is not updated. This is the paper's combination rule.
+
+\begin{assumption}[Mask-conditional form of Assumption~1]\label{ass:signal}
+For every signal $i$, every mask $s\ni i$, and every $y\in\{0,1\}$,
+\[
+\E[V_i\mid Y=y,\,a,\,S=s]=c_{i,y}
+\]
+does not depend on $a$ or on $s$. Write $s_i=c_{i,1}-c_{i,0}$.
+\end{assumption}
+
+\begin{assumption}[Mask law]\label{ass:mask}
+The mask is conditionally independent of the arm given correctness: $S\perp A_{\mathrm{env}}\mid Y$, where $A_{\mathrm{env}}$ denotes the arm that generated the answer. Equivalently, $\P(S=s\mid Y,\,a)=\P(S=s\mid Y)$.
+\end{assumption}
+
+Assumption~\ref{ass:mask} is the hypothesis the paper's proof of Proposition~3 uses when it conditions on the observed set and then drops the arm. It is not implied by Assumption~\ref{ass:ci} for the individual signals. The symbol $A_{\mathrm{env}}$ is the arm, not the action random variable; the two coincide on the round being scored.
+
+\begin{proposition}[Corrected form of the paper's Proposition~3]\label{prop:combine}
+Assume Assumptions~\ref{ass:signal} and~\ref{ass:mask}, and assume $s_i>0$ for every $i$.
+\begin{enumerate}
+\item For every nonempty mask $s$,
+\[
+\E[R\mid Y=y,\,a,\,S=s]
+=\frac{\sum_{i\in s}w_i c_{i,y}}{\sum_{i\in s}w_i},
+\]
+which does not depend on $a$, and the mask-conditional slope
+\[
+s(s)=\frac{\sum_{i\in s}w_i s_i}{\sum_{i\in s}w_i}
+\]
+is strictly positive.
+\item $\E[R\mid Y=y,\,a,\,R\neq\bot]$ does not depend on $a$. The combined reward therefore satisfies Assumption~\ref{ass:ci}.
+\item If, in addition, $S\perp Y$, then the marginal slope on $\{R\neq\bot\}$ equals $\sum_{s\neq\emptyset}s(s)\,\P(S=s\mid S\neq\emptyset)>0$, and Lemma~\ref{lem:affine} gives $r_a=c_0+\bar s\,\mu_a$ with that slope $\bar s$. The reward-optimal arm is $a^\star$.
+\end{enumerate}
+\end{proposition}
+
+\begin{proof}
+Part~1 is linearity of conditional expectation under Assumption~\ref{ass:signal}, and $s(s)$ is a convex combination of the $s_i$. For part~2,
+\[
+\E[R\mid Y=y,\,a,\,S\neq\emptyset]
+=\sum_{s\neq\emptyset}\E[R\mid Y=y,\,S=s]\,\P(S=s\mid Y=y,\,a,\,S\neq\emptyset).
+\]
+Assumption~\ref{ass:mask} removes $a$ from the mask probabilities, and part~1 removes $a$ from the summands.
+
+For part~3, $S\perp Y$ makes $\P(S=s\mid Y=y,\,S\neq\emptyset)$ independent of $y$, so
+\[
+c_1-c_0=\sum_{s\neq\emptyset}s(s)\,\P(S=s\mid S\neq\emptyset).
+\]
+Each $s(s)>0$ and at least one mask is charged by $\P(S\neq\emptyset)$, which is positive on the event we condition on. Lemma~\ref{lem:affine} needs $\P(R\neq\bot\mid Y,\,a)$ independent of $Y$. Here $R\neq\bot$ is exactly $S\neq\emptyset$, and $S\perp Y$ together with Assumption~\ref{ass:mask} makes this probability a constant. The resulting $r_a$ is strictly increasing in $\mu_a$.
+\end{proof}
+
+The slope formula written in the paper, $\sum_i w_i s_i/\sum_i w_i$, is the case of part~1 in which $s$ is the full index set, and it is the case of part~3 when a single mask carries all the mass. It is not the marginal slope merely from Assumptions~\ref{ass:signal} and~\ref{ass:mask}.
+
+\begin{remark}[Positive per-mask slopes do not imply a positive marginal slope]\label{rem:sign}
+Assumption~\ref{ass:mask} is not enough for $c_1>c_0$. The marginal slope admits the decomposition
+\begin{align*}
+c_1-c_0
+&=\sum_{s\neq\emptyset}s(s)\,\P(S=s\mid Y=1,\,S\neq\emptyset)\\
+&\quad+\sum_{s\neq\emptyset}c_0(s)\Big(\P(S=s\mid Y=1,\,S\neq\emptyset)-\P(S=s\mid Y=0,\,S\neq\emptyset)\Big),
+\end{align*}
+where $c_0(s)=\sum_{i\in s}w_i c_{i,0}/\sum_{i\in s}w_i$. The second sum can dominate.
+
+Concrete counterexample. Two signals, equal weights. Signal $A$ has $(c_1,c_0)=(0.1,0.0)$, so $s_A=0.1$. Signal $B$ has $(c_1,c_0)=(0.95,0.9)$, so $s_B=0.05$. Given $Y=1$, the mask is $\{A\}$ almost surely; given $Y=0$, the mask is $\{B\}$ almost surely. Then $S$ is a function of $Y$, so Assumption~\ref{ass:mask} holds, and both signals satisfy Assumption~\ref{ass:signal}. The combined reward is observed on every round, with
+\[
+\E[R\mid Y=1]=0.1,\qquad\E[R\mid Y=0]=0.9.
+\]
+The marginal slope equals $-0.8$. Hence $r_a=0.9-0.8\mu_a$, which is strictly decreasing in correctness, and the reward-optimal arm is the worst arm. Part~1 of Proposition~\ref{prop:combine} still holds on each singleton mask: the failure is only in passing from the mask-conditional slopes to the scalar the router actually averages.
+\end{remark}
+
+\begin{remark}[Arm-dependent grounding coverage]\label{rem:coverage}
+Drop Assumption~\ref{ass:mask}, and let the mask depend on the arm even after conditioning on $Y$. Order can reverse while every individual signal keeps a positive, arm-free slope. The following numbers are a grounding pattern: one strategy almost always produces a claim-extractable answer, so the weak lexical signal is present, while the other strategy almost always misses that signal and is scored by a rare high-slope judge instead. Both propensities lie in $(0,1)$, which matters for the correction in Proposition~\ref{prop:ipw}.
+
+Signals $G$ and $J$, equal weights, exactly one of them observed, independent of $Y$ given the arm:
+\begin{center}
+\begin{tabular}{lcccc}
+\hline
+arm & $\mu$ & $\P(S=\{G\}\mid a)$ & $\P(S=\{J\}\mid a)$ & conditional laws\\
+\hline
+$a^\star$ & $0.9$ & $0.99$ & $0.01$ & $G$: $(c_1,c_0)=(0.52,0.50)$\\
+$b$ & $0.7$ & $0.01$ & $0.99$ & $J$: $(c_1,c_0)=(1,0)$\\
+\hline
+\end{tabular}
+\end{center}
+Signal slopes are $s_G=0.02$ and $s_J=1$, both positive and arm-free. Direct expansion gives
+\begin{align*}
+\E[R\mid a^\star]
+&=0.9\big(0.99\cdot 0.52+0.01\cdot 1\big)+0.1\big(0.99\cdot 0.50\big)
+=0.52182,\\[0.25em]
+\E[R\mid b]
+&=0.7\big(0.01\cdot 0.52+0.99\cdot 1\big)+0.3\big(0.01\cdot 0.50\big)
+=0.69814.
+\end{align*}
+So $r_b>r_{a^\star}$ while $\mu_b<\mu_{a^\star}$. Each signal alone would have preserved the order: the $G$-only means are $0.518$ and $0.514$, and the $J$-only means are $0.9$ and $0.7$. The reversal is produced entirely by which signal the arm makes available.
+
+The same construction is what ``one retrieval strategy yields claim-extractable answers more often'' does to a two-signal reward. Grounding plays the role of $G$ when a verbose strategy extracts claims on almost every round, and the judge plays the role of $J$ when it is the only signal left on rounds the terse strategy does not make claim-extractable.
+\end{remark}
+
+\begin{proposition}[What remains true, and the inverse-propensity correction]\label{prop:ipw}
+\begin{enumerate}
+\item \emph{Single signal, missingness independent of $Y$ given the arm.} Suppose $m=1$, Assumption~\ref{ass:signal} holds with slope $s>0$, and $\P(S=\emptyset\mid Y,\,a)=\P(S=\emptyset\mid a)$. Skipping unobserved rounds yields
+\[
+\E[V\mid a,\,S\neq\emptyset]=c_0+s\mu_a.
+\]
+Arm-dependent coverage changes how often the arm is updated and does not change the mean of the updates. The reward-optimal arm remains $a^\star$.
+\item \emph{Constant fill.} If, instead, an unobserved round is replaced by a constant $\kappa$, the learned mean is $(1-m_a)(c_0+s\mu_a)+m_a\kappa$ with $m_a=\P(S=\emptyset\mid a)$. This is the paper's Proposition~2. Whenever $m_a$ is strictly larger on the better arm and $\kappa$ lies below both conditional means, the ordering can reverse. Skipping and filling are different estimators; coverage that is harmless for the first is not harmless for the second.
+\item \emph{Inverse propensity, several signals.} Suppose Assumption~\ref{ass:signal} holds in the stronger form $\E[V_i\mid Y=y,\,a]=c_{i,y}$, the mask is independent of $(Y,(V_i)_i)$ given the arm, and the propensities $\pi_a(i)=\P(i\in S\mid a)$ are known and satisfy $\pi_a(i)\ge\pi_{\min}>0$. The corrected reward
+\begin{equation}\label{eq:ipw}
+\hat R=\frac{\sum_{i=1}^m w_i V_i\mathbf 1\{i\in S\}/\pi_a(i)}{\sum_{i=1}^m w_i}
+\end{equation}
+obeys $\E[\hat R\mid a]=c_0+\bar s\,\mu_a$ with $\bar s=\sum_i w_i s_i/\sum_i w_i$. If every $s_i>0$, then $\bar s>0$ and the reward-optimal arm is $a^\star$.
+
+On the numerical instance of Remark~\ref{rem:coverage} this correction returns
+\[
+\E[\hat R\mid a^\star]=0.709,\qquad\E[\hat R\mid b]=0.607,
+\]
+so the order matches correctness. The propensities used here are signal-observation propensities. The router's logged selection propensity is the probability of the arm under the logging policy; reweighting by that number corrects a different bias and does not estimate $\pi_a(i)$.
+\end{enumerate}
+\end{proposition}
+
+\begin{proof}
+For part~1, $\P(Y=1\mid a,\,S\neq\emptyset)=\mu_a$ because coverage is independent of $Y$ given $a$, and Assumption~\ref{ass:signal} supplies the conditional means of $V$. Part~2 is the law of total expectation, splitting on the observation indicator; the paper's Proposition~2 is this identity plus the observation that a large $m_a$ pulls $r_a'$ toward $\kappa$.
+
+For part~3, independence of the mask and $V_i$ given $a$ gives
+\[
+\E\!\left[\frac{V_i\mathbf 1\{i\in S\}}{\pi_a(i)}\,\middle|\,a\right]
+=\E[V_i\mid a]
+=c_{i,0}+s_i\mu_a.
+\]
+Linearity produces $\E[\hat R\mid a]$. The two numerical values are
+\[
+\tfrac12\big((0.50+0.02\cdot 0.9)+0.9\big)=0.709,
+\qquad
+\tfrac12\big((0.50+0.02\cdot 0.7)+0.7\big)=0.607.
+\]
+\end{proof}
+
+If the mask depends on $Y$ given the arm, part~3 does not apply: the weight that would be correct is $\P(i\in S\mid a,\,Y)$, and $Y$ is not observed by the router. No claim is made for that propensity. Remark~\ref{rem:sign} is the boundary case in which the mask is a function of $Y$, Assumption~\ref{ass:mask} holds, and the uncorrected marginal slope is already negative.
+
+\begin{thebibliography}{9}
+\bibitem{lai1985}
+T.~L.~Lai and H.~Robbins.
+\newblock Asymptotically efficient adaptive allocation rules.
+\newblock 1985.
+
+\bibitem{bretagnolle1979}
+J.~Bretagnolle and C.~Huber.
+\newblock Estimation des densit\'es: risque minimax.
+\newblock 1979.
+
+\bibitem{garivier2011}
+A.~Garivier and O.~Capp\'e.
+\newblock The KL-UCB algorithm for bounded stochastic bandits and beyond.
+\newblock 2011.
+
+\bibitem{agrawal2017}
+S.~Agrawal and N.~Goyal.
+\newblock Near-optimal regret bounds for Thompson sampling.
+\newblock 2017.
+\end{thebibliography}
+
+\end{document}
