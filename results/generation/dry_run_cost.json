@@ -26,7 +26,7 @@
     "fallback_failed": 0.0,
     "fallback_omitted": 0.7,
     "fallback_unparseable": 0.5,
-    "generator_max_output_tokens": 128,
+    "generator_max_output_tokens": 256,
     "generator_model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     "grounding_threshold": 0.6,
     "grounding_weight": 1.0,
@@ -70,26 +70,26 @@
     "top_k": 5,
     "total_usd_cap": 30
   },
-  "created_at": "2026-10-06T15:00:08.917464+00:00",
+  "created_at": "2026-10-06T15:51:41.367176+00:00",
   "estimate": {
     "called_model": false,
     "estimator": "ceil(utf-8 bytes / 4) summed over the system prompt and the user message",
-    "generator_max_output_tokens": 128,
-    "input_tokens_estimate": 19535359,
+    "generator_max_output_tokens": 256,
+    "input_tokens_estimate": 20111359,
     "model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     "n_calls": 18000,
     "output_policy": "upper bound charges generator_max_output_tokens on every call",
-    "output_tokens_upper_bound": 2304000,
+    "output_tokens_upper_bound": 4608000,
     "region": "us-east-1",
     "temperature": 0,
-    "usd_upper_bound": 31.055359
+    "usd_upper_bound": 43.151359
   },
   "git": {
-    "commit": "89aa6ff57eab210eb746b0237a21073fbc3ee465",
+    "commit": "3b41b3b123cc079afc4387ffdeb8adaea1a4633a",
     "dirty": false
   },
   "prompts": {
-    "generator_system": "You answer a question using only the passages in the user message. Do not use outside knowledge.\n\nThe answer must be a short extractive span copied from the passages: a few words, not a sentence, and no explanation. Do not add words that are not needed to match the span.\n\nIf the passages do not contain the answer, set the answer to exactly this phrase and nothing else: insufficient evidence\n\nReturn a JSON object and nothing else, with no markdown fence and no sentence before or after it:\n{\"answer\": \"<short span, or insufficient evidence>\", \"confidence\": <number between 0 and 1>}\n\nThe confidence field is your own verbalized estimate of the probability that the answer is correct. Use 0 when the passages do not contain the answer, and 1 when the span is taken directly from the passages.\n"
+    "generator_system": "You answer a question using only the passages in the user message. Do not use outside knowledge.\n\nThe answer must be a short extractive span copied from the passages: a few words, not a sentence, and no explanation. Do not add words that are not needed to match the span. For a yes/no question, answer yes or no.\n\nIf the passages do not contain the answer, abstain with exactly this JSON object and nothing else:\n{\"answer\": \"insufficient evidence\", \"confidence\": <0-1>}\n\nOutput exactly one JSON object and nothing before or after it, including when abstaining. No markdown fence and no sentence before or after the object:\n{\"answer\": \"<short span, or yes, or no, or insufficient evidence>\", \"confidence\": <0-1>}\n\nThe confidence field is your own verbalized estimate of the probability that the answer is correct. Use 0 when the passages do not contain the answer, and 1 when the span is taken directly from the passages.\n"
   },
   "seed": 0,
   "stage": "generate_dry_run"

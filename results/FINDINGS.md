@@ -70,15 +70,17 @@ Seed stored in the manifest: `0`.
 | --- | --- |
 | model | us.anthropic.claude-haiku-4-5-20251001-v1:0 |
 | calls | 18000 |
-| input tokens (estimate) | 19535359 |
-| output tokens (upper bound) | 2304000 |
-| USD upper bound | 31.0554 |
+| input tokens (estimate) | 20111359 |
+| output tokens (upper bound) | 4608000 |
+| USD upper bound | 43.1514 |
 
 ceil(utf-8 bytes / 4) summed over the system prompt and the user message
 
 upper bound charges generator_max_output_tokens on every call
 
 ## Calibration
+
+The judge grades how well the retrieved passages support the answer and whether the answer addresses the question. Its prompt scores 1.0 when every claim is supported and the question is answered, and it scores 1.0 for an answer that says the evidence is insufficient when the evidence is insufficient. The score is that grounding judgement. It is not token-F1 correctness. The table below pairs each stored signal, including the judge, with token F1 as recorded. A judge score of 1.0 on an abstention stays 1.0 when correctness is 0 because a gold answer existed.
 
 ### Harness metrics
 
@@ -195,5 +197,7 @@ Primary correctness is token F1 at least 0.5 (an unanswerable question counts on
 | nq | pending | pending |
 
 ## Assumption check and missingness
+
+For self-confidence, a null value keeps its status as the missingness reason. `omitted` is a reply that did not report a confidence, including a bare abstention whose answer is `insufficient evidence`. `truncated` is a JSON object cut off before it could be parsed. An `ok` row with `trailing_truncated` set is an observation: the object was complete and prose after it hit the output cap.
 
 Analyses artifact is missing.
