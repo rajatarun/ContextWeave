@@ -213,6 +213,10 @@ def load_joined(results: Path, cfg: dict[str, Any], datasets: Sequence[str] | No
                 "self_reported": gen["self_reported"],
                 "self_status": gen["self_status"],
                 **(
+                    {"trailing_truncated": bool(gen["trailing_truncated"])}
+                    if "trailing_truncated" in gen else {}
+                ),
+                **(
                     {
                         "deployed_self_confidence": gen.get("deployed_self_confidence"),
                         "deployed_self_status": gen["deployed_self_status"],

@@ -185,6 +185,17 @@ def render(results: Path) -> tuple[str, str]:
         doc.p(str(est.get("output_policy", "")))
 
     doc.h("Calibration")
+    doc.p(
+        "The judge grades how well the retrieved passages support the answer "
+        "and whether the answer addresses the question. Its prompt scores 1.0 "
+        "when every claim is supported and the question is answered, and it "
+        "scores 1.0 for an answer that says the evidence is insufficient when "
+        "the evidence is insufficient. The score is that grounding judgement. "
+        "It is not token-F1 correctness. The table below pairs each stored "
+        "signal, including the judge, with token F1 as recorded. A judge score "
+        "of 1.0 on an abstention stays 1.0 when correctness is 0 because a "
+        "gold answer existed."
+    )
     cal = _load(results / "calibration" / "calibration.json")
     cal_rows = []
     for name in DATASETS:
@@ -366,6 +377,14 @@ def render(results: Path) -> tuple[str, str]:
     )
 
     doc.h("Assumption check and missingness")
+    doc.p(
+        "For self-confidence, a null value keeps its status as the missingness "
+        "reason. `omitted` is a reply that did not report a confidence, "
+        "including a bare abstention whose answer is `insufficient evidence`. "
+        "`truncated` is a JSON object cut off before it could be parsed. "
+        "An `ok` row with `trailing_truncated` set is an observation: the "
+        "object was complete and prose after it hit the output cap."
+    )
     if analyses is None:
         doc.p("Analyses artifact is missing.")
         doc.pending.append({"table": "assumption", "cell": "all", "reason": "results/analyses/analyses.json is missing"})

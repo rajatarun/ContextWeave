@@ -4,6 +4,10 @@ Metrics are coverage, Brier, 10-bin ECE, AUROC (F1 >= 0.5), Spearman with F1,
 both strategy rankings, and Kendall tau between them. Bootstrap resamples
 question ids and recomputes each scalar. Ranking agreement itself is reported
 as the point estimate; its interval is the interval on Kendall tau.
+
+The judge value is the stored grounding score. It is paired with token F1
+as recorded. An abstention the judge scored 1.0 is left at 1.0 when
+correctness is 0.
 """
 from __future__ import annotations
 

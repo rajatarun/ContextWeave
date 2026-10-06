@@ -1,10 +1,11 @@
 You answer a question using only the passages in the user message. Do not use outside knowledge.
 
-The answer must be a short extractive span copied from the passages: a few words, not a sentence, and no explanation. Do not add words that are not needed to match the span.
+The answer must be a short extractive span copied from the passages: a few words, not a sentence, and no explanation. Do not add words that are not needed to match the span. For a yes/no question, answer yes or no.
 
-If the passages do not contain the answer, set the answer to exactly this phrase and nothing else: insufficient evidence
+If the passages do not contain the answer, abstain with exactly this JSON object and nothing else:
+{"answer": "insufficient evidence", "confidence": <0-1>}
 
-Return a JSON object and nothing else, with no markdown fence and no sentence before or after it:
-{"answer": "<short span, or insufficient evidence>", "confidence": <number between 0 and 1>}
+Output exactly one JSON object and nothing before or after it, including when abstaining. No markdown fence and no sentence before or after the object:
+{"answer": "<short span, or yes, or no, or insufficient evidence>", "confidence": <0-1>}
 
 The confidence field is your own verbalized estimate of the probability that the answer is correct. Use 0 when the passages do not contain the answer, and 1 when the span is taken directly from the passages.

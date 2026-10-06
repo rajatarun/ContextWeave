@@ -8,6 +8,12 @@
 (b) Missingness. Per arm and per signal, the rate m_a at which the signal is
     unobserved, and the reason counts. Accuracy (mean binary correctness) on
     rounds where the signal is missing and on rounds where it is observed.
+    For self-confidence the reason is the robust status: ``omitted`` includes
+    a bare abstention that reported no confidence, and ``truncated`` is only
+    a JSON object cut off mid-token. A complete object with
+    ``trailing_truncated`` is observed. The judge value is the stored
+    grounding score. It is not rewritten when that score is 1.0 on an
+    abstention whose token-F1 correctness is 0.
 
 (c) The normalized-self definition used by replay is recorded here so the
     scale-objection baseline has one written definition. The replay itself

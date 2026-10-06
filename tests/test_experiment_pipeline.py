@@ -453,6 +453,8 @@ def test_confidence_statuses_match_synthesizer_constants():
     failed = parse_self_confidence(None, call_failed=True)
     assert failed["status"] == "failed" and failed["value"] is None and failed["answer"] == ""
     assert failed["deployed_status"] == "failed" and failed["deployed_value"] == FAILED
+    assert ok["trailing_truncated"] is False
+    assert failed["trailing_truncated"] is False
     src = (ROOT / "src" / "query_api" / "synthesizer.py").read_text()
     assert "_OMITTED_CONFIDENCE = 0.7" in src
     assert "_UNPARSED_CONFIDENCE = 0.5" in src
@@ -491,6 +493,76 @@ def test_prose_around_json_keeps_the_answer_field_and_the_deployed_fallback():
     robust_ok = sum(parse_self_confidence(text)["status"] == "ok" for text in wrapped)
     assert robust_ok / len(wrapped) >= 0.95
     assert all(parse_self_confidence(text)["answer"] != text for text in wrapped)
+
+
+def test_complete_json_cut_off_after_the_object_keeps_the_confidence():
+    """Smoke shape: a finished object, then prose that hits max_tokens."""
+    raw = (
+        '{"answer": "insufficient evidence", "confidence": 0.0}\n\n'
+        "The passages do not contain"
+    )
+    parsed = parse_self_confidence(raw, truncated=True)
+    assert parsed["status"] == "ok" and parsed["value"] == 0.0 and parsed["reported"] is True
+    assert parsed["answer"] == "insufficient evidence"
+    assert parsed["trailing_truncated"] is True
+    assert parsed["deployed_status"] == "unparseable" and parsed["deployed_value"] == UNPARSEABLE
+    assert is_abstention(parsed["answer"])
+    # The object filled the cap exactly, with no trailing prose.
+    exact = parse_self_confidence('{"answer": "Paris", "confidence": 0.9}', truncated=True)
+    assert exact["status"] == "ok" and exact["value"] == 0.9 and exact["trailing_truncated"] is True
+    assert exact["deployed_status"] == "ok" and exact["deployed_value"] == 0.9
+    row = {
+        "qid": "q", "arm": "semantic_search", "correct": 0,
+        "self_status": parsed["status"], "self_confidence": parsed["value"],
+        "deployed_self_status": parsed["deployed_status"],
+        "deployed_self_confidence": parsed["deployed_value"],
+        "trailing_truncated": parsed["trailing_truncated"],
+        "lexical_grounding": None, "judge": None, "judge_reason": "not_sampled",
+    }
+    rewards = build_rewards(row, load_config())
+    assert rewards["self"] == 0.0
+    assert rewards["self_with_fallbacks"] == UNPARSEABLE
+
+
+def test_bare_abstention_without_json_is_omitted_and_scored_as_abstention():
+    raw = "insufficient evidence\n\nThe passages do not contain information about the date."
+    parsed = parse_self_confidence(raw)
+    assert parsed["answer"] == "insufficient evidence"
+    assert parsed["answer"] != raw
+    assert parsed["status"] == "omitted" and parsed["value"] is None and parsed["reported"] is False
+    assert parsed["trailing_truncated"] is False
+    assert parsed["deployed_status"] == "unparseable" and parsed["deployed_value"] == UNPARSEABLE
+    assert is_abstention(parsed["answer"])
+    scored = score_answer(parsed["answer"], [], True)
+    assert scored["correct"] == 1 and scored["abstained"] is True
+    titled = parse_self_confidence("Insufficient evidence.\n\nThe passages do not contain the span.")
+    assert titled["answer"] == "insufficient evidence" and titled["status"] == "omitted"
+    row = {
+        "qid": "q", "arm": "semantic_search", "correct": 1,
+        "self_status": parsed["status"], "self_confidence": parsed["value"],
+        "deployed_self_status": parsed["deployed_status"],
+        "deployed_self_confidence": parsed["deployed_value"],
+        "lexical_grounding": None, "judge": None, "judge_reason": "not_sampled",
+    }
+    rewards = build_rewards(row, load_config())
+    assert rewards["self"] is None
+    assert rewards["self_with_fallbacks"] == UNPARSEABLE
+
+
+def test_judge_score_is_compared_to_correctness_as_stored():
+    """A grounding score of 1.0 on an abstention is not rewritten to match F1."""
+    rows = [
+        {"qid": "q1", "arm": "semantic_search", "f1": 0.0, "correct": 0, "value": 1.0},
+        {"qid": "q2", "arm": "semantic_search", "f1": 1.0, "correct": 1, "value": 1.0},
+    ]
+    metrics = signal_metrics(rows)
+    assert metrics["n_observed"] == 2
+    assert metrics["brier"] == 0.5
+    prompt = (ROOT / "experiments" / "prompts" / "generator_system.txt").read_text()
+    assert '{"answer": "insufficient evidence", "confidence": <0-1>}' in prompt
+    assert "nothing before or after it" in prompt
+    assert "answer yes or no" in prompt
+    assert load_config()["generator_max_output_tokens"] == 256
 
 
 def _client_error(code: str, message: str):
@@ -600,8 +672,11 @@ def test_shared_ledger_blocks_the_judge_on_the_global_cap(tmp_path: Path):
 
 
 def test_truncation_is_recorded_and_is_not_the_unparseable_fallback(tmp_path: Path):
-    parsed = parse_self_confidence('{"answer": "Paris", "confidence": 0.9}', truncated=True)
+    broken = '{"answer": "Paris", "confidence": 0.9'
+    parsed = parse_self_confidence(broken, truncated=True)
     assert parsed["status"] == "truncated" and parsed["value"] is None and parsed["reported"] is False
+    assert parsed["trailing_truncated"] is False
+    assert parsed["deployed_status"] == "truncated" and parsed["deployed_value"] is None
     row = {
         "qid": "q", "arm": "semantic_search", "self_status": "truncated",
         "self_confidence": None, "lexical_grounding": 1.0, "judge": None,
@@ -613,10 +688,10 @@ def test_truncation_is_recorded_and_is_not_the_unparseable_fallback(tmp_path: Pa
 
     class Client:
         def converse(self, **kwargs):
-            assert kwargs["inferenceConfig"]["maxTokens"] == cfg["generator_max_output_tokens"]
+            assert kwargs["inferenceConfig"]["maxTokens"] == 256
             return {
                 "stopReason": "max_tokens",
-                "output": {"message": {"content": [{"text": '{"answer": "Paris", "confidence": 0.9}'}]}},
+                "output": {"message": {"content": [{"text": broken}]}},
                 "usage": {"inputTokens": 12, "outputTokens": 256},
             }
 
@@ -634,8 +709,11 @@ def test_truncation_is_recorded_and_is_not_the_unparseable_fallback(tmp_path: Pa
     written = json.loads((tmp_path / "g.jsonl").read_text().splitlines()[0])
     assert written["self_status"] == "truncated"
     assert written["self_confidence"] is None
+    assert written["trailing_truncated"] is False
     assert written["stop_reason"] == "max_tokens"
     assert written["self_confidence"] != UNPARSEABLE
+    assert written["deployed_self_status"] == "truncated"
+    assert written["deployed_self_confidence"] is None
 
 
 def test_spend_cap_stops_cleanly_and_lists_the_rest_pending(tmp_path: Path):
@@ -757,6 +835,9 @@ def test_judge_access_denied_stays_pending_downstream(tmp_path: Path, capsys):
     pending = (tmp_path / "PENDING.md").read_text()
     assert JUDGE_ACCESS_REASON in findings
     assert JUDGE_ACCESS_REASON in pending
+    assert "grounding judgement" in findings
+    assert "stays 1.0 when correctness is 0" in findings
+    assert "bare abstention" in findings
     calibration = json.loads((tmp_path / "calibration" / "calibration.json").read_text())
     assert calibration["unavailable_signals"]["judge"] == JUDGE_ACCESS_REASON
     replay = json.loads((tmp_path / "replay" / "replay_summary.json").read_text())
