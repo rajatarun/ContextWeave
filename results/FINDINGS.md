@@ -70,9 +70,9 @@ Seed stored in the manifest: `0`.
 | --- | --- |
 | model | us.anthropic.claude-haiku-4-5-20251001-v1:0 |
 | calls | 18000 |
-| input tokens (estimate) | 18275359 |
-| output tokens (upper bound) | 4608000 |
-| USD upper bound | 41.3154 |
+| input tokens (estimate) | 19535359 |
+| output tokens (upper bound) | 2304000 |
+| USD upper bound | 31.0554 |
 
 ceil(utf-8 bytes / 4) summed over the system prompt and the user message
 
@@ -181,6 +181,18 @@ Source: scripts/verified_reward_bench.py draw_rewards, CLI defaults. means are b
 | nq | oracle | bernoulli | pending | pending | pending |
 
 Curve CSV and PNG paths are listed in the replay artifact when that artifact exists. They are pending while it does not.
+
+## Correctness sensitivity
+
+Primary correctness is token F1 at least 0.5 (an unanswerable question counts only when the answer abstains). The secondary rate is how often the normalised gold string is contained in the normalised answer. It does not replace the primary label, and replay, calibration, and rankings do not use it.
+
+### Token F1 and gold contained in the answer
+
+| dataset | primary rate (token F1 >= 0.5) | secondary rate (gold contained) |
+| --- | --- | --- |
+| squad | pending | pending |
+| hotpot | pending | pending |
+| nq | pending | pending |
 
 ## Assumption check and missingness
 
