@@ -4,9 +4,12 @@ Self-confidence is the generator's verbalized number. The robust reading
 (first JSON object) is the ``self`` signal. The strict whole-reply reading
 is ``synthesizer._confidence_from`` and is stored beside it for the
 fallback row. Status is ``ok``, ``omitted``, ``unparseable``, ``failed``,
-or ``truncated``. Truncation is the output-token cap and is not stored as
-a fallback confidence. The saved answer is the JSON ``answer`` field, never
-the raw reply.
+or ``truncated``. A complete object whose trailing prose hit the output-token
+cap stays ``ok`` and sets ``trailing_truncated``. A JSON object cut off
+mid-token is ``truncated`` and is not stored as a fallback confidence. A
+bare ``insufficient evidence`` line with no JSON is an abstention with
+status ``omitted`` and a null confidence. The saved answer is the JSON
+``answer`` field, or that phrase, never the raw reply.
 
 ``--dry-run`` builds every prompt from the retrieval file and reports an
 input-token estimate plus an output-token upper bound (max output tokens on
@@ -250,6 +253,7 @@ def generate_rows(
             "deployed_self_confidence": parsed["deployed_value"],
             "deployed_self_reported": parsed["deployed_reported"],
             "deployed_self_status": parsed["deployed_status"],
+            "trailing_truncated": bool(parsed["trailing_truncated"]),
             "stop_reason": stop_reason,
             "input_tokens": int(in_tok),
             "output_tokens": int(out_tok),

@@ -49,15 +49,17 @@ python3 scripts/experiments/generate.py --seed 0 --max-usd 27 --total-usd-cap 29
 
 Requires AWS credentials that can call Bedrock Converse in `us-east-1`.
 The generator id is `us.anthropic.claude-haiku-4-5-20251001-v1:0` (override
-with `--model-id`). Temperature is 0. `maxTokens` is 128: the reply is one
-JSON object whose answer is a few words, or the fixed phrase
-`insufficient evidence` when the passages do not contain the answer. A
-response that stops because it hit that cap is stored with `self_status`
-`truncated` rather than parsed as a confidence. The saved answer is the
-JSON `answer` field. A confidence is also read from the first JSON object
-when the model writes prose around it; the strict whole-reply parse is
-stored as `deployed_self_status` and is what the fallback row uses. Rows
-already written are skipped.
+with `--model-id`). Temperature is 0. `maxTokens` is 256: the reply is one
+JSON object and nothing else. The answer is a few words, `yes` or `no` on a
+yes/no question, or `{"answer": "insufficient evidence", "confidence": <0-1>}`
+when the passages do not contain the answer. A complete JSON object whose
+trailing prose hits the cap is robust status `ok` with `trailing_truncated`
+set, and the confidence is kept. Only an object cut off mid-token is
+`self_status` `truncated`, with a null confidence. A first line of
+`insufficient evidence` and no JSON object is stored as that answer, robust
+status `omitted`, and a null confidence. The deployed strict whole-reply
+parse stays in `deployed_self_status` and is what the fallback row uses.
+Rows already written are skipped.
 
 Generation and the judge share `results/cost_ledger.jsonl` (gzipped when the
 file is new). `--total-usd-cap` defaults to 30. The full run passes

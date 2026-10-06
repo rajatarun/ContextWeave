@@ -30,11 +30,12 @@ generator_model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
 judge_model_id: us.meta.llama3-3-70b-instruct-v1:0
 region: us-east-1
 temperature: 0
-# A short extractive span plus the JSON object is a few dozen tokens. 128
-# leaves room for one stray sentence around that object. 256 charged for
-# output this format does not use. A response that stops on this cap is
-# self_status truncated and is not treated as a reported confidence.
-generator_max_output_tokens: 128
+# One JSON object is a few dozen tokens. 256 leaves room for the object when
+# the model also starts a sentence. A complete object followed by prose that
+# hits this cap is robust status ok with trailing_truncated set. Only an
+# object cut off mid-token is self_status truncated, and that is not a
+# reported confidence.
+generator_max_output_tokens: 256
 judge_max_output_tokens: 300
 
 # Hard ceiling for generation and the judge together, USD. The shared

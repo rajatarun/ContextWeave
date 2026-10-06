@@ -50,7 +50,7 @@
     "fallback_failed": 0.0,
     "fallback_omitted": 0.7,
     "fallback_unparseable": 0.5,
-    "generator_max_output_tokens": 128,
+    "generator_max_output_tokens": 256,
     "generator_model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     "grounding_threshold": 0.6,
     "grounding_weight": 1.0,
@@ -94,9 +94,9 @@
     "top_k": 5,
     "total_usd_cap": 30
   },
-  "created_at": "2026-10-06T15:00:09.020872+00:00",
+  "created_at": "2026-10-06T15:51:41.466661+00:00",
   "git": {
-    "commit": "89aa6ff57eab210eb746b0237a21073fbc3ee465",
+    "commit": "3b41b3b123cc079afc4387ffdeb8adaea1a4633a",
     "dirty": true
   },
   "seed": 0,

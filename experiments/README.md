@@ -92,9 +92,9 @@ evidence", "do not contain", "no information", "not mentioned", and
 A second rate is stored beside that label: whether the normalised gold string
 is contained in the normalised answer. It is for answers that quote the span
 and then keep writing. It is not a correctness label. Replay, calibration,
-and rankings use token F1 only. The prompt asks for a short extractive span,
-and for the exact phrase `insufficient evidence` when the passages do not
-contain the answer.
+and rankings use token F1 only. The prompt asks for a short extractive span
+(`yes` or `no` on a yes/no question) and, when the passages do not contain
+the answer, for the object `{"answer": "insufficient evidence", "confidence": <0-1>}`.
 
 ## Self-confidence
 
@@ -105,7 +105,11 @@ the reply. It is never the raw reply.
 
 The robust reading (the `self` signal) is that first JSON object. Prose
 before or after it is ignored. A number in [0, 1] is an observation. Anything
-else stores a null robust value.
+else stores a null robust value. A reply whose first line is
+`insufficient evidence` and which contains no JSON object is that abstention:
+the saved answer is the phrase, the robust value is null, and the status is
+`omitted`. That is the model leaving the confidence out, so the missingness
+reason is `omitted`.
 
 The deployed reading is the strict whole-reply parse in
 `synthesizer._confidence_from`, stored as `deployed_self_status` and
@@ -121,8 +125,12 @@ The deployed reading is the strict whole-reply parse in
 A reply that is prose around a valid object is robust `ok` and deployed
 `unparseable`. The `self` signal uses the parsed confidence. The fallback
 row uses 0.5, which is what the deployed parser would have substituted.
-Truncation (`maxTokens`) sets both statuses to `truncated` and both values
-to null. It is not one of the three fallback constants.
+When the output stops on `maxTokens` after a complete JSON object,
+`trailing_truncated` is true and the robust status stays `ok` (or `omitted`
+if that object has no usable confidence). The deployed strict parse is still
+stored beside it. Only a JSON object cut off mid-token sets both statuses to
+`truncated` and both values to null. That is not one of the three fallback
+constants.
 
 ## Grounding, NLI, judge
 
@@ -139,7 +147,14 @@ missingness rules apply. The artifact records the model revision the library
 reports.
 
 The judge prompt is `verified_reward.JUDGE_PROMPT`, copied verbatim into the
-judge artifact. The judge model defaults to
+judge artifact. It grades how well the retrieved passages support the answer
+and whether the answer addresses the question. A score of 1.0 means every
+claim is supported and the question is answered. The same prompt scores 1.0
+for an answer that says the evidence is insufficient when the evidence is
+insufficient. The score is that grounding judgement. It is not token-F1
+correctness. Calibration pairs the stored score with token F1 as recorded,
+with no adjustment when the judge scores an abstention 1.0 and correctness
+is 0 because a gold answer existed. The judge model defaults to
 `us.meta.llama3-3-70b-instruct-v1:0`. The run stops if that id equals the
 generator id unless `--allow-same-judge` is passed, and the flag is stored
 either way. Sampling is `verified_reward.should_judge`: SHA-256 of the
