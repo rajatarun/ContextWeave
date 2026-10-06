@@ -1,0 +1,95 @@
+# Experiment configuration. Scripts refuse to run when a required key or a
+# model price is absent. Prices are on-demand list prices, USD per 1,000,000
+# tokens, read on 2026-10-06.
+#
+# Claude Haiku 4.5 input 1.00 / output 5.00: AWS public pricing page,
+# metered unit map bedrockfoundationmodels (publication 2026-09-30T00:19:12Z),
+# region US East (N. Virginia). Rate codes
+# DY4B4Q3TRTAY8V6G.4799GE89SK.6YS6EN2CT7 (input) and
+# XADKFYXVGBFBJSU7.4799GE89SK.6YS6EN2CT7 (output).
+#
+# Llama 3.3 70B Instruct input 0.72 / output 0.72: AWS Price List offer
+# AmazonBedrock, us-east-1, version 20261005210410, publication
+# 2026-10-05T21:04:10Z. On-demand price $0.00072 per 1K tokens.
+
+seed: 0
+n_per_dataset: 1500
+top_k: 5
+bootstrap_samples: 1000
+replay_seeds: [0, 1, 2, 3, 4]
+
+embedding_model: sentence-transformers/all-MiniLM-L6-v2
+nli_model: cross-encoder/nli-deberta-v3-small
+grounding_threshold: 0.6
+judge_sample_rate: 0.05
+grounding_weight: 1.0
+judge_weight: 2.0
+self_weight: 1.0
+
+generator_model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+judge_model_id: us.meta.llama3-3-70b-instruct-v1:0
+region: us-east-1
+temperature: 0
+generator_max_output_tokens: 512
+judge_max_output_tokens: 300
+
+# Token estimates use ceil(utf-8 bytes / 4). That is an approximation, not a
+# provider tokenizer. Dry-run output cost charges the max output length.
+token_estimate: ceil_utf8_bytes_div_4
+
+keyword_weight: 0.25
+bm25_k1: 1.5
+bm25_b: 0.75
+
+# NQ contexts from the MRQA release are split into windows of this many
+# characters, with this overlap, so the candidate pool has more than one passage.
+nq_window_chars: 800
+nq_overlap_chars: 200
+
+# Deployed fallback constants (synthesizer.py). Used only by the
+# self_with_fallbacks replay row. The skip-unobserved row does not use them.
+fallback_omitted: 0.7
+fallback_unparseable: 0.5
+fallback_failed: 0.0
+
+# Falsifiable-prediction thresholds. Fixed here, before any model run.
+high_coverage: 0.8
+low_auroc_max: 0.6
+
+datasets:
+  squad:
+    id: squad
+    huggingface: rajpurkar/squad_v2
+    split: validation
+  hotpot:
+    id: hotpot
+    huggingface: hotpotqa/hotpot_qa
+    config: distractor
+    split: validation
+  nq:
+    id: nq
+    url: https://s3.us-east-2.amazonaws.com/mrqa/release/v2/dev/NaturalQuestionsShort.jsonl.gz
+    md5: c0347eebbca02d10d1b07b9a64efe61d
+    description: >
+      MRQA 2019 in-domain dev file NaturalQuestionsShort. Natural Questions
+      adapted to extractive QA: gold short-answer strings and the Wikipedia
+      context, truncated by MRQA to the first 800 tokens and kept only when
+      the short answer occurs in that window.
+
+prices_usd_per_million_tokens:
+  us.anthropic.claude-haiku-4-5-20251001-v1:0:
+    input: 1.0
+    output: 5.0
+    source: >
+      AWS pricing page metered unit map bedrockfoundationmodels,
+      US East (N. Virginia), publication 2026-09-30T00:19:12Z.
+      On-demand, per 1M tokens. Input rate code
+      DY4B4Q3TRTAY8V6G.4799GE89SK.6YS6EN2CT7, output rate code
+      XADKFYXVGBFBJSU7.4799GE89SK.6YS6EN2CT7.
+  us.meta.llama3-3-70b-instruct-v1:0:
+    input: 0.72
+    output: 0.72
+    source: >
+      AWS Price List AmazonBedrock us-east-1 version 20261005210410,
+      publication 2026-10-05T21:04:10Z. On-demand $0.00072 per 1K tokens
+      for Llama 3.3 70B input and output.

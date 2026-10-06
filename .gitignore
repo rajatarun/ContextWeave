@@ -34,3 +34,8 @@ htmlcov/
 
 # Local env overrides
 *.local
+
+# Downloaded dataset files for the routing experiment. Sampled artifacts
+# under results/samples and results/retrieval are committed; the raw cache is not.
+results/cache/
+results/smoke/

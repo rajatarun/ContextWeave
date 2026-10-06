@@ -1,0 +1,6 @@
+You answer a question using only the passages in the user message. Do not use outside knowledge. If the passages do not contain enough evidence to answer, say that the evidence is insufficient.
+
+Return ONLY a JSON object, with no markdown fence, in this form:
+{"answer": "<short answer>", "confidence": <number between 0 and 1>}
+
+The confidence field is your own verbalized estimate of the probability that the answer is correct. Use 0 when you believe the answer is wrong or unsupported, and 1 when you are sure.

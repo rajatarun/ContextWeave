@@ -1,0 +1,441 @@
+"""Fixtures for the real-data routing protocol. Nothing here is a result."""
+from __future__ import annotations
+
+import hashlib
+import json
+import random
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "src" / "query_api"))
+sys.path.insert(0, str(ROOT / "src" / "shared"))
+
+from experiments.analyses_stage import analyse
+from experiments.assumed import SELF_C1, SELF_LOW_MEAN, assumed_slopes
+from experiments.calibrate_stage import calibrate_dataset
+from experiments.common import ProtocolError, load_config, price_for, validate_rows
+from experiments.confidence import FAILED, OMITTED, UNPARSEABLE, parse_self_confidence
+from experiments.data import chunk_windows, sample_rows
+from experiments.generate_stage import build_user_message, dry_run, generate_rows, system_prompt
+from experiments.metrics import is_abstention, kendall_tau, score_answer, signal_metrics
+from experiments.prediction import dataset_verdict, overall_verdict
+from experiments.records import build_rewards
+from experiments.reporting import render
+from experiments.replay_stage import (
+    _Router, empirical_mu, general_priors, normalized_self_reward, run_one,
+)
+from experiments.retrieve_stage import bm25_scores, graph_scores, rank_pool
+from experiments.signals_stage import check_judge_model, judge_sampled, lexical_value
+import rag_router as R
+import verified_reward as V
+
+
+def test_f1_and_abstention_detector():
+    scored = score_answer("Paris", ["Paris"], False)
+    assert scored["f1"] == 1.0 and scored["correct"] == 1
+    partial = score_answer("Paris city", ["Paris"], False)
+    assert partial["f1"] == pytest.approx(2 / 3) and partial["correct"] == 1
+    wrong = score_answer("Rome", ["Paris"], False)
+    assert wrong["f1"] == 0.0 and wrong["correct"] == 0
+    # Boundary: F1 just below 0.5 is incorrect. "aa bb" vs "aa" is 2/3; "aa bb cc" vs "aa" is 0.5.
+    boundary = score_answer("aa bb cc", ["aa"], False)
+    assert boundary["f1"] == pytest.approx(0.5) and boundary["correct"] == 1
+    below = score_answer("aa bb cc dd", ["aa"], False)
+    assert below["f1"] < 0.5 and below["correct"] == 0
+    assert is_abstention("Insufficient evidence to answer this.")
+    assert is_abstention("")
+    assert is_abstention("   ")
+    assert not is_abstention("Paris")
+    unans_ok = score_answer("Insufficient evidence to answer.", [], True)
+    unans_bad = score_answer("Paris", [], True)
+    assert unans_ok["correct"] == 1 and unans_bad["correct"] == 0
+    answerable_abstain = score_answer("Insufficient evidence to answer.", ["Paris"], False)
+    assert answerable_abstain["correct"] == 0
+
+
+def test_lexical_tau_and_verbatim_numbers():
+    high, reason, _ = lexical_value("alpha beta gamma delta epsilon", ["alpha beta gamma delta epsilon extra"], 0.6, 1.0)
+    mid, _, _ = lexical_value("alpha beta gamma delta epsilon", ["alpha beta gamma other words here"], 0.6, 1.0)
+    low, _, _ = lexical_value("alpha beta gamma delta epsilon", ["alpha beta other words here now"], 0.6, 1.0)
+    assert high == 1.0 and mid == 1.0 and low == 0.0
+    # 2 of 5 content tokens is below tau, so the single claim is unsupported.
+    assert V.lexical_support("alpha beta gamma delta epsilon", "alpha beta other words here now") == pytest.approx(0.4)
+    numbered, nreason, _ = lexical_value(
+        "alpha beta counted 400 units total",
+        ["alpha beta counted 40 units total"],
+        0.6, 1.0,
+    )
+    assert numbered == 0.0
+    assert V.lexical_support("alpha beta counted 400 units total", "alpha beta counted 40 units total") == 0.0
+    missing, mreason, _ = lexical_value("alpha beta gamma", [], 0.6, 1.0)
+    assert missing is None and mreason == "no_passages"
+    abstained, areason, _ = lexical_value("Insufficient evidence to answer.", ["alpha beta gamma"], 0.6, 1.0)
+    assert abstained is None and areason == "no_claims"
+    # An environment threshold must not override the explicit tau.
+    import os
+    os.environ["ROUTER_GROUNDING_THRESHOLD"] = "0.1"
+    try:
+        still, _, _ = lexical_value("alpha beta gamma delta epsilon", ["alpha beta other words here now"], 0.6, 1.0)
+    finally:
+        os.environ.pop("ROUTER_GROUNDING_THRESHOLD", None)
+    assert still == 0.0
+
+
+def test_hash_sample_is_stable_and_ignores_seed():
+    qid = "squad-5733be284776f41900661182"
+    rate = 0.05
+    digest = int(hashlib.sha256(qid.encode()).hexdigest()[:8], 16) / 0xFFFFFFFF
+    assert judge_sampled(qid, rate) is (digest < rate)
+    assert judge_sampled(qid, rate) is judge_sampled(qid, rate)
+    chosen = [f"q{i}" for i in range(500) if judge_sampled(f"q{i}", rate)]
+    assert chosen == [f"q{i}" for i in range(500) if judge_sampled(f"q{i}", rate)]
+    assert judge_sampled("", rate) is False
+
+
+def test_calibration_metrics_and_ranking():
+    rows = []
+    for i in range(8):
+        rows.append({"qid": f"g{i}", "arm": "graph_first", "f1": 1.0, "correct": 1, "value": 0.9})
+        rows.append({"qid": f"s{i}", "arm": "semantic_search", "f1": 0.0, "correct": 0, "value": 0.1})
+    metrics = signal_metrics(rows)
+    assert metrics["coverage"] == 1.0
+    assert metrics["brier"] == pytest.approx(0.01)
+    assert metrics["auroc"] == 1.0
+    assert metrics["spearman"] == pytest.approx(1.0)
+    assert metrics["rank_agrees"] is True
+    assert metrics["kendall_tau"] == pytest.approx(1.0)
+    assert kendall_tau(["a", "b", "c"], ["c", "b", "a"]) == pytest.approx(-1.0)
+    flat = []
+    for i in range(4):
+        flat.append({"qid": f"a{i}", "arm": "semantic_search", "f1": 1.0, "correct": 1, "value": 0.9})
+        flat.append({"qid": f"b{i}", "arm": "keyword_boosted", "f1": 0.0, "correct": 0, "value": 0.9})
+    flat_m = signal_metrics(flat)
+    assert flat_m["auroc"] == pytest.approx(0.5)
+    assert flat_m["rank_agrees"] is False
+    assert signal_metrics([{"qid": "only", "arm": "semantic_search", "f1": 1.0, "correct": 1, "value": None}])["coverage"] == 0.0
+    point = calibrate_dataset(
+        [{"qid": f"q{i}", "arm": "semantic_search", "signal": "self", "f1": float(i % 2), "correct": i % 2, "value": 0.2 * (i % 2)}
+         for i in range(10)],
+        seed=3, n_boot=30, high_coverage=0.8, low_auroc_max=0.6,
+    )
+    again = calibrate_dataset(
+        [{"qid": f"q{i}", "arm": "semantic_search", "signal": "self", "f1": float(i % 2), "correct": i % 2, "value": 0.2 * (i % 2)}
+         for i in range(10)],
+        seed=3, n_boot=30, high_coverage=0.8, low_auroc_max=0.6,
+    )
+    assert point["signals"]["self"]["ci"]["brier"] == again["signals"]["self"]["ci"]["brier"]
+
+
+def test_prediction_verdicts():
+    good_self = {"coverage": 0.95, "auroc": 0.52, "rank_agrees": False}
+    good_ground = {"coverage": 0.4, "auroc": 0.8, "rank_agrees": True}
+    assert dataset_verdict(good_self, good_ground, 0.8, 0.6)["verdict"] == "supported"
+    bad = dataset_verdict(good_self, {**good_ground, "rank_agrees": False}, 0.8, 0.6)
+    assert bad["verdict"] == "contradicted"
+    pending = dataset_verdict({"coverage": 0.9, "auroc": None, "rank_agrees": False}, good_ground, 0.8, 0.6)
+    assert pending["verdict"] == "pending"
+    per = {d: {"verdict": "supported"} for d in ("squad", "hotpot", "nq")}
+    assert overall_verdict(per)["verdict"] == "supported"
+    assert overall_verdict({"squad": {"verdict": "supported"}})["verdict"] == "pending"
+    mixed = {**per, "nq": {"verdict": "contradicted"}}
+    assert overall_verdict(mixed)["verdict"] == "contradicted"
+
+
+def test_graph_and_bm25_rank_the_supporting_passage_first():
+    passages = [
+        {"id": "a", "text": "Ada Lovelace met Charles Babbage in London."},
+        {"id": "b", "text": "Charles Babbage built the Analytical Engine."},
+        {"id": "c", "text": "Bananas are yellow fruit from tropical farms."},
+    ]
+    scores = graph_scores("What did Ada Lovelace do?", passages)
+    order = sorted(range(3), key=lambda i: (-scores[i], passages[i]["id"]))
+    assert passages[order[0]]["id"] == "a"
+    assert passages[order[-1]]["id"] == "c"
+    bm = bm25_scores("bananas fruit", passages, 1.5, 0.75)
+    assert passages[max(range(3), key=lambda i: bm[i])]["id"] == "c"
+
+    def embed(texts):
+        out = []
+        for text in texts:
+            vec = [0.0, 0.0, 0.0, 0.0]
+            for i, ch in enumerate(text.lower()):
+                vec[i % 4] += (ord(ch) % 5) / 10.0
+            out.append(vec)
+        return out
+
+    ranked = rank_pool("bananas", passages, embed, top_k=2)
+    assert set(ranked) == {"semantic_search", "graph_first", "keyword_boosted", "hybrid"}
+    assert len(ranked["semantic_search"]) == 2
+    assert ranked["semantic_search"][0]["rank"] == 1
+
+
+def _arm_row(qid, arm, correct, status, confidence, grounding=None, judge=None):
+    return {
+        "qid": qid, "arm": arm, "correct": correct, "self_status": status,
+        "self_confidence": confidence, "lexical_grounding": grounding, "judge": judge,
+    }
+
+
+def test_rewards_treat_unobserved_self_as_missing_and_fallbacks_as_constants():
+    cfg = load_config()
+    ok = build_rewards(_arm_row("q", "semantic_search", 1, "ok", 0.4, 0.5, None), cfg)
+    assert ok["self"] == 0.4 and ok["self_with_fallbacks"] == 0.4
+    omitted = build_rewards(_arm_row("q", "semantic_search", 1, "omitted", OMITTED, None, None), cfg)
+    assert omitted["self"] is None and omitted["self_with_fallbacks"] == 0.7
+    bad = build_rewards(_arm_row("q", "semantic_search", 0, "unparseable", UNPARSEABLE), cfg)
+    assert bad["self_with_fallbacks"] == 0.5
+    failed = build_rewards(_arm_row("q", "semantic_search", 0, "failed", FAILED), cfg)
+    assert failed["self"] is None and failed["self_with_fallbacks"] == 0.0
+    # Verified reward is the weighted mean, and a missing judge leaves grounding.
+    both = build_rewards(_arm_row("q", "graph_first", 1, "ok", 0.2, 0.5, 1.0), cfg)
+    assert both["verified"] == pytest.approx((1.0 * 0.5 + 2.0 * 1.0) / 3.0)
+    with pytest.raises(ProtocolError):
+        build_rewards(_arm_row("q", "semantic_search", 1, "omitted", 0.2), cfg)
+
+
+def test_replay_is_deterministic_and_skips_missing_rewards():
+    cfg = load_config()
+    priors = general_priors()
+    strength = float(R._PRIOR_STRENGTH)
+    arms = ["semantic_search", "graph_first", "keyword_boosted", "hybrid"]
+    questions = [{"qid": f"q{i}", "question_type": "answerable"} for i in range(12)]
+    by_qid = {}
+    for i, q in enumerate(questions):
+        by_qid[q["qid"]] = {}
+        for arm in arms:
+            correct = 1 if arm == "graph_first" else 0
+            status = "omitted" if arm == "semantic_search" else "ok"
+            confidence = OMITTED if status == "omitted" else (0.95 if arm == "graph_first" else 0.4)
+            row = _arm_row(q["qid"], arm, correct, status, confidence, grounding=float(correct), judge=None)
+            by_qid[q["qid"]][arm] = {"correct": correct, "rewards": build_rewards(row, cfg)}
+    mu = empirical_mu([
+        {"question_type": "answerable", "arm": arm, "correct": by_qid["q0"][arm]["correct"]}
+        for arm in arms
+    ])
+    # empirical_mu needs one row per question; the constant pattern makes any question enough
+    # only if every question agrees, which it does. Rebuild from all rows.
+    mu = empirical_mu([
+        {"question_type": "answerable", "arm": arm, "correct": by_qid[q["qid"]][arm]["correct"]}
+        for q in questions for arm in arms
+    ])
+    a = run_one(questions, by_qid, "self", "fractional", 7, mu, priors, strength)
+    b = run_one(questions, by_qid, "self", "fractional", 7, mu, priors, strength)
+    assert a["curve"] == b["curve"]
+    c = run_one(questions, by_qid, "self_with_fallbacks", "fractional", 7, mu, priors, strength)
+    assert [p["applied_reward"] for p in a["curve"]] != [p["applied_reward"] for p in c["curve"]]
+    d = run_one(questions, by_qid, "self", "bernoulli", 7, mu, priors, strength)
+    e = run_one(questions, by_qid, "self", "bernoulli", 7, mu, priors, strength)
+    assert d["curve"] == e["curve"]
+    router = _Router(1, ["answerable"], priors, strength)
+    try:
+        before = list(router.store["answerable"]["semantic_search"])
+        assert router.update("answerable", "semantic_search", None, "fractional") is None
+        assert router.store["answerable"]["semantic_search"] == before
+        router.update("answerable", "semantic_search", 0.0, "fractional")
+        assert router.store["answerable"]["semantic_search"] != before
+    finally:
+        router.close()
+
+
+def test_normalized_self_is_causal():
+    assert normalized_self_reward([], 0.9) is None
+    assert normalized_self_reward([0.2, 0.4], 0.9) == 1.0
+    assert normalized_self_reward([0.2, 0.9], 0.4) == pytest.approx(0.5)
+    cfg = load_config()
+    priors = general_priors()
+    strength = float(R._PRIOR_STRENGTH)
+    arms = ["semantic_search", "graph_first", "keyword_boosted", "hybrid"]
+
+    def build(last_self: float):
+        questions = [{"qid": f"q{i}", "question_type": "nq"} for i in range(4)]
+        by_qid = {}
+        for i, q in enumerate(questions):
+            by_qid[q["qid"]] = {}
+            for arm in arms:
+                conf = last_self if i == 3 else 0.3 + 0.1 * i
+                row = _arm_row(q["qid"], arm, 1, "ok", conf, 0.5, None)
+                by_qid[q["qid"]][arm] = {"correct": 1, "rewards": build_rewards(row, cfg)}
+        mu = empirical_mu([
+            {"question_type": "nq", "arm": arm, "correct": 1} for arm in arms for _ in questions
+        ])
+        return questions, by_qid, mu
+
+    q1, b1, mu = build(0.2)
+    q2, b2, _ = build(0.99)
+    r1 = run_one(q1, b1, "normalized_self", "fractional", 4, mu, priors, strength)
+    r2 = run_one(q2, b2, "normalized_self", "fractional", 4, mu, priors, strength)
+    order = [{"qid": f"q{i}", "question_type": "nq"} for i in range(4)]
+    random.Random(4).shuffle(order)
+    idx = next(i for i, q in enumerate(order) if q["qid"] == "q3")
+    assert idx > 0
+    assert r1["curve"][:idx] == r2["curve"][:idx]
+
+
+def test_missingness_and_slopes_do_not_fill_none_with_zero():
+    rows = []
+    for i in range(6):
+        for arm, status, conf, correct in (
+            ("semantic_search", "omitted", OMITTED, 0),
+            ("graph_first", "ok", 0.8, 1),
+        ):
+            rows.append({
+                "qid": f"q{i}", "dataset": "squad", "arm": arm, "correct": correct,
+                "self_status": status, "self_confidence": conf,
+                "lexical_grounding": None if arm == "semantic_search" else 1.0,
+                "lexical_grounding_reason": "no_claims" if arm == "semantic_search" else None,
+                "nli_grounding": None, "nli_grounding_reason": "signal_file_missing",
+                "judge": None, "judge_reason": "not_sampled",
+            })
+    out = analyse(rows, seed=1, n_boot=20)
+    self_m = out["datasets"]["squad"]["self"]["missingness"]
+    assert self_m["semantic_search"]["m"] == 1.0
+    assert self_m["graph_first"]["m"] == 0.0
+    assert self_m["semantic_search"]["accuracy_when_observed"] is None
+    slope = out["datasets"]["squad"]["self"]["slope"]
+    # Only the observed graph_first rows (Y=1) contribute; Y=0 is entirely missing.
+    assert slope["c0"]["estimate"] is None
+    assert slope["c1"]["estimate"] == pytest.approx(0.8)
+    assert slope["s"]["estimate"] is None
+
+
+def test_results_writer_leaves_missing_artifacts_pending(tmp_path: Path):
+    findings, pending = render(tmp_path)
+    assert "pending" in findings
+    assert "results/calibration/calibration.json is missing" in pending
+    assert "usd_upper_bound" in pending
+    # A present number is copied; a sibling dataset stays pending.
+    cal = {
+        "datasets": {
+            "squad": {
+                "signals": {
+                    "self": {
+                        "coverage": 0.91, "brier": 0.2, "ece": 0.1, "auroc": 0.55,
+                        "spearman": 0.1, "kendall_tau": 0.0, "rank_agrees": False,
+                        "correctness_ranking": ["graph_first", "semantic_search"],
+                        "signal_ranking": ["semantic_search", "graph_first"],
+                        "ci": {
+                            "coverage": {"estimate": 0.91, "lo": 0.8, "hi": 0.95},
+                            "brier": {"estimate": 0.2, "lo": 0.1, "hi": 0.3},
+                            "ece": {"estimate": 0.1, "lo": 0.0, "hi": 0.2},
+                            "auroc": {"estimate": 0.55, "lo": 0.4, "hi": 0.6},
+                            "spearman": {"estimate": 0.1, "lo": -0.1, "hi": 0.2},
+                            "kendall_tau": {"estimate": 0.0, "lo": -1.0, "hi": 1.0},
+                        },
+                    }
+                },
+                "prediction": {"verdict": "pending"},
+            }
+        },
+        "prediction": {"verdict": "pending"},
+    }
+    (tmp_path / "calibration").mkdir()
+    (tmp_path / "calibration" / "calibration.json").write_text(json.dumps(cal))
+    findings, pending = render(tmp_path)
+    assert "0.9100" in findings
+    assert "hotpot self coverage" in pending
+
+
+def test_dry_run_does_not_call_a_model_and_price_table_is_closed():
+    cfg = load_config()
+    rows = [{
+        "qid": "q", "dataset": "squad", "arm": "semantic_search", "question": "Where?",
+        "passages": [{"id": "p", "title": "T", "text": "A short passage."}],
+    }]
+    estimate = dry_run(cfg, rows, cfg["generator_model_id"])
+    assert estimate["called_model"] is False
+    assert estimate["n_calls"] == 1
+    assert estimate["input_tokens_estimate"] > 0
+    assert estimate["usd_upper_bound"] > 0
+    with pytest.raises(ProtocolError):
+        price_for(cfg, "unknown-model")
+    user = build_user_message("Where?", rows[0]["passages"])
+    assert "A short passage." in user and "Where?" in user
+    assert "confidence" in system_prompt()
+
+
+def test_generate_records_validation_and_stops_on_access_denied(tmp_path: Path):
+    cfg = load_config()
+    rows = [{
+        "qid": "q1", "dataset": "squad", "arm": "semantic_search", "question_type": "answerable",
+        "question": "Where?", "passages": [{"title": "", "text": "Paris is the capital."}],
+    }]
+
+    class Client:
+        def __init__(self):
+            self.calls = 0
+
+        def converse(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise _client_error("ValidationException", "bad prompt")
+            raise _client_error("AccessDeniedException", "no")
+
+    client = Client()
+    with pytest.raises(ProtocolError, match="AccessDenied"):
+        generate_rows(cfg, rows * 2, tmp_path / "g.jsonl", tmp_path / "c.jsonl",
+                      model_id=cfg["generator_model_id"], max_usd=10, client=client, sleep=lambda s: None)
+    written = [json.loads(line) for line in (tmp_path / "g.jsonl").read_text().splitlines()]
+    assert written[0]["self_status"] == "failed"
+    assert written[0]["error"]["type"] == "ValidationException"
+
+
+def test_same_judge_is_refused_and_schema_and_sample_are_strict():
+    with pytest.raises(ProtocolError):
+        check_judge_model("same", "same", False)
+    check_judge_model("same", "same", True)
+    check_judge_model("judge", "generator", False)
+    with pytest.raises(ProtocolError):
+        validate_rows([{"qid": "q"}], ("qid", "arm"), Path("x.jsonl"))
+    rows = [{"qid": f"q{i:02d}", "dataset": "squad"} for i in range(5)]
+    a = sample_rows(rows, 3, 11, "squad")
+    b = sample_rows(rows, 3, 11, "squad")
+    assert [r["qid"] for r in a] == [r["qid"] for r in b]
+    assert len(a) == 3
+    with pytest.raises(ProtocolError):
+        sample_rows(rows, 9, 1, "squad")
+    assert chunk_windows("abcdefghij", 4, 1)[0] == "abcd"
+    assert len(chunk_windows("short", 800, 200)) == 1
+
+
+def test_assumed_slopes_match_the_simulation_source():
+    text = (ROOT / "scripts" / "verified_reward_bench.py").read_text()
+    assert "rng.gauss(0.88, 0.06)" in text
+    assert "0.55 + self_bias" in text
+    assert "gauss(0.8 if correct else 0.3" in text
+    regret = (ROOT / "scripts" / "routing_regret_sim.py").read_text()
+    assert "NOISE_K = 20.0" in regret
+    slopes = assumed_slopes()
+    assert slopes["self"]["c1"] == SELF_C1
+    assert slopes["self"]["c0_prime"] == SELF_LOW_MEAN
+    assert slopes["self"]["s"] == pytest.approx((1 - 0.7) * (0.88 - 0.80))
+    assert slopes["grounding"]["s"] == pytest.approx(0.5)
+    assert slopes["routing_regret_sim"]["s_self"] is None
+
+
+def test_confidence_statuses_match_synthesizer_constants():
+    assert parse_self_confidence('{"answer": "Paris", "confidence": 0.25}')["status"] == "ok"
+    omitted = parse_self_confidence('{"answer": "Paris"}')
+    assert omitted["status"] == "omitted" and omitted["value"] == OMITTED and omitted["reported"] is False
+    bad = parse_self_confidence("not json")
+    assert bad["status"] == "unparseable" and bad["value"] == UNPARSEABLE
+    failed = parse_self_confidence(None, call_failed=True)
+    assert failed["status"] == "failed" and failed["value"] == FAILED
+    src = (ROOT / "src" / "query_api" / "synthesizer.py").read_text()
+    assert "_OMITTED_CONFIDENCE = 0.7" in src
+    assert "_UNPARSED_CONFIDENCE = 0.5" in src
+
+
+def _client_error(code: str, message: str):
+    try:
+        from botocore.exceptions import ClientError
+    except ImportError:
+        class ClientError(Exception):
+            def __init__(self, response, operation_name):
+                super().__init__(message)
+                self.response = response
+        return ClientError({"Error": {"Code": code, "Message": message}}, "Converse")
+    return ClientError({"Error": {"Code": code, "Message": message}}, "Converse")
