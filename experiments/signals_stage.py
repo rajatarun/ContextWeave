@@ -31,7 +31,7 @@ sys.path.insert(0, str(_ROOT / "scripts"))
 
 import verified_reward as V  # noqa: E402
 
-from experiments.common import ProtocolError
+from experiments.common import ProtocolError, snapshot_revision
 from experiments.generate_stage import (
     FATAL_CODES, THROTTLE_CODES, _error_code, _error_message,
 )
@@ -70,10 +70,16 @@ def load_nli(model_name: str) -> tuple[V.Verifier, dict[str, Any]]:
         raise ProtocolError(f"NLI model {model_name} has no entailment label: {labels}")
     ent = labels.index("entailment")
     revision = None
+    vocab = None
     try:
         revision = model.model.config._commit_hash
     except Exception:
         revision = None
+    tok = getattr(model, "tokenizer", None)
+    init = getattr(tok, "init_kwargs", None) if tok is not None else None
+    if isinstance(init, dict):
+        vocab = init.get("vocab_file")
+    revision = snapshot_revision(revision, vocab)
 
     def verify(claim: str, passage: str) -> float:
         probs = model.predict([(passage, claim)], apply_softmax=True)[0]

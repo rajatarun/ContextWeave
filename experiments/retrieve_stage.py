@@ -30,7 +30,7 @@ import re
 from collections import Counter, defaultdict
 from typing import Any, Callable, Sequence
 
-from experiments.common import ARMS, ProtocolError
+from experiments.common import ARMS, ProtocolError, snapshot_revision
 
 _TOKEN = re.compile(r"[a-z0-9]+(?:\.[0-9]+)?", re.IGNORECASE)
 _ENTITY = re.compile(r"\b[A-Z][a-zA-Z0-9]+(?:\s+[A-Z][a-zA-Z0-9]+)*\b")
@@ -204,12 +204,19 @@ def load_embedder(model_name: str) -> tuple[EmbedFn, dict[str, Any]]:
         arr = model.encode(list(texts), normalize_embeddings=True, show_progress_bar=False, batch_size=32)
         return [row.tolist() for row in arr]
 
-    # The library stores the snapshot revision on the transformer.
+    # config._commit_hash is often empty after a cache load. The tokenizer
+    # file path still contains snapshots/<commit>/.
     commit = None
+    vocab = None
     try:
         commit = model[0].auto_model.config._commit_hash
     except Exception:
         commit = None
+    try:
+        vocab = model[0].tokenizer.init_kwargs.get("vocab_file")
+    except Exception:
+        vocab = None
+    commit = snapshot_revision(commit, vocab)
     info = {"embedding_model": model_name, "revision": commit, "card_base_model": revision}
     return embed, info
 

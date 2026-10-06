@@ -34,6 +34,15 @@ import rag_router as R
 import verified_reward as V
 
 
+def test_snapshot_revision_reads_commit_or_cache_path():
+    from experiments.common import snapshot_revision
+    commit = "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
+    path = f"/home/x/.cache/huggingface/hub/models--x/snapshots/{commit}/vocab.txt"
+    assert snapshot_revision(commit) == commit
+    assert snapshot_revision(None, path) == commit
+    assert snapshot_revision("sentence-transformers/all-MiniLM-L6-v2") is None
+
+
 def test_f1_and_abstention_detector():
     scored = score_answer("Paris", ["Paris"], False)
     assert scored["f1"] == 1.0 and scored["correct"] == 1

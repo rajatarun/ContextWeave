@@ -58,7 +58,8 @@ id, text, and score.
 
 * `semantic_search`: cosine similarity with
   `sentence-transformers/all-MiniLM-L6-v2` on CPU. The artifact records the
-  model revision the library reports.
+  snapshot revision: `config._commit_hash` when the library sets it, otherwise
+  the commit id in the local tokenizer path (`snapshots/<commit>/`).
 * `graph_first`: an entity/co-occurrence graph built on that question's pool.
   Entities are maximal capitalised phrases that are not a single stopword,
   plus numeric tokens. A query term matches an entity when it casefolds equal

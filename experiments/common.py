@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -75,6 +76,29 @@ def price_for(cfg: dict[str, Any], model_id: str) -> dict[str, Any]:
             "Refusing to guess a price."
         )
     return table[model_id]
+
+
+_SNAPSHOT_RE = re.compile(r"/snapshots/([0-9a-f]{40})(?:/|$)")
+
+
+def snapshot_revision(*values: Any) -> str | None:
+    """Revision of a Hugging Face snapshot.
+
+    A 40-hex commit is returned as itself. A local cache path of the form
+    ``.../snapshots/<commit>/...`` yields that commit. The library often
+    leaves ``config._commit_hash`` empty after a cache load, while the
+    tokenizer file path still names the snapshot.
+    """
+    for value in values:
+        if value is None:
+            continue
+        text = str(value)
+        if re.fullmatch(r"[0-9a-f]{40}", text):
+            return text
+        match = _SNAPSHOT_RE.search(text)
+        if match:
+            return match.group(1)
+    return None
 
 
 def estimate_tokens(text: str) -> int:
