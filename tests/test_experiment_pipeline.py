@@ -369,6 +369,16 @@ def test_dry_run_does_not_call_a_model_and_price_table_is_closed():
     assert estimate["n_calls"] == 1
     assert estimate["input_tokens_estimate"] > 0
     assert estimate["usd_upper_bound"] > 0
+    haiku = price_for(cfg, cfg["generator_model_id"])
+    assert haiku["input"] == pytest.approx(1.10)
+    assert haiku["output"] == pytest.approx(5.50)
+    assert "input 1.00 / output 5.00" in haiku["source"]
+    llama = price_for(cfg, cfg["judge_model_id"])
+    assert llama["input"] == pytest.approx(0.72)
+    assert llama["output"] == pytest.approx(0.72)
+    comment = (ROOT / "experiments" / "config.yaml").read_text()
+    assert "input 1.00 / output 5.00" in comment
+    assert "input 1.10 / output 5.50" in comment
     with pytest.raises(ProtocolError):
         price_for(cfg, "unknown-model")
     user = build_user_message("Where?", rows[0]["passages"])
@@ -573,7 +583,7 @@ def test_judge_score_is_compared_to_correctness_as_stored():
     assert "Use 0 when" not in prompt
     assert "taken directly" not in prompt
     assert load_config()["generator_max_output_tokens"] == 256
-    assert load_config()["n_per_dataset"] == 1200
+    assert load_config()["n_per_dataset"] == 1100
 
 
 def _client_error(code: str, message: str):
@@ -1071,6 +1081,257 @@ def test_smaller_n_keeps_the_seeded_prefix_and_the_previous_pools(tmp_path, monk
         data_mod.build_sample(cfg, tmp_path, 4, 0, names)
     still = [row["qid"] for row in read_jsonl(tmp_path / "samples" / "nq.jsonl")]
     assert still == kept_ids
+
+
+def test_eleven_hundred_keeps_the_twelve_hundred_prefix_of_the_fifteen_hundred_draw(tmp_path, monkeypatch):
+    """1100 is a same-seed shrink of 1200, which is a same-seed shrink of 1500.
+
+    Each step keeps the rows already written, including NQ pools.
+    """
+    import json as jsonlib
+    from experiments import data as data_mod
+    from experiments.common import read_jsonl
+
+    rows = [{"qid": f"q{i:05d}", "dataset": "squad"} for i in range(2000)]
+    order = [row["qid"] for row in seeded_order(rows, 0, "squad")]
+    assert [row["qid"] for row in sample_rows(rows, 1500, 0, "squad")] == sorted(order[:1500])
+    assert [row["qid"] for row in sample_rows(rows, 1200, 0, "squad")] == sorted(order[:1200])
+    assert [row["qid"] for row in sample_rows(rows, 1100, 0, "squad")] == sorted(order[:1100])
+    assert set(order[:1100]) < set(order[:1200]) < set(order[:1500])
+
+    cfg = load_config()
+    cfg["nq_pool_size"] = 2
+    squad = [_plain_row("squad", f"s{i:05d}", [{"id": f"sp{i:05d}", "text": f"squad {i}"}]) for i in range(1600)]
+    hotpot = [_plain_row("hotpot", f"h{i:05d}", [{"id": f"hp{i:05d}", "text": f"hotpot {i}"}]) for i in range(1600)]
+    nq = [
+        _plain_row("nq", f"n{i:05d}", [{
+            "id": f"g{i:05d}", "title": "", "text": f"unique gold window {i} alpha",
+            "source": f"src{i:05d}", "role": "gold",
+        }])
+        for i in range(1600)
+    ]
+
+    def _copy(loaded, info):
+        return jsonlib.loads(jsonlib.dumps(loaded)), dict(info)
+
+    monkeypatch.setitem(data_mod.LOADERS, "squad", lambda _cfg: _copy(squad, {"name": "squad"}))
+    monkeypatch.setitem(data_mod.LOADERS, "hotpot", lambda _cfg: _copy(hotpot, {"name": "hotpot"}))
+    monkeypatch.setattr(data_mod, "load_nq", lambda _cfg, _cache: _copy(nq, {"name": "nq"}))
+    calls = {"n": 0}
+
+    def _stamp(picked, target, _k1, _b):
+        calls["n"] += 1
+        for row in picked:
+            row["pool"] = list(row["pool"]) + [{
+                "id": f"neg-{row['qid']}", "title": "", "text": "stamped negative",
+                "source": "other", "role": "hard_negative",
+            }]
+        return {
+            "nq_pool_size": target,
+            "negative_selection": "stamped for the prefix test",
+            "pool_size_min": 2,
+            "pool_size_max": 2,
+            "pool_size_mean": 2.0,
+            "gold_windows_mean": 1.0,
+            "hard_negatives_added": len(picked),
+        }
+
+    monkeypatch.setattr(data_mod, "expand_nq_pools", _stamp)
+    names = ("squad", "hotpot", "nq")
+    data_mod.build_sample(cfg, tmp_path, 1500, 0, names)
+    assert calls["n"] == 1
+    original = {
+        name: {row["qid"]: row for row in read_jsonl(tmp_path / "samples" / f"{name}.jsonl")}
+        for name in names
+    }
+    assert {len(table) for table in original.values()} == {1500}
+    assert all(len(row["pool"]) == 2 for row in original["nq"].values())
+
+    second = data_mod.build_sample(cfg, tmp_path, 1200, 0, names)
+    assert calls["n"] == 1
+    assert second["n_per_dataset"] == 1200
+    assert second["sampling"]["prefix_of_n"] == {"squad": 1500, "hotpot": 1500, "nq": 1500}
+    assert second["datasets"]["nq"]["rows_kept_from_previous_sample"] is True
+    mid = {
+        name: {row["qid"]: row for row in read_jsonl(tmp_path / "samples" / f"{name}.jsonl")}
+        for name in names
+    }
+    for name in names:
+        assert len(mid[name]) == 1200
+        assert set(mid[name]) < set(original[name])
+        for qid, row in mid[name].items():
+            assert row == original[name][qid]
+
+    third = data_mod.build_sample(cfg, tmp_path, 1100, 0, names)
+    assert calls["n"] == 1
+    assert third["n_per_dataset"] == 1100
+    assert third["sampling"]["prefix_of_n"] == {"squad": 1200, "hotpot": 1200, "nq": 1200}
+    assert third["datasets"]["nq"]["rows_kept_from_previous_sample"] is True
+    final = {
+        name: {row["qid"]: row for row in read_jsonl(tmp_path / "samples" / f"{name}.jsonl")}
+        for name in names
+    }
+    for name in names:
+        assert len(final[name]) == 1100
+        assert set(final[name]) < set(mid[name])
+        for qid, row in final[name].items():
+            assert row == original[name][qid]
+            assert row["pool"] == original[name][qid]["pool"]
+    nq_order = [row["qid"] for row in seeded_order(nq, 0, "nq")]
+    assert sorted(final["nq"]) == sorted(nq_order[:1100])
+    with pytest.raises(ProtocolError, match="question ids changed"):
+        data_mod.build_sample(cfg, tmp_path, 1200, 0, names)
+    still = [row["qid"] for row in read_jsonl(tmp_path / "samples" / "nq.jsonl")]
+    assert still == sorted(final["nq"])
+
+
+def test_generation_and_judge_record_usd_at_the_config_price(tmp_path: Path):
+    """New paid rows bill the token counts at the price in the config."""
+    from experiments.common import cost_usd, read_jsonl
+    from experiments.ledger import Budget
+
+    cfg = load_config()
+    passages = [{"title": "", "text": "Paris is the capital."}]
+    retrieval = [{
+        "qid": "q1", "dataset": "squad", "arm": "semantic_search", "question_type": "answerable",
+        "question": "Where?", "passages": passages,
+    }]
+
+    class GenClient:
+        def converse(self, **kwargs):
+            return {
+                "stopReason": "end_turn",
+                "output": {"message": {"content": [{"text": '{"answer": "Paris", "confidence": 0.4}'}]}},
+                "usage": {"inputTokens": 1000, "outputTokens": 50},
+            }
+
+    gen_budget = Budget(tmp_path / "gen", "generate", max_usd=10, total_usd_cap=30)
+    summary = generate_rows(
+        cfg, retrieval, tmp_path / "gen" / "g.jsonl", gen_budget,
+        model_id=cfg["generator_model_id"], client=GenClient(), sleep=lambda _s: None,
+    )
+    assert summary["written"] == 1
+    expected_gen = cost_usd(cfg, cfg["generator_model_id"], 1000, 50)
+    written = json.loads((tmp_path / "gen" / "g.jsonl").read_text().splitlines()[0])
+    assert written["usd"] == pytest.approx(expected_gen)
+    assert written["input_tokens"] == 1000 and written["output_tokens"] == 50
+    gen_ledger = read_jsonl(tmp_path / "gen" / "cost_ledger.jsonl")
+    assert gen_ledger[0]["usd"] == pytest.approx(expected_gen)
+    assert gen_budget.global_spent == pytest.approx(expected_gen)
+
+    _mini_squad(tmp_path / "judge")
+    signals = _script("signals")
+
+    class JudgeClient:
+        def converse(self, **kwargs):
+            return {
+                "stopReason": "end_turn",
+                "output": {"message": {"content": [{"text": '{"score": 0.5}'}]}},
+                "usage": {"inputTokens": 80, "outputTokens": 12},
+            }
+
+    signals.make_client = lambda region: JudgeClient()
+    import yaml
+    priced = load_config()
+    priced["judge_sample_rate"] = 1
+    config_path = tmp_path / "judge-config.yaml"
+    config_path.write_text(yaml.safe_dump(priced))
+    code = signals.main([
+        "judge", "--results", str(tmp_path / "judge"), "--datasets", "squad", "--seed", "0",
+        "--config", str(config_path), "--max-usd", "3", "--total-usd-cap", "30",
+    ])
+    assert code == 0
+    expected_judge = cost_usd(priced, priced["judge_model_id"], 80, 12)
+    judge_ledger = read_jsonl(tmp_path / "judge" / "cost_ledger.jsonl")
+    assert len(judge_ledger) == 4
+    assert all(row["stage"] == "judge" for row in judge_ledger)
+    assert all(row["usd"] == pytest.approx(expected_judge) for row in judge_ledger)
+    assert all(row["input_tokens"] == 80 and row["output_tokens"] == 12 for row in judge_ledger)
+
+
+def test_reprice_ledger_rewrites_usd_and_the_cap_reads_it(tmp_path: Path, capsys):
+    from experiments.common import cost_usd
+    from experiments.ledger import spent_usd
+
+    cfg = load_config()
+    haiku = cfg["generator_model_id"]
+    llama = cfg["judge_model_id"]
+    rows = [
+        {
+            "stage": "generate", "qid": "q1", "model_id": haiku,
+            "input_tokens": 1_000_000, "output_tokens": 1_000_000, "usd": 6.0,
+        },
+        {
+            "stage": "judge", "qid": "q2", "model_id": llama,
+            "input_tokens": 1_000_000, "output_tokens": 0, "usd": 0.72,
+        },
+        {
+            "stage": "generate", "qid": "q3", "model_id": haiku,
+            "input_tokens": 0, "output_tokens": 0, "usd": 0.5,
+        },
+    ]
+    path = tmp_path / "cost_ledger.jsonl.gz"
+    _write_gzip_jsonl(path, rows)
+    mod = _script("reprice_ledger")
+    mod.now_iso = lambda: "2026-10-07T12:00:00+00:00"
+    assert mod.DEFAULT_LEDGER.name == "cost_ledger.jsonl.gz"
+    assert mod.main(["--ledger", str(path)]) == 0
+    printed = capsys.readouterr().out
+    assert "old total USD: 7.220000" in printed
+    assert "new total USD: 7.320000" in printed
+    assert f"wrote {path}" in printed
+    assert not list(tmp_path.glob(".*.tmp"))
+    from experiments.common import read_jsonl
+    rewritten = read_jsonl(path)
+    haiku_price = {"input": pytest.approx(1.10), "output": pytest.approx(5.50)}
+    assert rewritten[0]["usd_at_logged_price"] == 6.0
+    assert rewritten[0]["usd"] == pytest.approx(cost_usd(cfg, haiku, 1_000_000, 1_000_000))
+    assert rewritten[0]["usd"] == pytest.approx(6.60)
+    assert rewritten[0]["price_usd_per_million"]["input"] == haiku_price["input"]
+    assert rewritten[0]["price_usd_per_million"]["output"] == haiku_price["output"]
+    assert rewritten[0]["repriced_at"] == "2026-10-07T12:00:00+00:00"
+    assert rewritten[0]["stage"] == "generate"
+    assert rewritten[1]["usd"] == pytest.approx(0.72)
+    assert rewritten[1]["usd_at_logged_price"] == 0.72
+    assert rewritten[1]["price_usd_per_million"]["input"] == pytest.approx(0.72)
+    assert rewritten[2]["usd"] == 0.0
+    assert rewritten[2]["usd_at_logged_price"] == 0.5
+    assert spent_usd(tmp_path) == pytest.approx(7.32)
+
+    mod.now_iso = lambda: "2026-10-08T00:00:00+00:00"
+    assert mod.main(["--ledger", str(path)]) == 0
+    again = read_jsonl(path)
+    assert again[0]["usd_at_logged_price"] == 6.0
+    assert again[0]["usd"] == pytest.approx(6.60)
+    assert again[0]["repriced_at"] == "2026-10-08T00:00:00+00:00"
+    assert again[2]["usd_at_logged_price"] == 0.5
+
+    plain = tmp_path / "plain.jsonl"
+    _write_jsonl(plain, [rows[1]])
+    assert mod.main(["--ledger", str(plain)]) == 0
+    assert json.loads(plain.read_text().splitlines()[0])["usd"] == pytest.approx(0.72)
+
+    broken = tmp_path / "broken.jsonl.gz"
+    before = _write_gzip_jsonl(broken, [
+        rows[0],
+        {"stage": "generate", "qid": "q9", "model_id": haiku, "input_tokens": 10, "usd": 1.0},
+    ])
+    code = mod.main(["--ledger", str(broken)])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "output_tokens" in err
+    assert broken.read_bytes() == before
+    assert not list(tmp_path.glob(".*.tmp"))
+    assert mod.main(["--ledger", str(tmp_path / "missing.jsonl.gz")]) == 2
+
+
+def _write_gzip_jsonl(path: Path, rows: list[dict]) -> bytes:
+    import gzip
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = "".join(json.dumps(row) + "\n" for row in rows).encode()
+    with gzip.open(path, "wb") as fh:
+        fh.write(payload)
+    return path.read_bytes()
 
 
 def test_stages_ignore_retrieval_rows_outside_the_sample(tmp_path):

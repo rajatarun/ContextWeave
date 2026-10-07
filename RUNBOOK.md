@@ -7,26 +7,27 @@ pip install -r experiments/requirements.txt
 ```
 
 Every command is run from the repository root. `--seed` defaults to 0 and
-`--n-per-dataset` defaults to 1200. A missing dataset file, price, or
+`--n-per-dataset` defaults to 1100. A missing dataset file, price, or
 credential stops the script with an error. Do not fill a missing stage with
 stand-in model output.
 
 ## 1. Sample
 
 ```bash
-python3 scripts/experiments/sample_datasets.py --seed 0 --n-per-dataset 1200
+python3 scripts/experiments/sample_datasets.py --seed 0 --n-per-dataset 1100
 ```
 
 Writes `results/samples/{squad,hotpot,nq}.jsonl` and
 `results/samples/sample_manifest.json`. The draw sorts question ids, shuffles
 those positions with `random.Random(seed)`, and keeps the first
-`--n-per-dataset`. The files are written sorted by qid. 1200 with seed 0 is
-the first 1200 of the 1500 draw with seed 0. Re-running at that smaller n,
-with the same seed, over a sample already on disk keeps the previously
-written rows for the prefix, including NQ pools, so retrieval for those
-questions stays valid. The seed is stored on the manifest (`seed`, and again
-under `sampling`). Generation, signals, calibration, replay, and analyses
-read only question ids in `results/samples/`.
+`--n-per-dataset`. The files are written sorted by qid. 1100 with seed 0 is
+the first 1100 of the 1200 draw, and that 1200 is the first 1200 of the 1500
+draw, all with seed 0. Re-running at that smaller n, with the same seed, over
+a sample already on disk keeps the previously written rows for the prefix,
+including NQ pools, so retrieval for those questions stays valid. The seed is
+stored on the manifest (`seed`, and again under `sampling`). Generation,
+signals, calibration, replay, and analyses read only question ids in
+`results/samples/`.
 
 ## 2. Retrieval
 
@@ -71,13 +72,28 @@ parse stays in `deployed_self_status` and is what the fallback row uses.
 Rows already written are skipped.
 
 Generation and the judge share `results/cost_ledger.jsonl` (gzipped when the
-file is new). `--total-usd-cap` defaults to 30. The full run passes
-`--total-usd-cap 29.80` because a 10-question smoke on this budget already
-spent $0.19. `--max-usd 27` reserves the generation stage. The ledger is what
-the judge reads, so a judge call is refused when generation spend plus that
-call would cross $29.80. If generation stops under $27, the unused part of
-the $29.80 can be given to the judge by raising its `--max-usd` up to
-`29.80` minus the ledger total.
+file is new). Each new row's `usd` is the call's input and output token
+counts at the current price in `experiments/config.yaml`. `--total-usd-cap`
+defaults to 30. The full run passes `--total-usd-cap 29.80` because a
+10-question smoke on this budget already spent $0.19. `--max-usd 27` reserves
+the generation stage. The ledger is what the judge reads, so a judge call is
+refused when generation spend plus that call would cross $29.80. If
+generation stops under $27, the unused part of the $29.80 can be given to the
+judge by raising its `--max-usd` up to `29.80` minus the ledger total.
+
+After a price change, recompute the ledger so the cap matches the bill:
+
+```bash
+python3 scripts/experiments/reprice_ledger.py
+python3 scripts/experiments/reprice_ledger.py --ledger results/cost_ledger.jsonl.gz
+```
+
+The default file is `results/cost_ledger.jsonl.gz`. Each row's `usd` is
+rewritten from its stored token counts. The previous `usd` is kept as
+`usd_at_logged_price`, and the row records the config price and a timestamp.
+The script writes a temporary file in the same directory and renames it over
+the ledger. A row without input and output token counts stops the script and
+leaves the file unchanged.
 
 If a stage hits either cap it stops before the next call, keeps the rows it
 already wrote, and lists the rest in `results/generation/pending.json` or

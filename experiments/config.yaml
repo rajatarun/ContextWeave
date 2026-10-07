@@ -1,21 +1,26 @@
 # Experiment configuration. Scripts refuse to run when a required key or a
-# model price is absent. Prices are on-demand list prices, USD per 1,000,000
-# tokens, read on 2026-10-06.
+# model price is absent. Prices are USD per 1,000,000 tokens.
 #
-# Claude Haiku 4.5 input 1.00 / output 5.00: AWS public pricing page,
-# metered unit map bedrockfoundationmodels (publication 2026-09-30T00:19:12Z),
-# region US East (N. Virginia). Rate codes
+# Claude Haiku 4.5 list price is input 1.00 / output 5.00: AWS public pricing
+# page, metered unit map bedrockfoundationmodels (publication
+# 2026-09-30T00:19:12Z), region US East (N. Virginia). Rate codes
 # DY4B4Q3TRTAY8V6G.4799GE89SK.6YS6EN2CT7 (input) and
-# XADKFYXVGBFBJSU7.4799GE89SK.6YS6EN2CT7 (output).
+# XADKFYXVGBFBJSU7.4799GE89SK.6YS6EN2CT7 (output). The configured price is
+# that list price plus the 10% premium for the US cross-region inference
+# profile, input 1.10 / output 5.50. Source: AWS Cost Explorer for 2026-10-06,
+# usage types USE1-MP:USE1_InputTokenCount-Units (9.39M tokens, $10.3296,
+# about $1.10/M) and USE1-MP:USE1_OutputTokenCount-Units (0.30M, $1.6376).
 #
 # Llama 3.3 70B Instruct input 0.72 / output 0.72: AWS Price List offer
 # AmazonBedrock, us-east-1, version 20261005210410, publication
-# 2026-10-05T21:04:10Z. On-demand price $0.00072 per 1K tokens.
+# 2026-10-05T21:04:10Z. On-demand price $0.00072 per 1K tokens. That rate
+# matched the bill.
 
 seed: 0
 # First n of the seeded shuffle: sort by qid, then random.Random(seed).
-# 1200 is the prefix of a 1500 draw with the same seed.
-n_per_dataset: 1200
+# 1100 is the prefix of the 1200 draw, which is the prefix of a 1500 draw,
+# all with the same seed.
+n_per_dataset: 1100
 top_k: 5
 bootstrap_samples: 1000
 replay_seeds: [0, 1, 2, 3, 4]
@@ -98,13 +103,16 @@ datasets:
 
 prices_usd_per_million_tokens:
   us.anthropic.claude-haiku-4-5-20251001-v1:0:
-    input: 1.0
-    output: 5.0
+    input: 1.10
+    output: 5.50
     source: >
-      AWS pricing page metered unit map bedrockfoundationmodels,
+      AWS Cost Explorer 2026-10-06 for the US cross-region inference profile:
+      list price input 1.00 / output 5.00 plus a 10% premium.
+      USE1-MP:USE1_InputTokenCount-Units, 9.39M tokens, $10.3296.
+      USE1-MP:USE1_OutputTokenCount-Units, 0.30M tokens, $1.6376.
+      List price: AWS pricing page metered unit map bedrockfoundationmodels,
       US East (N. Virginia), publication 2026-09-30T00:19:12Z.
-      On-demand, per 1M tokens. Input rate code
-      DY4B4Q3TRTAY8V6G.4799GE89SK.6YS6EN2CT7, output rate code
+      Input rate code DY4B4Q3TRTAY8V6G.4799GE89SK.6YS6EN2CT7, output rate code
       XADKFYXVGBFBJSU7.4799GE89SK.6YS6EN2CT7.
   us.meta.llama3-3-70b-instruct-v1:0:
     input: 0.72

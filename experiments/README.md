@@ -52,9 +52,10 @@ at large.
 
 The sample is a seeded shuffle. Questions are sorted by qid, then
 `random.Random(seed)` shuffles those positions, and the sample is the first
-`--n-per-dataset` of that order (config default 1200). The files are written
+`--n-per-dataset` of that order (config default 1100). The files are written
 sorted by qid, so file order is not shuffle order. A smaller n with the same
-seed is that prefix: 1200 is the first 1200 of the 1500 draw. Re-running
+seed is that prefix: 1100 is the first 1100 of the 1200 draw, and 1200 is
+the first 1200 of the 1500 draw. Re-running
 `sample_datasets.py` at that smaller n, over a sample already on disk, keeps
 the previously written rows for the prefix, including NQ hard-negative pools,
 so retrieval already stored for those questions still matches.
@@ -233,15 +234,21 @@ Slopes are `c0 = E[R | Y=0, R observed]`, `c1 = E[R | Y=1, R observed]`,
 
 ## Cost
 
-Prices are on-demand USD per million tokens in `config.yaml`, with the price
-list version they were read from. A model id that is not in the table stops
-the run. `--dry-run` estimates input tokens as `ceil(utf-8 bytes / 4)` of the
-system prompt plus the user message, and charges `generator_max_output_tokens`
-on every call as an upper bound. It does not call the model. A real run
-requires `--max-usd` and stops before a call whose estimate would cross the
-cap. Throttling is retried with backoff. `ValidationException` is stored on
-that row. `AccessDenied` stops the process. Five identical validation messages
-in a row also stop the process.
+Prices are USD per million tokens in `config.yaml`, with the source they were
+read from. A model id that is not in the table stops the run. Generation and
+the judge write each new ledger row's `usd` from that price and the call's
+token counts. `scripts/experiments/reprice_ledger.py` rewrites an existing
+ledger the same way (default `results/cost_ledger.jsonl.gz`, or `--ledger`).
+It keeps the previous `usd` as `usd_at_logged_price`, records the config
+price and a timestamp, and replaces the file by rename. A row without token
+counts is an error. The spend cap sums `usd`, so it tracks the repriced bill.
+`--dry-run` estimates input tokens as `ceil(utf-8 bytes / 4)` of the system
+prompt plus the user message, and charges `generator_max_output_tokens` on
+every call as an upper bound. It does not call the model. A real run requires
+`--max-usd` and stops before a call whose estimate would cross the cap.
+Throttling is retried with backoff. `ValidationException` is stored on that
+row. `AccessDenied` stops the process. Five identical validation messages in
+a row also stop the process.
 
 ## Randomness and metadata
 
