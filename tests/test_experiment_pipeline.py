@@ -376,6 +376,11 @@ def test_dry_run_does_not_call_a_model_and_price_table_is_closed():
     assert estimate["n_calls"] == 1
     assert estimate["input_tokens_estimate"] > 0
     assert estimate["usd_upper_bound"] > 0
+    assert estimate["expected_output_tokens_per_call"] == pytest.approx(70)
+    assert estimate["output_tokens_estimate"] == pytest.approx(70)
+    assert estimate["generator_max_output_tokens"] == 256
+    assert "expected_output_tokens" in estimate["output_policy"]
+    assert "256" in estimate["output_policy"]
     haiku = price_for(cfg, cfg["generator_model_id"])
     assert haiku["input"] == pytest.approx(1.10)
     assert haiku["output"] == pytest.approx(5.50)
@@ -763,7 +768,7 @@ def test_spend_cap_stops_cleanly_and_lists_the_rest_pending(tmp_path: Path):
     ]
     user = build_user_message(rows[0]["question"], passages)
     in_tok = prompt_token_estimate(system_prompt(), user)
-    out_tok = int(cfg["generator_max_output_tokens"])
+    out_tok = int(cfg["expected_output_tokens"][cfg["generator_model_id"]])
     one_call = cost_usd(cfg, cfg["generator_model_id"], in_tok, out_tok)
 
     class Client:
@@ -785,6 +790,7 @@ def test_spend_cap_stops_cleanly_and_lists_the_rest_pending(tmp_path: Path):
     code = gen.main([
         "--results", str(tmp_path), "--datasets", "squad", "--seed", "0",
         "--max-usd", f"{one_call * 1.5:.10f}", "--total-usd-cap", "30",
+        "--inference-mode", "on_demand",
     ])
     assert code == 0
     written = read_jsonl(tmp_path / "generation" / "squad.jsonl")
@@ -858,6 +864,7 @@ def test_judge_access_denied_stays_pending_downstream(tmp_path: Path, capsys):
     code = signals.main([
         "judge", "--results", str(tmp_path), "--datasets", "squad", "--seed", "0",
         "--config", str(config_path), "--max-usd", "3", "--total-usd-cap", "30",
+        "--inference-mode", "on_demand",
     ])
     assert code == 2
     assert JUDGE_ACCESS_REASON in capsys.readouterr().err
@@ -1223,6 +1230,7 @@ def test_generation_and_judge_record_usd_at_the_config_price(tmp_path: Path):
     code = signals.main([
         "judge", "--results", str(tmp_path / "judge"), "--datasets", "squad", "--seed", "0",
         "--config", str(config_path), "--max-usd", "3", "--total-usd-cap", "30",
+        "--inference-mode", "on_demand",
     ])
     assert code == 0
     expected_judge = cost_usd(priced, priced["judge_model_id"], 80, 12)

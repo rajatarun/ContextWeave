@@ -20,6 +20,10 @@ artifacts; a missing artifact is an empty cell marked pending.
 | Calibration | `scripts/experiments/calibrate.py` | no |
 | Replay | `scripts/experiments/replay.py` | no |
 | Analyses | `scripts/experiments/analyses.py` | no |
+| Subset | `scripts/experiments/subset.py` | Haiku and Nova only |
+| Study | `scripts/experiments/study.py` | no |
+| Projection | `scripts/experiments/project_cost.py` | no |
+| Runner | `scripts/experiments/run_all.py` | the model stages |
 | Tables | `scripts/experiments/write_results.py` | no |
 
 Commands, in order, are in `RUNBOOK.md`.
@@ -283,6 +287,7 @@ question is judged. Other questions are written with reason `not_sampled`.
 and does not use the run seed. The deployed router rate stays
 `judge_sample_rate` 0.05.
 
+The judge follows `inference_mode`, which defaults to batch.
 `--inference-mode on_demand` calls Converse per sampled row.
 `--inference-mode batch` writes InvokeModel JSONL and calls
 `create_model_invocation_job`, reusing `experiments/bedrock_batch.py`. The
@@ -387,19 +392,32 @@ counts, and the row records `pricing` (`on_demand` or `batch`) and
 way (default `results/cost_ledger.jsonl.gz`, or `--ledger`). It keeps the
 previous `usd` as `usd_at_logged_price`, records the config price and a
 timestamp, and replaces the file by rename. A row without token counts is an
-error. The spend cap sums `usd`, so it tracks the repriced bill.
-`--dry-run` estimates input tokens as `ceil(utf-8 bytes / 4)` of the system
-prompt plus the user message, and charges `generator_max_output_tokens` on
-every call as an upper bound. It does not call the model. `usd_upper_bound`
-follows `inference_mode`. The artifact also stores
-`on_demand_usd_upper_bound` and `batch_usd_upper_bound`. A real run requires
-`--max-usd` and stops before a call, or before a batch job, whose estimate
-would cross the cap.
+error. The spend cap sums `usd` and adds `already_spent_usd`. That config value is
+spend already on the AWS bill from prior ledgers that are not in this results
+directory. It is 12.02. `total_usd_cap` stays 30, so an empty ledger has 17.98
+of headroom before the safety margin. A job is refused when ledger usd plus
+`already_spent_usd` plus the projected job cost times `spend_safety_factor`
+(1.10) exceeds 30. The stage `--max-usd` check does not apply that factor.
+The projected output length is `expected_output_tokens` for the model until
+this results ledger has a numeric output mean for it. Those figures are Haiku
+70, Llama judge 20, Nova Pro 70, and the gpt-oss adjudicator 64. Haiku 70
+leaves room for the claim field over smoke means 49.3, 51.4, and 47.6 and a
+v1 mean of 38.0. Llama 20 sits over a measured 16.0. Nova has no ledger mean.
+64 is a planning allowance for one adjudicator JSON object, below the 128
+request cap. The request `maxTokens` caps stay 256, 300, and 128 and are not
+priced. `--dry-run` estimates input tokens as `ceil(utf-8 bytes / 4)` of the
+system prompt plus the user message, and charges that expected output length.
+It does not call the model. `usd_upper_bound` follows `inference_mode` and is
+that expected cost. The artifact also stores `on_demand_usd_upper_bound` and
+`batch_usd_upper_bound`. A real run requires `--max-usd` and stops before a
+call, or before a batch job, whose estimate would cross the cap.
 
-`--inference-mode on_demand` (the config default) calls Bedrock Converse once
-per row. `--inference-mode batch` writes Bedrock batch JSONL (`recordId` and
-`modelInput` in that model's InvokeModel body), uploads it, and calls
-`create_model_invocation_job`. The role ARN and bucket come from
+`inference_mode` defaults to `batch` for the bulk stages (generation, the
+judge, and the subset Haiku and Nova draws). `--inference-mode batch` writes
+Bedrock batch JSONL (`recordId` and `modelInput` in that model's InvokeModel
+body), uploads it, and calls `create_model_invocation_job`.
+`--inference-mode on_demand` calls Bedrock Converse once per row. Adjudication
+stays on demand. The role ARN and bucket come from
 `batch.role_arn` / `batch.bucket` or from the environment variables named in
 the config. A missing one stops the run. The projected batch cost is checked
 against the cap before the job is created. A job with fewer than
@@ -412,6 +430,61 @@ counts stops the run. An error line with no usage stores zero tokens and
 Throttling is retried with backoff. `ValidationException` is stored on that
 row. `AccessDenied` stops the process. Five identical validation messages in
 a row also stop the process.
+
+## Subset, second generator, and the study
+
+`subset.py select` draws `v2.subset_questions` (250) question ids in total.
+The total is stratified across the datasets in the order passed to
+`--datasets` (the default is squad, hotpot, nq) by largest remainder, so 250
+is 84, 83, 83. Each dataset shuffles its own ids on the stream
+`subset:{dataset}` and keeps its quota. A smaller total with the same seed
+and the same dataset order is a prefix inside each dataset. A dataset with
+fewer questions than its quota stops the run.
+
+`subset.py haiku` draws `v2.subset_samples` (4) answers at
+`v2.subset_temperature` (1) with the generator model. Each sample has its own
+file under `results/subset/haiku/sample_{i}/`. The run seed and the sample
+index are stored on `meta.json`. The request itself has no seed parameter.
+`subset.py agreement` writes `results/subset/agreement.json`. The modal
+fraction uses SQuAD normalisation. A question that is missing any sample
+leaves the means null.
+
+`subset.py nova` calls `subset_generator_model_id`
+(`us.amazon.nova-pro-v1:0`) once per subset question and arm, at temperature
+0. `--inference-mode batch` and `--inference-mode on_demand` both go through
+the generation stage. A batch smaller than `batch.min_records` is not
+submitted and is not padded.
+
+`study.py` reads the joined log and writes `results/study/study.json`. It
+records `s^2 / Var(R)`, `s^2 / (m(1-m))`, and information per round
+(`s^2` over the residual variance). `m` is the mean of joined correct on rows
+where the reward was observed. Beta and Gaussian Thompson sampling run for
+`v2.replay_seeds` seeds and `v2.replay_rounds` rounds, with drift discounts
+`v2.drift_discounts`. Judge coverage uses `v2.judge_coverage` and recomputes
+the verified reward. The assumption check is the same cluster-bootstrap
+comparison the analyses stage writes. A missing subset, agreement, judge, or
+Nova file becomes a null block with a reason. The short replay in
+`replay.py` keeps the top-level `replay_seeds` list.
+
+`project_cost.py` prints call counts and on-demand and batch USD from the
+config prices before any model call. When `results/samples` and
+`results/retrieval` both exist for every dataset, input tokens are the real
+generator, judge, and adjudicator prompts built from those questions and
+passages. The command does not call a model. `--from-results` points at
+another directory and stops if a file is missing. Without that flag, a
+directory that has neither file keeps the prompt-template estimate and says
+so. Output tokens are the mean `output_tokens` for that model in `--ledger`
+when the ledger is on disk. A missing ledger, or a model with no numeric
+rows, uses `expected_output_tokens` and the print says which. Adjudication
+calls are `v2.adjudication_band_fraction` (0.15) of the judged rows. That
+count is an assumption, not a measured token-F1 band.
+`--write` stores `results/cost_projection.json`.
+
+`run_all.py` prints that projection, then runs the stages in order.
+`--project-only` stops after the print. A real run requires `--max-usd`.
+
+`write_results.py` copies these artifacts into `results/FINDINGS.md`. A
+missing file or a null estimate is the cell text `pending`.
 
 ## Randomness and metadata
 
