@@ -16,7 +16,7 @@ from experiments.generate_stage import (
     dry_run, generate_rows, generate_rows_batch, load_retrieval, make_batch_clients,
     make_client, system_prompt, write_dry_run_artifact,
 )
-from experiments.ledger import SPEND_CAP_REASON, Budget
+from experiments.ledger import SPEND_CAP_REASON, budget_for
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -66,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.max_usd is None:
             raise ProtocolError("--max-usd is required for a real generation run. Use --dry-run to estimate first.")
         total_cap = float(cfg["total_usd_cap"]) if args.total_usd_cap is None else args.total_usd_cap
-        budget = Budget(args.results, "generate", args.max_usd, total_cap)
+        budget = budget_for(args.results, "generate", args.max_usd, cfg, args.total_usd_cap)
         client = None
         s3 = bedrock = None
         if inference_mode == "batch":
@@ -91,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
             total_written += summary["written"]
             print(
                 f"{name}: wrote {summary['written']} skipped {summary['skipped']} "
-                f"ledger ${summary['spent_usd']:.6f}"
+                f"cap total ${summary['spent_usd']:.6f}"
             )
             if summary["stopped"]:
                 stop_reason = summary["stop_reason"]

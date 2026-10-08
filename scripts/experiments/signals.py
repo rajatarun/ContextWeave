@@ -26,7 +26,7 @@ from experiments.common import (
 )
 from experiments.generate_stage import make_batch_clients, make_client
 from experiments.judge_access import clear_marker, write_marker
-from experiments.ledger import SPEND_CAP_REASON, Budget
+from experiments.ledger import SPEND_CAP_REASON, Budget, budget_for
 from experiments.metrics import score_answer
 from experiments.records import load_joined
 from experiments.signal_score import (
@@ -343,7 +343,7 @@ def _judge(args: argparse.Namespace, cfg: dict[str, Any], seed: int, names: list
     if args.max_usd is None:
         raise ProtocolError("--max-usd is required for judge calls")
     total_cap = float(cfg["total_usd_cap"]) if args.total_usd_cap is None else args.total_usd_cap
-    budget = Budget(args.results, "judge", args.max_usd, total_cap)
+    budget = budget_for(args.results, "judge", args.max_usd, cfg, args.total_usd_cap)
     if inference_mode == "batch":
         s3, bedrock = make_batch_clients(cfg["region"])
         summary = judge_rows_batch(
@@ -452,7 +452,7 @@ def _judge_on_demand(
         if budget.global_spent > budget.total_usd_cap + 1e-12 or budget.stage_spent > budget.max_usd + 1e-12:
             stop_reason = (
                 f"{SPEND_CAP_REASON}: a call under the pre-call estimate crossed the cap "
-                f"(ledger ${budget.global_spent:.6f}, total cap ${budget.total_usd_cap:.6f})"
+                f"({budget.cap_label()})"
             )
             for item in rows[index + 1:]:
                 if (item["qid"], item["arm"]) not in done:

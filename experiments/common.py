@@ -59,7 +59,7 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
         "replay_seeds", "high_coverage", "low_auroc_max",
         "nq_window_chars", "nq_overlap_chars", "nq_pool_size",
         "nli_max_tokens", "nli_special_tokens",
-        "normalized_self_gap_fraction", "total_usd_cap",
+        "normalized_self_gap_fraction", "total_usd_cap", "already_spent_usd",
         "batch_prices_usd_per_million_tokens", "inference_mode", "batch",
         "spacy_model", "graph_damping", "graph_max_iter", "graph_tol",
         "schema_version", "v2",
@@ -83,12 +83,18 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
             raise ProtocolError(f"config batch is missing {key}")
     if int(batch["min_records"]) < 1:
         raise ProtocolError("batch.min_records must be at least 1")
+    billed = data["already_spent_usd"]
+    if isinstance(billed, bool) or not isinstance(billed, (int, float)) or billed < 0:
+        raise ProtocolError(
+            f"already_spent_usd is {billed!r}. It is the billed spend from the AWS bill "
+            "and must be a number >= 0."
+        )
     v2 = data["v2"]
     if not isinstance(v2, dict):
         raise ProtocolError("config v2 must be a mapping")
     for key in (
         "judge_sample_rate", "held_out_fraction", "subset_questions",
-        "subset_haiku_samples", "subset_temperature", "replay_seeds",
+        "subset_samples", "subset_temperature", "replay_seeds",
         "replay_rounds", "judge_coverage", "drift_discounts",
         "adjudication_f1_low", "adjudication_f1_high",
         "adjudication_band_fraction",

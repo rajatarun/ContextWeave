@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Seeded subset, five temperature-1 Haiku samples, Nova Pro, and agreement.
+"""Seeded subset, temperature-1 Haiku samples, Nova Pro, and agreement.
+
+The sample count is ``v2.subset_samples``.
 
 ``select`` writes the question ids. ``haiku`` and ``nova`` read that file and
 write generations. ``agreement`` reads the Haiku files. Each command stops
@@ -21,7 +23,7 @@ from experiments.generate_stage import (
     dry_run, generate_rows, generate_rows_batch, load_retrieval, make_batch_clients,
     make_client, system_prompt,
 )
-from experiments.ledger import SPEND_CAP_REASON, Budget
+from experiments.ledger import SPEND_CAP_REASON, budget_for
 from experiments.subset_stage import (
     choose_subset, expected_keys, require_haiku_settings, require_nova_settings,
     score_agreement,
@@ -140,7 +142,7 @@ def _run_generation(
     if args.max_usd is None:
         raise ProtocolError("--max-usd is required. Use --dry-run to estimate first.")
     total_cap = float(cfg["total_usd_cap"]) if args.total_usd_cap is None else args.total_usd_cap
-    budget = Budget(args.results, stage, args.max_usd, total_cap)
+    budget = budget_for(args.results, stage, args.max_usd, cfg, args.total_usd_cap)
     mode = run_cfg["inference_mode"]
     client = None
     s3 = bedrock = None
@@ -163,7 +165,7 @@ def _run_generation(
             )
         print(
             f"{stage} sample {index}: wrote {summary['written']} skipped {summary['skipped']} "
-            f"ledger ${summary['spent_usd']:.6f}"
+            f"cap total ${summary['spent_usd']:.6f}"
         )
         meta = artifact_meta(
             run_cfg, seed, stage=stage, model_id=model_id, sample_index=index,

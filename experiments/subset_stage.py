@@ -32,7 +32,6 @@ from experiments.common import ARMS, ProtocolError
 from experiments.signal_score import stream_seed
 
 SUBSET_STREAM = "subset"
-HAIKU_SAMPLES = 5
 HAIKU_TEMPERATURE = 1.0
 NOVA_MODEL_ID = "us.amazon.nova-pro-v1:0"
 NOVA_TEMPERATURE = 0.0
@@ -144,11 +143,11 @@ def agreement_scores(answers: Sequence[str]) -> dict[str, Any]:
 
 
 def require_haiku_settings(cfg: dict[str, Any]) -> tuple[int, float]:
-    n = cfg["v2"]["subset_haiku_samples"]
+    n = cfg["v2"]["subset_samples"]
     temperature = cfg["v2"]["subset_temperature"]
-    if n != HAIKU_SAMPLES:
+    if isinstance(n, bool) or not isinstance(n, int) or n < 2:
         raise ProtocolError(
-            f"v2.subset_haiku_samples is {n!r}. This study draws {HAIKU_SAMPLES} samples."
+            f"v2.subset_samples is {n!r}. Agreement needs at least two temperature-1 samples."
         )
     if temperature != HAIKU_TEMPERATURE:
         raise ProtocolError(

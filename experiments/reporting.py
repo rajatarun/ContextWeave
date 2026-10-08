@@ -492,6 +492,13 @@ def render(results: Path) -> tuple[str, str]:
         doc.p(str(analyses.get("normalized_self_definition") or ""))
 
     doc.h("Cost projection")
+    cfg = load_config()
+    doc.p(
+        f"The Bedrock ceiling is total_usd_cap {cfg['total_usd_cap']}. "
+        f"already_spent_usd {cfg['already_spent_usd']} is spend already on the AWS bill "
+        "from prior ledgers. The cap check adds it to this results ledger before applying the ceiling. "
+        f"Bulk stages default to `{cfg['inference_mode']}`."
+    )
     doc.p(
         "Projected spend is copied from `results/cost_projection.json` when that file is present. "
         "That artifact records whether input tokens were measured from the retrieved passages "
@@ -552,6 +559,11 @@ def render(results: Path) -> tuple[str, str]:
         doc.table("Seeded subset", ["dataset", "n", "stream"], sub_rows)
 
     doc.h("Haiku agreement")
+    cfg = load_config()
+    doc.p(
+        f"`v2.subset_samples` is {cfg['v2']['subset_samples']}. "
+        f"The subset study draws that many Haiku answers at temperature {cfg['v2']['subset_temperature']}."
+    )
     agreement = _load(results / "subset" / "agreement.json")
     if agreement is None:
         doc.p("Agreement artifact is missing.")
@@ -562,6 +574,11 @@ def render(results: Path) -> tuple[str, str]:
     else:
         if agreement.get("definition"):
             doc.p(str(agreement["definition"]))
+        doc.p(
+            "Samples recorded on the artifact: "
+            + doc.cell("agreement", "n_samples", agreement.get("n_samples"), "n_samples missing")
+            + "."
+        )
         agr_rows = []
         for name in DATASETS:
             block = (agreement.get("datasets") or {}).get(name)

@@ -287,6 +287,7 @@ question is judged. Other questions are written with reason `not_sampled`.
 and does not use the run seed. The deployed router rate stays
 `judge_sample_rate` 0.05.
 
+The judge follows `inference_mode`, which defaults to batch.
 `--inference-mode on_demand` calls Converse per sampled row.
 `--inference-mode batch` writes InvokeModel JSONL and calls
 `create_model_invocation_job`, reusing `experiments/bedrock_batch.py`. The
@@ -391,7 +392,10 @@ counts, and the row records `pricing` (`on_demand` or `batch`) and
 way (default `results/cost_ledger.jsonl.gz`, or `--ledger`). It keeps the
 previous `usd` as `usd_at_logged_price`, records the config price and a
 timestamp, and replaces the file by rename. A row without token counts is an
-error. The spend cap sums `usd`, so it tracks the repriced bill.
+error. The spend cap sums `usd` and adds `already_spent_usd`. That config value is
+spend already on the AWS bill from prior ledgers that are not in this results
+directory. It is 12.02. `total_usd_cap` stays 30, so an empty ledger has 17.98
+of headroom. The cap tracks the repriced bill plus that billed amount.
 `--dry-run` estimates input tokens as `ceil(utf-8 bytes / 4)` of the system
 prompt plus the user message, and charges `generator_max_output_tokens` on
 every call as an upper bound. It does not call the model. `usd_upper_bound`
@@ -400,10 +404,12 @@ follows `inference_mode`. The artifact also stores
 `--max-usd` and stops before a call, or before a batch job, whose estimate
 would cross the cap.
 
-`--inference-mode on_demand` (the config default) calls Bedrock Converse once
-per row. `--inference-mode batch` writes Bedrock batch JSONL (`recordId` and
-`modelInput` in that model's InvokeModel body), uploads it, and calls
-`create_model_invocation_job`. The role ARN and bucket come from
+`inference_mode` defaults to `batch` for the bulk stages (generation, the
+judge, and the subset Haiku and Nova draws). `--inference-mode batch` writes
+Bedrock batch JSONL (`recordId` and `modelInput` in that model's InvokeModel
+body), uploads it, and calls `create_model_invocation_job`.
+`--inference-mode on_demand` calls Bedrock Converse once per row. Adjudication
+stays on demand. The role ARN and bucket come from
 `batch.role_arn` / `batch.bucket` or from the environment variables named in
 the config. A missing one stops the run. The projected batch cost is checked
 against the cap before the job is created. A job with fewer than
@@ -427,7 +433,7 @@ is 84, 83, 83. Each dataset shuffles its own ids on the stream
 and the same dataset order is a prefix inside each dataset. A dataset with
 fewer questions than its quota stops the run.
 
-`subset.py haiku` draws `v2.subset_haiku_samples` (5) answers at
+`subset.py haiku` draws `v2.subset_samples` (4) answers at
 `v2.subset_temperature` (1) with the generator model. Each sample has its own
 file under `results/subset/haiku/sample_{i}/`. The run seed and the sample
 index are stored on `meta.json`. The request itself has no seed parameter.

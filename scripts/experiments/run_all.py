@@ -42,6 +42,13 @@ def main(argv: list[str] | None = None) -> int:
         seed = cfg["seed"] if args.seed is None else args.seed
         n = cfg["n_per_dataset"] if args.n is None else args.n
         rate = cfg["v2"]["judge_sample_rate"] if args.judge_rate is None else args.judge_rate
+        cap = float(cfg["total_usd_cap"]) if args.total_usd_cap is None else float(args.total_usd_cap)
+        already = float(cfg["already_spent_usd"])
+        print(
+            f"spend cap: total_usd_cap {cap:.2f}, already_spent_usd {already:.2f} "
+            f"(AWS bill, prior ledgers), remaining {cap - already:.2f} before this results ledger"
+        )
+        print(f"inference_mode: {args.inference_mode or cfg['inference_mode']}")
         if args.from_results is not None:
             prompt_results, require = args.from_results, True
         else:

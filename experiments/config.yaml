@@ -49,10 +49,13 @@ adjudicator_temperature: 0
 adjudicator_max_output_tokens: 128
 region: us-east-1
 schema_version: 2
-# on_demand is the per-row Converse path. batch writes JSONL and submits
-# CreateModelInvocationJob. The role and bucket are read from the environment
-# variables named below, or from batch.role_arn / batch.bucket when set.
-inference_mode: on_demand
+# batch is the default for the bulk stages: generation, the judge, and the
+# subset Haiku and Nova draws. It writes JSONL and submits
+# CreateModelInvocationJob. on_demand is the per-row Converse path, for a
+# remainder under batch.min_records. Adjudication stays on demand; that stage
+# does not submit a batch job. The role and bucket are read from the
+# environment variables named below, or from batch.role_arn / batch.bucket.
+inference_mode: batch
 temperature: 0
 # One JSON object is a few dozen tokens. 256 leaves room for the object when
 # the model also starts a sentence. A complete object followed by prose that
@@ -62,11 +65,16 @@ temperature: 0
 generator_max_output_tokens: 256
 judge_max_output_tokens: 300
 
-# Hard ceiling for generation and the judge together, USD. The shared
-# cost_ledger is what both stages read. A stage also has its own --max-usd.
-# The full run passes --total-usd-cap 29.80: a 10-question smoke already
-# spent $0.19 of this $30.
+# Hard ceiling for all Bedrock spend, USD. The shared cost_ledger is what
+# the stages read for spend in this results directory. A stage also has its
+# own --max-usd.
+# already_spent_usd is spend already on the AWS bill that is not in this
+# results ledger. Prior experiment ledgers were billed and are not replayed
+# here. 12.02 is that billed total, read from the AWS bill. The cap check is
+# ledger usd + already_spent_usd + the next estimate, compared with
+# total_usd_cap. At an empty ledger the remaining headroom is 17.98.
 total_usd_cap: 30
+already_spent_usd: 12.02
 
 # Token estimates use ceil(utf-8 bytes / 4). That is an approximation, not a
 # provider tokenizer. Dry-run output cost charges the max output length.
@@ -103,7 +111,8 @@ v2:
   judge_sample_rate: 0.60
   held_out_fraction: 0.20
   subset_questions: 250
-  subset_haiku_samples: 5
+  # Temperature-1 Haiku answers on the subset, one file per sample.
+  subset_samples: 4
   subset_temperature: 1
   replay_seeds: 500
   replay_rounds: 10000

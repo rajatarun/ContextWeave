@@ -26,7 +26,7 @@ from experiments.common import (
 )
 from experiments.generate_stage import make_client
 from experiments.labels import decide_correctness
-from experiments.ledger import SPEND_CAP_REASON, Budget
+from experiments.ledger import SPEND_CAP_REASON, budget_for
 from experiments.records import _pending_keys
 
 
@@ -168,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.max_usd is None:
             raise ProtocolError("--max-usd is required for adjudication. Use --dry-run to estimate first.")
         total_cap = float(cfg["total_usd_cap"]) if args.total_usd_cap is None else args.total_usd_cap
-        budget = Budget(args.results, "adjudicate", args.max_usd, total_cap)
+        budget = budget_for(args.results, "adjudicate", args.max_usd, cfg, args.total_usd_cap)
         client = make_client(cfg["region"])
         n = 0
         n_unparsed = 0

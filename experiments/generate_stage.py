@@ -370,7 +370,7 @@ def generate_rows(
             ]
             return _stop_summary(
                 f"{SPEND_CAP_REASON}: a call under the pre-call estimate crossed the cap "
-                f"(ledger ${budget.global_spent:.6f}, total cap ${budget.total_usd_cap:.6f})",
+                f"({budget.cap_label()})",
                 pending, n_written, n_skipped, budget,
             )
     return {

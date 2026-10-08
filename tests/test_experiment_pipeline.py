@@ -785,6 +785,7 @@ def test_spend_cap_stops_cleanly_and_lists_the_rest_pending(tmp_path: Path):
     code = gen.main([
         "--results", str(tmp_path), "--datasets", "squad", "--seed", "0",
         "--max-usd", f"{one_call * 1.5:.10f}", "--total-usd-cap", "30",
+        "--inference-mode", "on_demand",
     ])
     assert code == 0
     written = read_jsonl(tmp_path / "generation" / "squad.jsonl")
@@ -858,6 +859,7 @@ def test_judge_access_denied_stays_pending_downstream(tmp_path: Path, capsys):
     code = signals.main([
         "judge", "--results", str(tmp_path), "--datasets", "squad", "--seed", "0",
         "--config", str(config_path), "--max-usd", "3", "--total-usd-cap", "30",
+        "--inference-mode", "on_demand",
     ])
     assert code == 2
     assert JUDGE_ACCESS_REASON in capsys.readouterr().err
@@ -1223,6 +1225,7 @@ def test_generation_and_judge_record_usd_at_the_config_price(tmp_path: Path):
     code = signals.main([
         "judge", "--results", str(tmp_path / "judge"), "--datasets", "squad", "--seed", "0",
         "--config", str(config_path), "--max-usd", "3", "--total-usd-cap", "30",
+        "--inference-mode", "on_demand",
     ])
     assert code == 0
     expected_judge = cost_usd(priced, priced["judge_model_id"], 80, 12)

@@ -2,7 +2,9 @@
 
 The projection is printed by the caller before any of these commands. Model
 stages receive ``--max-usd`` on a real run and ``--dry-run`` on a dry run.
-A real run without ``--max-usd`` does not start them.
+A real run without ``--max-usd`` does not start them. Bulk stages (generate,
+judge, subset Haiku, subset Nova) receive ``inference_mode``. The config
+default is batch. Adjudication does not: that stage calls on demand.
 """
 from __future__ import annotations
 

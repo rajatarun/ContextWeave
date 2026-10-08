@@ -209,10 +209,36 @@ def test_agreement_modal_fraction_and_partial_set():
 
 def test_haiku_temperature_is_required():
     cfg = copy.deepcopy(load_config())
-    require_haiku_settings(cfg)
+    assert cfg["v2"]["subset_samples"] == 4
+    assert cfg["inference_mode"] == "batch"
+    assert cfg["total_usd_cap"] == 30
+    assert cfg["already_spent_usd"] == pytest.approx(12.02)
+    n, temperature = require_haiku_settings(cfg)
+    assert n == 4 and temperature == 1.0
+    cfg["v2"]["subset_samples"] = 1
+    with pytest.raises(ProtocolError, match="subset_samples"):
+        require_haiku_settings(cfg)
+    cfg["v2"]["subset_samples"] = 4
     cfg["v2"]["subset_temperature"] = 0
     with pytest.raises(ProtocolError, match="temperature"):
         require_haiku_settings(cfg)
+
+
+def test_cap_adds_billed_spend_before_the_thirty_dollar_ceiling(tmp_path):
+    from experiments.ledger import Budget
+    budget = Budget(tmp_path, "generate", max_usd=30, total_usd_cap=30, already_spent_usd=12.02)
+    assert budget.ledger_spent == 0
+    assert budget.global_spent == pytest.approx(12.02)
+    assert budget.blocking_reason(17.97) is None
+    blocked = budget.blocking_reason(18.00)
+    assert blocked is not None and "already billed" in blocked and "12.020000" in blocked
+    budget.record({
+        "qid": "q", "arm": "semantic_search", "dataset": "squad",
+        "usd": 18.0, "input_tokens": 1, "output_tokens": 1, "model_id": "m",
+    })
+    assert budget.ledger_spent == pytest.approx(18.0)
+    assert budget.global_spent == pytest.approx(30.02)
+    assert budget.blocking_reason(0.0) is not None
 
 
 def test_haiku_on_demand_samples_are_separate_files(tmp_path, monkeypatch):
@@ -225,10 +251,10 @@ def test_haiku_on_demand_samples_are_separate_files(tmp_path, monkeypatch):
         "--max-usd", "10", "--inference-mode", "on_demand",
     ])
     assert code == 0
-    assert len(client.calls) == 20
+    assert len(client.calls) == 16
     assert {call["inferenceConfig"]["temperature"] for call in client.calls} == {1.0}
     assert {call["modelId"] for call in client.calls} == {load_config()["generator_model_id"]}
-    for index in range(5):
+    for index in range(4):
         rows = read_jsonl(tmp_path / "subset" / "haiku" / f"sample_{index}" / "generations.jsonl")
         assert len(rows) == 4
         assert {row["temperature"] for row in rows} == {1.0}
@@ -367,7 +393,7 @@ def test_projection_for_1100_and_judge_60_percent():
     assert body["subset_quotas"] == {"squad": 84, "hotpot": 83, "nq": 83}
     assert by_name["generate"]["calls"] == 13200
     assert by_name["judge"]["calls"] == 7920
-    assert by_name["subset_haiku"]["calls"] == 5000
+    assert by_name["subset_haiku"]["calls"] == 4000
     assert by_name["subset_nova"]["calls"] == 1000
     assert by_name["adjudicate"]["calls"] == 1188
     assert by_name["adjudicate"]["on_demand_usd"] > by_name["adjudicate"]["batch_usd"] > 0
@@ -380,7 +406,7 @@ def test_projection_for_1100_and_judge_60_percent():
     text = format_projection(body)
     assert "calls=13200" in text
     assert "calls=7920" in text
-    assert "calls=5000" in text
+    assert "calls=4000" in text
     assert "calls=1000" in text
     assert "calls=1188" in text
     assert "assumption" in text.lower()
@@ -421,7 +447,7 @@ def test_projection_prices_retrieved_passages_and_labels_a_missing_ledger(tmp_pa
     assert by_measured["generate"]["input_token_source"] == "measured_prompts"
     assert by_measured["judge"]["input_tokens_total"] > by_template["judge"]["input_tokens_total"]
     assert by_measured["generate"]["input_tokens_total"] > by_template["generate"]["input_tokens_total"]
-    assert by_measured["subset_haiku"]["calls"] == 3 * 4 * 5
+    assert by_measured["subset_haiku"]["calls"] == 3 * 4 * cfg["v2"]["subset_samples"]
     assert by_measured["subset_nova"]["calls"] == 12
     assert measured["answer_stand_in"]["counts"]["first_gold_answer"] == 12
     assert measured["prompt_source"] == "retrieval"
@@ -473,7 +499,9 @@ def test_runner_prints_projection_and_refuses_to_spend(tmp_path, capsys):
     code = mod.main(["--project-only", "--n", "1100", "--judge-rate", "0.6", "--results", str(tmp_path)])
     assert code == 0
     out = capsys.readouterr().out
-    assert "calls=13200" in out and "calls=5000" in out and "assumption" in out.lower()
+    assert "calls=13200" in out and "calls=4000" in out and "assumption" in out.lower()
+    assert "already_spent_usd 12.02" in out
+    assert "inference_mode: batch" in out
     code = mod.main(["--results", str(tmp_path), "--n", "1100", "--judge-rate", "0.6"])
     assert code == 2
     captured = capsys.readouterr()
@@ -488,6 +516,9 @@ def test_runner_prints_projection_and_refuses_to_spend(tmp_path, capsys):
     replay = next(cmd for cmd in commands if cmd[1].endswith("replay.py"))
     assert "--max-usd" in haiku and "--inference-mode" in haiku and "batch" in haiku
     assert "--inference-mode" in nova
+    assert "batch" in nova
+    adjudicate = next(cmd for cmd in commands if cmd[1].endswith("adjudicate.py"))
+    assert "--inference-mode" not in adjudicate
     assert "--seeds" not in replay
     assert "239571291755" not in json.dumps(commands)
 

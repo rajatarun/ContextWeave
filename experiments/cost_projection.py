@@ -37,7 +37,7 @@ from experiments.data import seeded_order
 from experiments.generate_stage import build_user_message, prompt_token_estimate, system_prompt
 from experiments.signal_score import seeded_ids, stream_seed, take_count
 from experiments.signals_stage import build_judge_prompt
-from experiments.subset_stage import HAIKU_SAMPLES, NOVA_MODEL_ID, choose_subset, stratum_quotas
+from experiments.subset_stage import NOVA_MODEL_ID, choose_subset, stratum_quotas
 
 TEMPLATE_SCOPE = (
     "Input tokens are the prompt template. The generator template is the system "
@@ -525,10 +525,10 @@ def project(
     n_arms = len(ARMS)
     subset_n = int(cfg["v2"]["subset_questions"])
     quotas = stratum_quotas(DATASETS, subset_n)
-    haiku_samples = int(cfg["v2"]["subset_haiku_samples"])
-    if haiku_samples != HAIKU_SAMPLES:
+    haiku_samples = cfg["v2"]["subset_samples"]
+    if isinstance(haiku_samples, bool) or not isinstance(haiku_samples, int) or haiku_samples < 2:
         raise ProtocolError(
-            f"v2.subset_haiku_samples is {haiku_samples}. The projection uses {HAIKU_SAMPLES}."
+            f"v2.subset_samples is {haiku_samples!r}. Agreement needs at least two samples."
         )
     if cfg["subset_generator_model_id"] != NOVA_MODEL_ID:
         raise ProtocolError(
@@ -659,7 +659,7 @@ def project(
 
     if subset_reason:
         for name, model, base in (
-            ("subset_haiku", generator, "Five temperature-1 Haiku samples on the subset."),
+            ("subset_haiku", generator, f"{haiku_samples} temperature-1 Haiku samples on the subset."),
             ("subset_nova", nova, "One Nova Pro answer per subset question and arm."),
         ):
             stages.append(_stage(
