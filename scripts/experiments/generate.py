@@ -16,7 +16,7 @@ from experiments.generate_stage import (
     dry_run, generate_rows, generate_rows_batch, load_retrieval, make_batch_clients,
     make_client, system_prompt, write_dry_run_artifact,
 )
-from experiments.ledger import SPEND_CAP_REASON, Budget
+from experiments.ledger import SPEND_CAP_REASON, budget_for
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -53,20 +53,21 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{name}: left {left_out} retrieval rows outside the sample", flush=True)
             rows.extend(kept)
         if args.dry_run:
-            estimate = dry_run(cfg, rows, model_id)
+            estimate = dry_run(cfg, rows, model_id, results=args.results)
             path = args.results / "generation" / "dry_run_cost.json"
             write_dry_run_artifact(cfg, seed, estimate, path)
             print(f"calls: {estimate['n_calls']}")
             print(f"input tokens (estimate): {estimate['input_tokens_estimate']}")
-            print(f"output tokens (upper bound): {estimate['output_tokens_upper_bound']}")
-            print(f"USD upper bound: {estimate['usd_upper_bound']:.6f}")
+            print(f"output tokens (expected): {estimate['output_tokens_estimate']}")
+            print(f"USD (expected): {estimate['usd_upper_bound']:.6f}")
+            print(estimate["output_policy"])
             print(f"estimator: {estimate['estimator']}")
             print(f"wrote {path}")
             return 0
         if args.max_usd is None:
             raise ProtocolError("--max-usd is required for a real generation run. Use --dry-run to estimate first.")
         total_cap = float(cfg["total_usd_cap"]) if args.total_usd_cap is None else args.total_usd_cap
-        budget = Budget(args.results, "generate", args.max_usd, total_cap)
+        budget = budget_for(args.results, "generate", args.max_usd, cfg, args.total_usd_cap)
         client = None
         s3 = bedrock = None
         if inference_mode == "batch":
@@ -91,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
             total_written += summary["written"]
             print(
                 f"{name}: wrote {summary['written']} skipped {summary['skipped']} "
-                f"ledger ${summary['spent_usd']:.6f}"
+                f"cap total ${summary['spent_usd']:.6f}"
             )
             if summary["stopped"]:
                 stop_reason = summary["stop_reason"]

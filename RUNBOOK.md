@@ -62,18 +62,18 @@ datasets' stat blocks.
 python3 scripts/experiments/generate.py --dry-run --seed 0
 ```
 
-Writes `results/generation/dry_run_cost.json`. The upper bound charges
-`generator_max_output_tokens` on every call, so it can sit above the stage
-budget below. The run still uses those caps and stops cleanly when the ledger
-reaches one.
+Writes `results/generation/dry_run_cost.json`. The estimate charges
+`expected_output_tokens` (Haiku 70) on every call, or this results ledger's
+observed output mean when one exists. `generator_max_output_tokens` (256)
+stays the request cap and is not priced. The run stops cleanly when the
+ledger reaches a cap.
 
 ```bash
-python3 scripts/experiments/generate.py --seed 0 --max-usd 27 --total-usd-cap 29.80
-python3 scripts/experiments/generate.py --seed 0 --inference-mode batch --max-usd 27 --total-usd-cap 29.80
+python3 scripts/experiments/generate.py --seed 0 --max-usd 27
+python3 scripts/experiments/generate.py --seed 0 --inference-mode on_demand --max-usd 27
 ```
 
-The default `--inference-mode` is `on_demand`. That path needs AWS
-credentials that can call Bedrock Converse in `us-east-1`. Batch mode needs
+The default `--inference-mode` is `batch`. Batch mode needs AWS
 credentials that can call `bedrock:CreateModelInvocationJob` and write the
 bucket named by `BEDROCK_BATCH_BUCKET`, with the role ARN in
 `BEDROCK_BATCH_ROLE_ARN` (or `batch.role_arn` / `batch.bucket` in the
@@ -100,23 +100,29 @@ parse stays in `deployed_self_status` and is what the fallback row uses.
 Rows already written are skipped. A generation file whose rows are not
 schema version 2 is refused.
 
-An abstention is `abstain_correct`, and counts as correct on
-`abstention_counts_correct`, only when `source_retrieved` is true and the
-question is unanswerable. When a source passage is missing from the top-k,
-the label is `abstain_retrieval_miss` and it does not count as correct. When
-the source was retrieved and the question is answerable, the label is
-`abstain_incorrect`. The joined token-F1 `correct` field is unchanged.
+An abstention is `abstain_correct`, and the joined `correct` bit is 1, only
+when `source_retrieved` is true and the question is unanswerable. When a
+source passage is missing from the top-k, the label is
+`abstain_retrieval_miss` and `correct` is 0. When the source was retrieved
+and the question is answerable, the label is `abstain_incorrect` and
+`correct` is 0. `token_f1_correct` keeps the 0.5 threshold on the same row.
 Ledger rows record `pricing` so a batch call is billed from the batch table.
 
 Generation and the judge share `results/cost_ledger.jsonl` (gzipped when the
 file is new). Each new row's `usd` is the call's input and output token
 counts at the current price in `experiments/config.yaml`. `--total-usd-cap`
-defaults to 30. The full run passes `--total-usd-cap 29.80` because a
-10-question smoke on this budget already spent $0.19. `--max-usd 27` reserves
-the generation stage. The ledger is what the judge reads, so a judge call is
-refused when generation spend plus that call would cross $29.80. If
-generation stops under $27, the unused part of the $29.80 can be given to the
-judge by raising its `--max-usd` up to `29.80` minus the ledger total.
+defaults to 30. `already_spent_usd` is 12.02, the billed Bedrock spend on the
+AWS bill from prior ledgers that are not in this results directory. The cap
+check adds that amount to the ledger total, then adds the projected job cost
+times `spend_safety_factor` (1.10). At an empty ledger the remaining headroom
+before that margin is 17.98. The projection prices `expected_output_tokens`
+until this results ledger has an observed output mean for the model, and
+later stages then use that mean. `--max-usd 27` reserves the generation stage
+and does not apply the 1.10 factor. The ledger is what the judge reads, so a
+judge job is refused when already-billed spend plus the ledger plus that
+job's estimate times 1.10 would cross $30. If generation stops under
+$27, the unused part of the $30, after `already_spent_usd`, can be given to
+the judge by raising its `--max-usd`.
 
 After a price change, recompute the ledger so the cap matches the bill:
 
@@ -137,17 +143,53 @@ already wrote, and lists the rest in `results/generation/pending.json` or
 `results/signals/judge_pending.json`. That stop is not an error. A row named
 there is pending, and later stages score only the completed rows.
 
-## 4. Signals
+## 4. Adjudication
 
-Lexical grounding, then the local NLI model, then the judge. The judge is a
+Token F1 inside `[0.2, 0.8]` (both ends included), on a non-abstention, is
+adjudicated by `openai.gpt-oss-120b-1:0` on demand. Temperature is 0. The
+seed is stored on the artifact and on every row. Each row stores the system
+prompt, the user prompt, and the raw reply.
+
+```bash
+python3 scripts/experiments/adjudicate.py --dry-run --seed 0
+python3 scripts/experiments/adjudicate.py --seed 0 --max-usd 1
+```
+
+The dry-run prices an upper bound and does not call the model. A real run
+checks the shared ledger before each call. A reply that is not
+`{"correct": true}` or `{"correct": false}` is stored as `unparseable` and
+the script exits non-zero. Access denied writes
+`results/adjudication/adjudicator_unavailable.json` and exits non-zero. Rows
+already written for this seed are skipped. A file written under another seed
+is refused.
+
+## 5. Signals
+
+Lexical grounding and NLI score the stored claim against each passage and
+against each pair. NLI splits those texts into sentence windows that fit
+512 tokens and records every window it had to cut. Then the judge, then the
+self percentile, the oracles, and the holdout logistic. The judge is a
 separate Bedrock model, `us.meta.llama3-3-70b-instruct-v1:0`.
 
 ```bash
 python3 scripts/experiments/signals.py lexical --seed 0
 python3 scripts/experiments/signals.py nli --seed 0
 python3 scripts/experiments/signals.py judge --dry-run --seed 0
-python3 scripts/experiments/signals.py judge --seed 0 --max-usd 3 --total-usd-cap 29.80
+python3 scripts/experiments/signals.py judge --seed 0 --max-usd 3
+python3 scripts/experiments/signals.py judge --seed 0 --inference-mode on_demand --max-usd 3
+python3 scripts/experiments/signals.py self_percentile --seed 0
+python3 scripts/experiments/signals.py oracle --seed 0
+python3 scripts/experiments/signals.py logistic --seed 0
 ```
+
+The judge sample is a seeded 60% prefix (`v2.judge_sample_rate`). The logistic
+holdout is a seeded 20% prefix on a different stream (`v2.held_out_fraction`).
+Both seeds are the `--seed` value. Batch mode needs `BEDROCK_BATCH_ROLE_ARN`
+and `BEDROCK_BATCH_BUCKET`. The projected cost is checked before the job is
+created. A job smaller than `batch.min_records` is not submitted. Percentile
+and logistic read the whole log; if their output file does not match the
+current rows, move it aside and rerun. Logistic needs the lexical and NLI
+files.
 
 Lexical grounding and calibration, replay, analyses, and `write_results` read
 only the committed sample, the retrieval files, and the generation output.
@@ -167,7 +209,7 @@ prompt contains the generated answer and the dry-run does not invent one.
 Pass `--allow-same-judge` only if you intentionally set the judge id equal to
 the generator id. The flag is recorded in `results/signals/judge_meta.json`.
 
-## 5. Calibration, replay, analyses, tables
+## 6. Calibration, replay, analyses, tables
 
 These read the files above. If a signal file is missing they stop, and
 `write_results.py` leaves the corresponding cells pending.
@@ -177,6 +219,39 @@ python3 scripts/experiments/calibrate.py --seed 0 --bootstrap 1000
 python3 scripts/experiments/replay.py --seeds 0,1,2,3,4
 python3 scripts/experiments/analyses.py --seed 0 --bootstrap 1000
 python3 scripts/experiments/write_results.py --seed 0
+```
+
+## 7. Projection, subset, and the study
+
+Print the projection before spending. `n` and the judge rate default to the
+config (`n_per_dataset` 1100, `v2.judge_sample_rate` 0.60).
+
+`v2.subset_questions` is 250 questions in total, stratified 84/83/83 across
+squad, hotpot, and nq. `v2.subset_samples` is 4 temperature-1 Haiku answers
+on that subset. Bulk stages default to batch. The projection reads sample and retrieval files when
+they are present. `--ledger` supplies a prior ledger of output token counts.
+A ledger that is not on disk leaves output tokens at `expected_output_tokens`
+and the print says so. Adjudication is priced as
+`v2.adjudication_band_fraction` (0.15) of the judged rows, and that line is
+an assumption.
+
+```bash
+python3 scripts/experiments/project_cost.py --n 1100 --judge-rate 0.6 --from-results results --ledger results/cost_ledger.jsonl.gz
+python3 scripts/experiments/subset.py select --seed 0
+python3 scripts/experiments/subset.py haiku --seed 0 --max-usd 5
+python3 scripts/experiments/subset.py nova --seed 0 --max-usd 5
+python3 scripts/experiments/subset.py agreement --seed 0
+python3 scripts/experiments/study.py --seed 0
+```
+
+The study defaults are 500 seeds and 10000 rounds. A short run passes
+`--seeds` and `--rounds`. `run_all.py` prints the projection and then runs
+the stages. It needs `--max-usd` before any model stage starts.
+`--project-only` prints the projection and exits.
+
+```bash
+python3 scripts/experiments/run_all.py --project-only --n 1100 --judge-rate 0.6
+python3 scripts/experiments/run_all.py --seed 0 --max-usd 17.98
 ```
 
 Replay writes `results/replay/replay_summary.json`, a CSV of cumulative
@@ -194,9 +269,14 @@ python3 scripts/experiments/sample_datasets.py --seed 0 --n-per-dataset 10 --res
 python3 scripts/experiments/retrieve.py --seed 0 --results "$SMOKE"
 python3 scripts/experiments/generate.py --dry-run --seed 0 --results "$SMOKE"
 python3 scripts/experiments/generate.py --seed 0 --max-usd 1 --total-usd-cap 2 --results "$SMOKE"
+python3 scripts/experiments/adjudicate.py --dry-run --seed 0 --results "$SMOKE"
+python3 scripts/experiments/adjudicate.py --seed 0 --max-usd 1 --total-usd-cap 2 --results "$SMOKE"
 python3 scripts/experiments/signals.py lexical --seed 0 --results "$SMOKE"
 python3 scripts/experiments/signals.py nli --seed 0 --results "$SMOKE"
 python3 scripts/experiments/signals.py judge --seed 0 --max-usd 1 --total-usd-cap 2 --results "$SMOKE"
+python3 scripts/experiments/signals.py self_percentile --seed 0 --results "$SMOKE"
+python3 scripts/experiments/signals.py oracle --seed 0 --results "$SMOKE"
+python3 scripts/experiments/signals.py logistic --seed 0 --results "$SMOKE"
 python3 scripts/experiments/calibrate.py --seed 0 --bootstrap 200 --results "$SMOKE"
 python3 scripts/experiments/replay.py --seeds 0,1 --results "$SMOKE"
 python3 scripts/experiments/analyses.py --seed 0 --bootstrap 200 --results "$SMOKE"
@@ -209,5 +289,5 @@ tables unless the run used the real models and the full sample.
 ## Tests
 
 ```bash
-python3 -m pytest tests/test_experiment_pipeline.py tests/test_experiment_v2.py tests -q
+python3 -m pytest tests/test_experiment_pipeline.py tests/test_experiment_v2.py tests/test_experiment_signals.py tests/test_experiment_labels.py tests/test_experiment_study.py tests -q
 ```

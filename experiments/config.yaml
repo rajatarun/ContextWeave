@@ -27,6 +27,11 @@ replay_seeds: [0, 1, 2, 3, 4]
 
 embedding_model: sentence-transformers/all-MiniLM-L6-v2
 nli_model: cross-encoder/nli-deberta-v3-small
+# Sentence windows must fit this many tokens, including the claim and the
+# CLS/SEP/SEP specials counted in nli_special_tokens. A longer window is cut
+# to the limit and the cut is counted on the row and in the NLI artifact.
+nli_max_tokens: 512
+nli_special_tokens: 3
 grounding_threshold: 0.6
 judge_sample_rate: 0.05
 grounding_weight: 1.0
@@ -35,15 +40,22 @@ self_weight: 1.0
 
 generator_model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
 judge_model_id: us.meta.llama3-3-70b-instruct-v1:0
-# Later stages. Prices are in the tables below. This PR does not call them.
+# Nova Pro is the subset-study generator. The adjudicator is called on demand
+# by scripts/experiments/adjudicate.py. Temperature 0 keeps the call free of
+# a random draw. 128 tokens covers the one JSON object the prompt requests.
 subset_generator_model_id: us.amazon.nova-pro-v1:0
 adjudicator_model_id: openai.gpt-oss-120b-1:0
+adjudicator_temperature: 0
+adjudicator_max_output_tokens: 128
 region: us-east-1
 schema_version: 2
-# on_demand is the per-row Converse path. batch writes JSONL and submits
-# CreateModelInvocationJob. The role and bucket are read from the environment
-# variables named below, or from batch.role_arn / batch.bucket when set.
-inference_mode: on_demand
+# batch is the default for the bulk stages: generation, the judge, and the
+# subset Haiku and Nova draws. It writes JSONL and submits
+# CreateModelInvocationJob. on_demand is the per-row Converse path, for a
+# remainder under batch.min_records. Adjudication stays on demand; that stage
+# does not submit a batch job. The role and bucket are read from the
+# environment variables named below, or from batch.role_arn / batch.bucket.
+inference_mode: batch
 temperature: 0
 # One JSON object is a few dozen tokens. 256 leaves room for the object when
 # the model also starts a sentence. A complete object followed by prose that
@@ -53,14 +65,50 @@ temperature: 0
 generator_max_output_tokens: 256
 judge_max_output_tokens: 300
 
-# Hard ceiling for generation and the judge together, USD. The shared
-# cost_ledger is what both stages read. A stage also has its own --max-usd.
-# The full run passes --total-usd-cap 29.80: a 10-question smoke already
-# spent $0.19 of this $30.
+# Hard ceiling for all Bedrock spend, USD. The shared cost_ledger is what
+# the stages read for spend in this results directory. A stage also has its
+# own --max-usd. The stage check compares this stage's ledger rows plus the
+# unscaled next estimate with --max-usd.
+# already_spent_usd is spend already on the AWS bill that is not in this
+# results ledger. Prior experiment ledgers were billed and are not replayed
+# here. 12.02 is that billed total, read from the AWS bill. The total-cap
+# check refuses a job when
+# ledger usd + already_spent_usd + projected job cost * spend_safety_factor
+# exceeds total_usd_cap. At an empty ledger the remaining headroom before
+# that margin is 17.98.
 total_usd_cap: 30
+already_spent_usd: 12.02
+spend_safety_factor: 1.10
+
+# Expected output tokens for the cost projection and the pre-job cap check.
+# generator_max_output_tokens, judge_max_output_tokens, and
+# adjudicator_max_output_tokens stay the Converse maxTokens ceiling. They
+# are not the cost estimate.
+#
+# Planning allowances from ledgers on Raja's machine (v1 runs and 4 smoke
+# runs, same prompts):
+# Haiku generate was about 1,150 input tokens and about 50 output tokens per
+# call. Smoke output means were 49.3, 51.4, and 47.6. The full v1 run
+# averaged 38.0 output tokens, and that average includes an older prompt.
+# 70 leaves room for the new claim field.
+# Llama judge was about 1,340 input tokens and 16.0 output tokens per call.
+# 20 is a small allowance over 16.0.
+# Nova Pro is 70, the same generator-prompt allowance as Haiku. There is no
+# Nova ledger mean.
+# The gpt-oss adjudicator is 64, a planning allowance for one JSON object,
+# below the 128 maxTokens cap. It is not a measured mean.
+# After a stage writes numeric output_tokens for a model, later cap checks
+# in this results directory use that observed mean instead of the figure here.
+expected_output_tokens:
+  us.anthropic.claude-haiku-4-5-20251001-v1:0: 70
+  us.meta.llama3-3-70b-instruct-v1:0: 20
+  us.amazon.nova-pro-v1:0: 70
+  openai.gpt-oss-120b-1:0: 64
 
 # Token estimates use ceil(utf-8 bytes / 4). That is an approximation, not a
-# provider tokenizer. Dry-run output cost charges the max output length.
+# provider tokenizer. Projection and the pre-job cap check price
+# expected_output_tokens, or this run's observed output mean once the ledger
+# has one for that model.
 token_estimate: ceil_utf8_bytes_div_4
 
 keyword_weight: 0.25
@@ -80,14 +128,22 @@ graph_damping: 0.85
 graph_max_iter: 40
 graph_tol: 1.0e-10
 
-# Approved v2 constants. The signals, subset, and analysis stages read these
-# in later changes. judge_sample_rate above is what the current judge stage
-# still uses.
+# The experiment judge reads v2.judge_sample_rate. The logistic holdout reads
+# v2.held_out_fraction. judge_sample_rate above stays the deployed router rate.
+# Subset and analysis constants are fixed here for later stages.
+# subset_questions is the total, stratified across datasets in the order
+# they are passed (the default is squad, hotpot, nq). Largest remainder:
+# the first (total % n_datasets) datasets get one extra. 250 across the
+# three datasets is 84, 83, 83.
+# adjudication_band_fraction is the share of judged rows the cost projection
+# prices for the adjudicator. It is an assumption, not a count of answers
+# whose token F1 landed in the band.
 v2:
   judge_sample_rate: 0.60
   held_out_fraction: 0.20
   subset_questions: 250
-  subset_haiku_samples: 5
+  # Temperature-1 Haiku answers on the subset, one file per sample.
+  subset_samples: 4
   subset_temperature: 1
   replay_seeds: 500
   replay_rounds: 10000
@@ -95,6 +151,7 @@ v2:
   drift_discounts: [0.99, 0.995, 0.999]
   adjudication_f1_low: 0.2
   adjudication_f1_high: 0.8
+  adjudication_band_fraction: 0.15
 
 batch:
   role_arn_env: BEDROCK_BATCH_ROLE_ARN
