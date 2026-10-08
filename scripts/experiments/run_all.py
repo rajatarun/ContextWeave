@@ -28,6 +28,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--datasets", default=None)
     ap.add_argument("--n", type=int, default=None)
     ap.add_argument("--judge-rate", type=float, default=None)
+    ap.add_argument("--from-results", type=Path, default=None)
+    ap.add_argument("--ledger", type=Path, default=None)
+    ap.add_argument("--band-fraction", type=float, default=None)
     ap.add_argument("--max-usd", type=float, default=None)
     ap.add_argument("--total-usd-cap", type=float, default=None)
     ap.add_argument("--inference-mode", choices=("on_demand", "batch"), default=None)
@@ -39,7 +42,15 @@ def main(argv: list[str] | None = None) -> int:
         seed = cfg["seed"] if args.seed is None else args.seed
         n = cfg["n_per_dataset"] if args.n is None else args.n
         rate = cfg["v2"]["judge_sample_rate"] if args.judge_rate is None else args.judge_rate
-        text = format_projection(project(cfg, int(n), float(rate)))
+        if args.from_results is not None:
+            prompt_results, require = args.from_results, True
+        else:
+            prompt_results, require = args.results, False
+        text = format_projection(project(
+            cfg, int(n), float(rate),
+            results=prompt_results, ledger_path=args.ledger, band_fraction=args.band_fraction,
+            seed=int(seed), require_results=require,
+        ))
     except ProtocolError as exc:
         print(exc, file=sys.stderr)
         return 2

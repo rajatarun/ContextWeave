@@ -220,8 +220,16 @@ python3 scripts/experiments/write_results.py --seed 0
 Print the projection before spending. `n` and the judge rate default to the
 config (`n_per_dataset` 1100, `v2.judge_sample_rate` 0.60).
 
+`v2.subset_questions` is 250 questions in total, stratified 84/83/83 across
+squad, hotpot, and nq. The projection reads sample and retrieval files when
+they are present. `--ledger` supplies a prior ledger of output token counts.
+A ledger that is not on disk leaves output tokens at the configured maximum
+and the print says so. Adjudication is priced as
+`v2.adjudication_band_fraction` (0.15) of the judged rows, and that line is
+an assumption.
+
 ```bash
-python3 scripts/experiments/project_cost.py --n 1100 --judge-rate 0.6
+python3 scripts/experiments/project_cost.py --n 1100 --judge-rate 0.6 --from-results results --ledger results/cost_ledger.jsonl.gz
 python3 scripts/experiments/subset.py select --seed 0
 python3 scripts/experiments/subset.py haiku --seed 0 --max-usd 5 --inference-mode on_demand
 python3 scripts/experiments/subset.py nova --seed 0 --max-usd 5 --inference-mode batch

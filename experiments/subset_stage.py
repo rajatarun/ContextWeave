@@ -1,10 +1,13 @@
-"""Seeded 250-question subset and agreement across temperature-1 samples.
+"""Seeded subset and agreement across temperature-1 samples.
 
-The subset is taken per dataset. Question ids are sorted, shuffled with
-``random.Random(stream_seed(seed, "subset:{dataset}"))``, and the subset is
-the first ``n`` of that order. A dataset with fewer than ``n`` questions
-stops the run. Nothing is padded. A smaller ``n`` with the same seed is a
-prefix of a larger one.
+``subset_questions`` is a total, stratified across the datasets in the order
+they are given. Largest remainder: ``base, rem = divmod(total, n_datasets)``,
+and the first ``rem`` datasets receive ``base + 1``. Each dataset then sorts
+its question ids, shuffles with
+``random.Random(stream_seed(seed, "subset:{dataset}"))``, and keeps the first
+quota of that order. A dataset with fewer questions than its quota stops the
+run. Nothing is padded. A smaller total with the same seed and the same
+dataset order is a prefix inside each dataset.
 
 Agreement is the modal fraction of SQuAD-normalised answers across the
 configured samples, with pairwise agreement stored beside it. A (question,
@@ -37,6 +40,23 @@ NOVA_TEMPERATURE = 0.0
 
 def subset_stream_name(dataset: str) -> str:
     return f"{SUBSET_STREAM}:{dataset}"
+
+
+def stratum_quotas(datasets: Sequence[str], total: int) -> dict[str, int]:
+    """Largest-remainder split of ``total`` across ``datasets``, in that order.
+
+    ``squad, hotpot, nq`` and 250 is 84, 83, 83. A quota of 0 is a dataset the
+    total did not reach. The caller does not draw from it.
+    """
+    if isinstance(total, bool) or not isinstance(total, int) or total < 1:
+        raise ProtocolError(f"subset total must be a positive int, got {total!r}")
+    names = [str(name) for name in datasets]
+    if not names:
+        raise ProtocolError("subset allocation needs at least one dataset")
+    if len(names) != len(set(names)):
+        raise ProtocolError(f"duplicate dataset in subset allocation: {names}")
+    base, rem = divmod(total, len(names))
+    return {name: base + (1 if index < rem else 0) for index, name in enumerate(names)}
 
 
 def choose_ids(qids: Sequence[str], n: int, seed: int, dataset: str) -> dict[str, Any]:
@@ -73,15 +93,31 @@ def choose_ids(qids: Sequence[str], n: int, seed: int, dataset: str) -> dict[str
 def choose_subset(
     qids_by_dataset: dict[str, Sequence[str]], n: int, seed: int,
 ) -> dict[str, Any]:
-    datasets = {
-        name: choose_ids(qids, n, seed, name)
-        for name, qids in qids_by_dataset.items()
-    }
+    """Allocate ``n`` questions in total across the datasets, in dict order."""
+    names = list(qids_by_dataset)
+    quotas = stratum_quotas(names, n)
+    datasets = {}
+    for name in names:
+        quota = quotas[name]
+        if quota < 1:
+            continue
+        datasets[name] = choose_ids(qids_by_dataset[name], quota, seed, name)
     return {
-        "subset_scope": "per_dataset",
+        "subset_scope": "stratified_total",
         "subset_questions": n,
+        "quotas": quotas,
         "seed": seed,
         "datasets": datasets,
+        "allocation": (
+            "Largest remainder over the datasets in the order given. "
+            "base, remainder = divmod(total, n_datasets). "
+            "The first remainder datasets receive base+1 and the rest receive base. "
+            "Each dataset shuffles its own sorted question ids with "
+            "random.Random(stream_seed(seed, 'subset:{dataset}')) and keeps the first quota. "
+            "A smaller total with the same seed and the same dataset order is a prefix "
+            "inside each dataset. A dataset with fewer questions than its quota stops "
+            "the run. Nothing is padded."
+        ),
     }
 
 

@@ -419,9 +419,13 @@ a row also stop the process.
 
 ## Subset, second generator, and the study
 
-`subset.py select` draws `v2.subset_questions` (250) question ids per dataset.
-The shuffle stream is `subset:{dataset}`. A dataset with fewer questions than
-that stops the run.
+`subset.py select` draws `v2.subset_questions` (250) question ids in total.
+The total is stratified across the datasets in the order passed to
+`--datasets` (the default is squad, hotpot, nq) by largest remainder, so 250
+is 84, 83, 83. Each dataset shuffles its own ids on the stream
+`subset:{dataset}` and keeps its quota. A smaller total with the same seed
+and the same dataset order is a prefix inside each dataset. A dataset with
+fewer questions than its quota stops the run.
 
 `subset.py haiku` draws `v2.subset_haiku_samples` (5) answers at
 `v2.subset_temperature` (1) with the generator model. Each sample has its own
@@ -449,10 +453,18 @@ Nova file becomes a null block with a reason. The short replay in
 `replay.py` keeps the top-level `replay_seeds` list.
 
 `project_cost.py` prints call counts and on-demand and batch USD from the
-config prices before any model call. Input tokens are the prompt template
-with a placeholder question and no passage text. Output tokens are the
-configured maximum. Adjudication calls stay pending until the token-F1 band
-has been counted. `--write` stores `results/cost_projection.json`.
+config prices before any model call. When `results/samples` and
+`results/retrieval` both exist for every dataset, input tokens are the real
+generator, judge, and adjudicator prompts built from those questions and
+passages. The command does not call a model. `--from-results` points at
+another directory and stops if a file is missing. Without that flag, a
+directory that has neither file keeps the prompt-template estimate and says
+so. Output tokens are the mean `output_tokens` for that model in `--ledger`
+when the ledger is on disk. A missing ledger, or a model with no numeric
+rows, uses the configured maximum and the print says which. Adjudication
+calls are `v2.adjudication_band_fraction` (0.15) of the judged rows. That
+count is an assumption, not a measured token-F1 band.
+`--write` stores `results/cost_projection.json`.
 
 `run_all.py` prints that projection, then runs the stages in order.
 `--project-only` stops after the print. A real run requires `--max-usd`.

@@ -91,6 +91,7 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
         "subset_haiku_samples", "subset_temperature", "replay_seeds",
         "replay_rounds", "judge_coverage", "drift_discounts",
         "adjudication_f1_low", "adjudication_f1_high",
+        "adjudication_band_fraction",
     ):
         if key not in v2:
             raise ProtocolError(f"config v2 is missing {key}")

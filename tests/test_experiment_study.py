@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import gzip
 import importlib.util
 import json
 import sys
@@ -23,6 +24,7 @@ from experiments.study_stage import (
 )
 from experiments.subset_stage import (
     agreement_scores, choose_ids, choose_subset, require_haiku_settings, score_agreement,
+    stratum_quotas,
 )
 
 _ROLE = "arn:aws:iam::example/batch-role"
@@ -163,6 +165,31 @@ def test_subset_is_a_prefix_and_does_not_pad():
         choose_ids(ids, 5, 0, "squad")
     other = choose_ids(ids, 2, 0, "hotpot")
     assert other["stream_seed"] != small["stream_seed"]
+
+
+def test_subset_total_is_stratified_and_a_prefix_inside_each_dataset():
+    assert stratum_quotas(("squad", "hotpot", "nq"), 250) == {
+        "squad": 84, "hotpot": 83, "nq": 83,
+    }
+    pools = {
+        "squad": [f"s{i:03d}" for i in range(200)],
+        "hotpot": [f"h{i:03d}" for i in range(200)],
+        "nq": [f"n{i:03d}" for i in range(200)],
+    }
+    full = choose_subset(pools, 250, 0)
+    assert full["subset_scope"] == "stratified_total"
+    assert full["subset_questions"] == 250
+    assert {name: block["n"] for name, block in full["datasets"].items()} == full["quotas"]
+    assert sum(full["quotas"].values()) == 250
+    smaller = choose_subset(pools, 100, 0)
+    assert smaller["quotas"] == {"squad": 34, "hotpot": 33, "nq": 33}
+    for name in pools:
+        assert smaller["datasets"][name]["qids"] == full["datasets"][name]["qids"][:smaller["datasets"][name]["n"]]
+    short = choose_subset({"squad": ["a"], "hotpot": ["b"], "nq": ["c"]}, 2, 0)
+    assert short["quotas"] == {"squad": 1, "hotpot": 1, "nq": 0}
+    assert "nq" not in short["datasets"]
+    with pytest.raises(ProtocolError, match="Refusing to pad"):
+        choose_subset({"squad": ["only"], "hotpot": ["b"], "nq": ["c"]}, 250, 0)
 
 
 def test_agreement_modal_fraction_and_partial_set():
@@ -337,24 +364,108 @@ def test_judge_coverage_prefix_and_absent_judge():
 def test_projection_for_1100_and_judge_60_percent():
     body = project(load_config(), 1100, 0.6)
     by_name = {stage["stage"]: stage for stage in body["stages"]}
+    assert body["subset_quotas"] == {"squad": 84, "hotpot": 83, "nq": 83}
     assert by_name["generate"]["calls"] == 13200
     assert by_name["judge"]["calls"] == 7920
-    assert by_name["subset_haiku"]["calls"] == 15000
-    assert by_name["subset_nova"]["calls"] == 3000
-    assert by_name["adjudicate"]["calls"] is None
-    assert by_name["adjudicate"]["on_demand_usd"] is None
+    assert by_name["subset_haiku"]["calls"] == 5000
+    assert by_name["subset_nova"]["calls"] == 1000
+    assert by_name["adjudicate"]["calls"] == 1188
+    assert by_name["adjudicate"]["on_demand_usd"] > by_name["adjudicate"]["batch_usd"] > 0
+    assert "assumption" in by_name["adjudicate"]["note"].lower()
+    assert by_name["generate"]["output_token_source"] == "max_tokens"
+    assert by_name["generate"]["input_token_source"] == "template"
     assert by_name["lexical"]["calls"] == 0
     assert by_name["generate"]["on_demand_usd"] > by_name["generate"]["batch_usd"] > 0
     assert by_name["subset_nova"]["on_demand_usd"] > by_name["subset_nova"]["batch_usd"] > 0
     text = format_projection(body)
     assert "calls=13200" in text
     assert "calls=7920" in text
-    assert "calls=15000" in text
-    assert "calls=3000" in text
-    assert "adjudicate\tcalls=pending" in text
+    assert "calls=5000" in text
+    assert "calls=1000" in text
+    assert "calls=1188" in text
+    assert "assumption" in text.lower()
+    assert "configured maximum" in text
     assert "239571291755" not in text
     assert "called_model: false" in text
     assert body["kind"] == "projection"
+
+
+def _projection_corpus(tmp_path: Path, text: str) -> None:
+    (tmp_path / "samples").mkdir()
+    (tmp_path / "retrieval").mkdir()
+    for dataset in ("squad", "hotpot", "nq"):
+        qid = f"{dataset}-q"
+        sample = {
+            "qid": qid, "dataset": dataset, "question": f"What about {dataset}?",
+            "question_type": dataset, "gold_answers": ["Paris"], "unanswerable": False,
+        }
+        (tmp_path / "samples" / f"{dataset}.jsonl").write_text(json.dumps(sample) + "\n")
+        lines = []
+        for arm in ("semantic_search", "graph_first", "keyword_boosted", "hybrid"):
+            lines.append(json.dumps({
+                "qid": qid, "dataset": dataset, "arm": arm, "question_type": dataset,
+                "question": sample["question"],
+                "passages": [{"id": "p", "title": "Place", "text": text, "rank": 1, "score": 1.0}],
+            }))
+        (tmp_path / "retrieval" / f"{dataset}.jsonl").write_text("\n".join(lines) + "\n")
+
+
+def test_projection_prices_retrieved_passages_and_labels_a_missing_ledger(tmp_path):
+    _projection_corpus(tmp_path, "Paris is the capital. " * 80)
+    cfg = load_config()
+    cfg["v2"]["subset_questions"] = 3
+    template = project(cfg, 1, 1.0)
+    measured = project(cfg, 1, 1.0, results=tmp_path, require_results=True, seed=0)
+    by_template = {stage["stage"]: stage for stage in template["stages"]}
+    by_measured = {stage["stage"]: stage for stage in measured["stages"]}
+    assert by_measured["generate"]["input_token_source"] == "measured_prompts"
+    assert by_measured["judge"]["input_tokens_total"] > by_template["judge"]["input_tokens_total"]
+    assert by_measured["generate"]["input_tokens_total"] > by_template["generate"]["input_tokens_total"]
+    assert by_measured["subset_haiku"]["calls"] == 3 * 4 * 5
+    assert by_measured["subset_nova"]["calls"] == 12
+    assert measured["answer_stand_in"]["counts"]["first_gold_answer"] == 12
+    assert measured["prompt_source"] == "retrieval"
+    text = format_projection(measured)
+    assert "stand-in" in text
+    assert "not a generated answer" in text
+    missing = project(cfg, 1, 1.0, ledger_path=tmp_path / "cost_ledger.jsonl.gz")
+    assert missing["ledger"]["present"] is False
+    assert "not on disk" in missing["output_scope"]
+    assert {stage["stage"]: stage for stage in missing["stages"]}["generate"]["output_token_source"] == "max_tokens"
+    with pytest.raises(ProtocolError, match="missing"):
+        project(cfg, 1, 1.0, results=tmp_path / "empty", require_results=True)
+    partial = tmp_path / "partial"
+    (partial / "samples").mkdir(parents=True)
+    (partial / "samples" / "squad.jsonl").write_text("{}\n")
+    with pytest.raises(ProtocolError, match="incomplete"):
+        project(cfg, 1, 1.0, results=partial)
+
+
+def test_projection_uses_a_ledger_mean_and_keeps_max_tokens_for_other_models(tmp_path):
+    cfg = load_config()
+    cfg["v2"]["subset_questions"] = 3
+    model = cfg["generator_model_id"]
+    path = tmp_path / "cost_ledger.jsonl.gz"
+    with gzip.open(path, "wt", encoding="utf-8") as fh:
+        fh.write(json.dumps({"model_id": model, "output_tokens": 10, "input_tokens": 4, "usd": 0.01}) + "\n")
+        fh.write(json.dumps({"model_id": model, "output_tokens": 30, "input_tokens": 4, "usd": 0.01}) + "\n")
+        fh.write(json.dumps({"model_id": model, "output_tokens": True, "input_tokens": 4}) + "\n")
+    body = project(cfg, 2, 0.5, ledger_path=path)
+    by_name = {stage["stage"]: stage for stage in body["stages"]}
+    assert by_name["generate"]["output_token_source"] == "ledger_mean"
+    assert by_name["generate"]["output_tokens_per_call"] == pytest.approx(20.0)
+    assert by_name["generate"]["output_tokens_n"] == 2
+    assert by_name["subset_haiku"]["output_token_source"] == "ledger_mean"
+    assert by_name["subset_nova"]["output_token_source"] == "max_tokens"
+    assert by_name["judge"]["output_token_source"] == "max_tokens"
+    assert by_name["adjudicate"]["output_token_source"] == "max_tokens"
+    assert "configured maximum" in by_name["subset_nova"]["output_token_label"]
+    capped = project(cfg, 2, 0.5)
+    capped_generate = {stage["stage"]: stage for stage in capped["stages"]}["generate"]
+    assert by_name["generate"]["on_demand_usd"] < capped_generate["on_demand_usd"]
+    text = format_projection(body)
+    assert "239571291755" not in text
+    assert "ledger mean" in text
 
 
 def test_runner_prints_projection_and_refuses_to_spend(tmp_path, capsys):
@@ -362,7 +473,7 @@ def test_runner_prints_projection_and_refuses_to_spend(tmp_path, capsys):
     code = mod.main(["--project-only", "--n", "1100", "--judge-rate", "0.6", "--results", str(tmp_path)])
     assert code == 0
     out = capsys.readouterr().out
-    assert "calls=13200" in out and "calls=pending" in out
+    assert "calls=13200" in out and "calls=5000" in out and "assumption" in out.lower()
     code = mod.main(["--results", str(tmp_path), "--n", "1100", "--judge-rate", "0.6"])
     assert code == 2
     captured = capsys.readouterr()

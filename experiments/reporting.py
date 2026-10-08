@@ -494,8 +494,9 @@ def render(results: Path) -> tuple[str, str]:
     doc.h("Cost projection")
     doc.p(
         "Projected spend is copied from `results/cost_projection.json` when that file is present. "
-        "Passage text is excluded from the input estimate. Adjudication stays pending until the "
-        "token-F1 band has been counted on disk."
+        "That artifact records whether input tokens were measured from the retrieved passages "
+        "or taken from the prompt template, whether output tokens are a ledger mean or the "
+        "configured maximum, and the adjudication call count, which is an assumption."
     )
     projection = _load(results / "cost_projection.json")
     if projection is None or projection.get("kind") != "projection":

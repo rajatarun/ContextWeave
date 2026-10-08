@@ -92,6 +92,13 @@ graph_tol: 1.0e-10
 # The experiment judge reads v2.judge_sample_rate. The logistic holdout reads
 # v2.held_out_fraction. judge_sample_rate above stays the deployed router rate.
 # Subset and analysis constants are fixed here for later stages.
+# subset_questions is the total, stratified across datasets in the order
+# they are passed (the default is squad, hotpot, nq). Largest remainder:
+# the first (total % n_datasets) datasets get one extra. 250 across the
+# three datasets is 84, 83, 83.
+# adjudication_band_fraction is the share of judged rows the cost projection
+# prices for the adjudicator. It is an assumption, not a count of answers
+# whose token F1 landed in the band.
 v2:
   judge_sample_rate: 0.60
   held_out_fraction: 0.20
@@ -104,6 +111,7 @@ v2:
   drift_discounts: [0.99, 0.995, 0.999]
   adjudication_f1_low: 0.2
   adjudication_f1_high: 0.8
+  adjudication_band_fraction: 0.15
 
 batch:
   role_arn_env: BEDROCK_BATCH_ROLE_ARN

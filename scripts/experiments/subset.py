@@ -85,8 +85,17 @@ def _select(args: argparse.Namespace, cfg: dict, seed: int, names: list[str]) ->
     body = artifact_meta(cfg, seed, stage="subset", **chosen)
     path = args.results / "subset" / "subset.json"
     write_json(path, body)
+    quotas = body.get("quotas") or {}
+    print(
+        f"subset total {body['subset_questions']} ({body['subset_scope']}); "
+        + ", ".join(f"{name} {quotas.get(name, 0)}" for name in names)
+    )
     for name in names:
-        print(f"{name}: {body['datasets'][name]['n']} questions, stream {body['datasets'][name]['stream']}")
+        block = body["datasets"].get(name)
+        if block is None:
+            print(f"{name}: 0 questions")
+            continue
+        print(f"{name}: {block['n']} questions, stream {block['stream']}")
     print(f"wrote {path}")
     return 0
 

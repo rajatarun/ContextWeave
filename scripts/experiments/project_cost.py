@@ -2,7 +2,13 @@
 """Print projected Bedrock spend for the configured n, before any model call.
 
 ``--n`` and ``--judge-rate`` override the config for this print. Pass
-``--write`` to store ``results/cost_projection.json``. The file is a projection.
+``--from-results`` to price the prompts in a sample and retrieval directory.
+When that flag is omitted, files under ``--results`` are used if every dataset
+has both, and otherwise the input estimate stays on the template. ``--ledger``
+supplies output-token means. A ledger that is not on disk leaves output tokens
+at the configured maximum and the print says so. ``--band-fraction`` overrides
+``v2.adjudication_band_fraction``. Pass ``--write`` to store
+``results/cost_projection.json``. The file is a projection.
 """
 from __future__ import annotations
 
@@ -23,6 +29,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--n", type=int, default=None, help="questions per dataset (default: config n_per_dataset)")
     ap.add_argument("--judge-rate", type=float, default=None, help="default: v2.judge_sample_rate")
+    ap.add_argument(
+        "--from-results", type=Path, default=None,
+        help="sample and retrieval directory. Missing files stop the run.",
+    )
+    ap.add_argument(
+        "--ledger", type=Path, default=None,
+        help="prior cost ledger with output_tokens per model. Missing file uses max tokens.",
+    )
+    ap.add_argument(
+        "--band-fraction", type=float, default=None,
+        help="assumed share of judged rows priced for adjudication (default: config)",
+    )
     ap.add_argument("--write", action="store_true", help="write results/cost_projection.json")
     args = ap.parse_args(argv)
     try:
@@ -30,7 +48,15 @@ def main(argv: list[str] | None = None) -> int:
         seed = cfg["seed"] if args.seed is None else args.seed
         n = cfg["n_per_dataset"] if args.n is None else args.n
         rate = cfg["v2"]["judge_sample_rate"] if args.judge_rate is None else args.judge_rate
-        body = project(cfg, int(n), float(rate))
+        if args.from_results is not None:
+            results, require = args.from_results, True
+        else:
+            results, require = args.results, False
+        body = project(
+            cfg, int(n), float(rate),
+            results=results, ledger_path=args.ledger, band_fraction=args.band_fraction,
+            seed=int(seed), require_results=require,
+        )
         text = format_projection(body)
         print(text, end="")
         if args.write:
