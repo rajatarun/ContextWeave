@@ -27,6 +27,11 @@ replay_seeds: [0, 1, 2, 3, 4]
 
 embedding_model: sentence-transformers/all-MiniLM-L6-v2
 nli_model: cross-encoder/nli-deberta-v3-small
+# Sentence windows must fit this many tokens, including the claim and the
+# CLS/SEP/SEP specials counted in nli_special_tokens. A longer window is cut
+# to the limit and the cut is counted on the row and in the NLI artifact.
+nli_max_tokens: 512
+nli_special_tokens: 3
 grounding_threshold: 0.6
 judge_sample_rate: 0.05
 grounding_weight: 1.0
@@ -80,9 +85,9 @@ graph_damping: 0.85
 graph_max_iter: 40
 graph_tol: 1.0e-10
 
-# Approved v2 constants. The signals, subset, and analysis stages read these
-# in later changes. judge_sample_rate above is what the current judge stage
-# still uses.
+# The experiment judge reads v2.judge_sample_rate. The logistic holdout reads
+# v2.held_out_fraction. judge_sample_rate above stays the deployed router rate.
+# Subset and analysis constants are fixed here for later stages.
 v2:
   judge_sample_rate: 0.60
   held_out_fraction: 0.20

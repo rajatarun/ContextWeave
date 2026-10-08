@@ -194,6 +194,22 @@ def load_joined(results: Path, cfg: dict[str, Any], datasets: Sequence[str] | No
         rows = [row for row in rows if in_sample(row, allowed)]
         validate_rows(rows, ("qid", "arm", "value", "reason"), path)
         signals[kind] = _index(rows, path)
+    for kind, fname in (
+        ("self_percentile", "self_percentile.jsonl"),
+        ("logistic", "logistic.jsonl"),
+        ("oracle_correct", "oracle_correct.jsonl"),
+        ("oracle_retrieval", "oracle_retrieval.jsonl"),
+    ):
+        path = results / "signals" / fname
+        if not attach_signals:
+            continue
+        try:
+            rows = read_jsonl(path)
+        except ProtocolError:
+            continue
+        rows = [row for row in rows if in_sample(row, allowed)]
+        validate_rows(rows, ("qid", "arm", "value", "reason"), path)
+        signals[kind] = _index(rows, path)
     joined = []
     arms = ("semantic_search", "graph_first", "keyword_boosted", "hybrid")
     for q in questions:
@@ -217,6 +233,7 @@ def load_joined(results: Path, cfg: dict[str, Any], datasets: Sequence[str] | No
                 "question_type": q["question_type"],
                 "question": q["question"],
                 "answer": gen["answer"],
+                "claim": gen.get("claim"),
                 "self_confidence": gen["self_confidence"],
                 "self_reported": gen["self_reported"],
                 "self_status": gen["self_status"],

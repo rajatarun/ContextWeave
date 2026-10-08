@@ -139,7 +139,10 @@ there is pending, and later stages score only the completed rows.
 
 ## 4. Signals
 
-Lexical grounding, then the local NLI model, then the judge. The judge is a
+Lexical grounding and NLI score the stored claim against each passage and
+against each pair. NLI splits those texts into sentence windows that fit
+512 tokens and records every window it had to cut. Then the judge, then the
+self percentile, the oracles, and the holdout logistic. The judge is a
 separate Bedrock model, `us.meta.llama3-3-70b-instruct-v1:0`.
 
 ```bash
@@ -147,7 +150,20 @@ python3 scripts/experiments/signals.py lexical --seed 0
 python3 scripts/experiments/signals.py nli --seed 0
 python3 scripts/experiments/signals.py judge --dry-run --seed 0
 python3 scripts/experiments/signals.py judge --seed 0 --max-usd 3 --total-usd-cap 29.80
+python3 scripts/experiments/signals.py judge --seed 0 --inference-mode batch --max-usd 3 --total-usd-cap 29.80
+python3 scripts/experiments/signals.py self_percentile --seed 0
+python3 scripts/experiments/signals.py oracle --seed 0
+python3 scripts/experiments/signals.py logistic --seed 0
 ```
+
+The judge sample is a seeded 60% prefix (`v2.judge_sample_rate`). The logistic
+holdout is a seeded 20% prefix on a different stream (`v2.held_out_fraction`).
+Both seeds are the `--seed` value. Batch mode needs `BEDROCK_BATCH_ROLE_ARN`
+and `BEDROCK_BATCH_BUCKET`. The projected cost is checked before the job is
+created. A job smaller than `batch.min_records` is not submitted. Percentile
+and logistic read the whole log; if their output file does not match the
+current rows, move it aside and rerun. Logistic needs the lexical and NLI
+files.
 
 Lexical grounding and calibration, replay, analyses, and `write_results` read
 only the committed sample, the retrieval files, and the generation output.
@@ -197,6 +213,9 @@ python3 scripts/experiments/generate.py --seed 0 --max-usd 1 --total-usd-cap 2 -
 python3 scripts/experiments/signals.py lexical --seed 0 --results "$SMOKE"
 python3 scripts/experiments/signals.py nli --seed 0 --results "$SMOKE"
 python3 scripts/experiments/signals.py judge --seed 0 --max-usd 1 --total-usd-cap 2 --results "$SMOKE"
+python3 scripts/experiments/signals.py self_percentile --seed 0 --results "$SMOKE"
+python3 scripts/experiments/signals.py oracle --seed 0 --results "$SMOKE"
+python3 scripts/experiments/signals.py logistic --seed 0 --results "$SMOKE"
 python3 scripts/experiments/calibrate.py --seed 0 --bootstrap 200 --results "$SMOKE"
 python3 scripts/experiments/replay.py --seeds 0,1 --results "$SMOKE"
 python3 scripts/experiments/analyses.py --seed 0 --bootstrap 200 --results "$SMOKE"
@@ -209,5 +228,5 @@ tables unless the run used the real models and the full sample.
 ## Tests
 
 ```bash
-python3 -m pytest tests/test_experiment_pipeline.py tests/test_experiment_v2.py tests -q
+python3 -m pytest tests/test_experiment_pipeline.py tests/test_experiment_v2.py tests/test_experiment_signals.py tests -q
 ```

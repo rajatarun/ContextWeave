@@ -173,10 +173,9 @@ The generator is asked for JSON `{"answer", "claim", "confidence"}`. The
 prompt is `experiments/prompts/generator_system.txt` and is copied into the
 generation artifact. The saved answer is the `answer` field of the first JSON
 object in the reply. It is never the raw reply. `claim` is the `claim` field
-of that object: one sentence the model asserts, stored so a later grounding
-check can score it. A missing `claim` field is null. An empty string is an
-empty claim. The answer is not copied into the claim. Lexical grounding in
-the current signals stage still scores the answer text. The confidence
+of that object: one sentence the model asserts. Lexical grounding and NLI
+score that stored claim. A missing `claim` field is null. An empty string is
+an empty claim. The claim stays that field. The confidence
 sentence asks for the model's own probability and leaves the number
 unassigned, so the logged self signal stays unshaped, as the deployed
 synthesizer does when it asks for a confidence in [0, 1].
@@ -212,34 +211,82 @@ constants.
 
 ## Grounding, NLI, judge
 
-Lexical grounding is `verified_reward.grounding_signal` with
-`lexical_support` and tau 0.6. A claim is a sentence with at least three
-content tokens, and abstentions are dropped. A claim is supported when some
-retrieved passage reaches tau. Any number in the claim must appear verbatim
-in the passage. The signal is the fraction of claims supported. It is missing
-when there are no passages or no checkable claims; the row records that reason.
+Lexical grounding scores the stored claim with `verified_reward.lexical_support`
+and tau 0.6. `split_claims` keeps sentences with at least three content
+tokens and drops abstentions, so an abstention claim is `no_claims` and a
+null claim is `no_claim`. A sentence is supported when some single retrieved
+passage reaches tau, or when some pair of retrieved passages, joined by a
+newline, reaches tau. Any number in the claim must appear verbatim in that
+text. The signal is the fraction of sentences supported. The row records how
+many were supported by a single passage and how many by a pair. It is missing
+when there are no passages or no checkable sentences.
 
-NLI replaces the lexical verifier with `cross-encoder/nli-deberta-v3-small`.
-The score is the entailment-class probability. The same tau and the same
-missingness rules apply. The artifact records the model revision the library
-reports.
+NLI uses the same claim, the same tau, and the same single-or-pair support
+rule. The score of a text is the entailment-class probability from
+`cross-encoder/nli-deberta-v3-small`, after the text is split into sentence
+windows. A window plus the claim plus `nli_special_tokens` (3, for CLS, SEP,
+and SEP) must fit in `nli_max_tokens` (512), or in the model's own maximum
+when that maximum is smaller. A sentence that does not fit is cut to the
+budget with the model's tokenizer, and the cut is counted. The row stores
+`n_truncated_windows`. The NLI artifact sums those counts
+(`n_truncated_windows`, `n_rows_with_truncation`) and records the limit that
+was used. The model revision the library reports is stored beside them.
 
 The judge prompt is `verified_reward.JUDGE_PROMPT`, copied verbatim into the
-judge artifact. It grades how well the retrieved passages support the answer
-and whether the answer addresses the question. A score of 1.0 means every
-claim is supported and the question is answered. The same prompt scores 1.0
-for an answer that says the evidence is insufficient when the evidence is
-insufficient. The score is that grounding judgement. It is not token-F1
-correctness. Calibration pairs the stored score with token F1 as recorded,
-with no adjustment when the judge scores an abstention 1.0 and correctness
-is 0 because a gold answer existed. The judge model defaults to
-`us.meta.llama3-3-70b-instruct-v1:0`. The run stops if that id equals the
-generator id unless `--allow-same-judge` is passed, and the flag is stored
-either way. Sampling is `verified_reward.should_judge`: SHA-256 of the
-question id, first 8 hex characters as an integer, divided by 2^32, included
-when the value is below `judge_sample_rate` (0.05). The draw does not use
-`--seed`. Every arm of a sampled question is judged. Other questions are
-written with reason `not_sampled`.
+judge artifact. It grades the answer, which is the field the deployed prompt
+names. A score of 1.0 means every claim is supported and the question is
+answered. The same prompt scores 1.0 for an answer that says the evidence is
+insufficient when the evidence is insufficient. The score is that grounding
+judgement. It is not token-F1 correctness. Calibration pairs the stored score
+with token F1 as recorded, with no adjustment when the judge scores an
+abstention 1.0 and correctness is 0 because a gold answer existed. The judge
+model defaults to `us.meta.llama3-3-70b-instruct-v1:0`. The run stops if that
+id equals the generator id unless `--allow-same-judge` is passed, and the
+flag is stored either way.
+
+The experiment sample is a seeded prefix at `v2.judge_sample_rate` (0.60).
+Question ids are sorted, `random.Random(stream_seed)` shuffles them, and the
+sample is the first `take_count(n, rate)` of that order. `take_count` rounds
+`n * rate` half up. The stream seed is SHA-256 of `{seed}:judge`, so the
+holdout draw below is a different shuffle. The artifact stores the seed, the
+stream name, the stream seed, and the sampled ids. A higher rate with the
+same seed keeps the smaller sample as a prefix. Every arm of a sampled
+question is judged. Other questions are written with reason `not_sampled`.
+`judge_sampled` remains the deployed hash sample (`verified_reward.should_judge`)
+and does not use the run seed. The deployed router rate stays
+`judge_sample_rate` 0.05.
+
+`--inference-mode on_demand` calls Converse per sampled row.
+`--inference-mode batch` writes InvokeModel JSONL and calls
+`create_model_invocation_job`, reusing `experiments/bedrock_batch.py`. The
+projected batch cost is checked before the job is created. A job under
+`batch.min_records` is not submitted and is not padded. Evidence longer than
+12,000 characters is cut, and the row records `evidence_truncated`.
+
+## Self percentile, logistic, oracles
+
+`self_percentile` is the fraction of other ok confidences in the same dataset
+that fall below this row, with ties counting half. A non-ok status is stored
+with that status as the reason. A dataset with no other ok confidence is
+`no_peers`. The value is a function of the whole log, so a file that does not
+already match the current rows is refused.
+
+`logistic` fits one model per dataset on the questions outside a seeded 20%
+holdout (`v2.held_out_fraction`, stream `{seed}:holdout`). The training label
+is token-F1 correctness. The features are `self` (ok confidence), `lexical`,
+and `nli`, in that order, the three signals present on every complete row.
+Holdout rows get the
+predicted probability. Fit-fold rows are stored with reason `fit_fold` and a
+null value. A row missing a feature is `feature_missing` and is left out of
+the fit. One class, fewer rows than coefficients, or collinear features stops
+the stage. The artifact stores the seed, the holdout ids, and the
+coefficients. There is no random step inside the fit.
+
+`oracle` writes two files and does not call a model. `oracle_correct` is the
+token-F1 label, the same rule as the joined `correct` field.
+`oracle_retrieval` is 1 when `source_retrieved` is true. A retrieval row
+without that field stops the stage. The row also keeps `gold_in_top_k` so a
+partial source hit can be counted later.
 
 The verified reward is `verified_reward.combine`: grounding weight 1, judge
 weight 2, and missing when neither was observed. `verified+self` adds

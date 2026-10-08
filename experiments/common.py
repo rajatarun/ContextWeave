@@ -57,6 +57,7 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
         "keyword_weight", "bm25_k1", "bm25_b", "bootstrap_samples",
         "replay_seeds", "high_coverage", "low_auroc_max",
         "nq_window_chars", "nq_overlap_chars", "nq_pool_size",
+        "nli_max_tokens", "nli_special_tokens",
         "normalized_self_gap_fraction", "total_usd_cap",
         "batch_prices_usd_per_million_tokens", "inference_mode", "batch",
         "spacy_model", "graph_damping", "graph_max_iter", "graph_tol",
