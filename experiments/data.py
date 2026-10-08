@@ -1,22 +1,30 @@
-"""Dataset download, candidate pools, and the seeded question sample.
+"""Dataset download, the shared passage collection, and the seeded question sample.
 
-Pools are built from each dataset's own context. This is closed-pool retrieval:
-the gold passage is inside the pool. It is not retrieval over Wikipedia at large.
+Each dataset has one passage collection: every context paragraph in the dev
+split. Every question, and every retrieval arm, ranks that same collection.
+The gold passage is inside it because the collection is the split the
+question came from. This is not retrieval over Wikipedia at large.
 
-* SQuAD 2.0 validation. The pool is every distinct context paragraph in the
-  validation split that shares the question's article title. Paragraphs that
-  are never a question's context are absent from the split, so they are absent
-  here too.
-* HotpotQA distractor validation. The pool is the ten paragraphs shipped with
-  the question. ``bridge`` and ``comparison`` are kept as question types.
+* SQuAD 2.0 validation. One passage per distinct ``(title, context)``. The
+  question's source passage is that context paragraph. ``question_type`` is
+  ``squad``. An empty gold list is unanswerable.
+* HotpotQA distractor validation. One passage per distinct paragraph text.
+  The source passages are the supporting-fact titles. ``question_type`` is
+  ``hotpot``. ``bridge`` and ``comparison`` stay on ``hotpot_type``. A yes/no
+  answer is kept and ``yes_no`` is true.
 * Natural Questions, tractable form: the MRQA 2019 in-domain dev file
-  ``NaturalQuestionsShort.jsonl.gz`` (gold short answers, Wikipedia context
-  truncated to the first 800 tokens, kept when the short answer is inside that
-  window). The context is split into overlapping character windows. That file
-  has no more of the Wikipedia page, and most contexts fit in one or two
-  windows, so the pool is filled out to ``nq_pool_size`` with hard-negative
-  windows. Negatives are the top BM25 hits from other documents in the same
-  seeded sample, tie-broken by passage id. Every gold window stays in the pool.
+  ``NaturalQuestionsShort.jsonl.gz``. Each context is split into overlapping
+  character windows, and every window in the file is in the collection. The
+  source passages are the windows that contain a gold answer string.
+  ``question_type`` is ``nq``.
+
+Question type is the dataset name. The sample is a seeded prefix: sort by
+qid, ``random.Random(seed)`` shuffles, and ``n`` is the first ``n`` of that
+order. A smaller ``n`` with the same seed is that prefix. A manifest that is
+not schema version 2 is refused. v1 per-question pools are not reused.
+
+``expand_nq_pools`` remains for the older per-question hard-negative helper.
+The v2 sample does not call it.
 """
 from __future__ import annotations
 
@@ -25,9 +33,8 @@ import hashlib
 import json
 import random
 import urllib.request
-from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from experiments.common import (
     DATASETS, ProtocolError, artifact_meta, read_json, read_jsonl, sha256_file, write_json,
@@ -91,57 +98,62 @@ def _record(dataset: str, qid: str, question: str, question_type: str,
     }
 
 
-def load_squad(cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    try:
-        from datasets import load_dataset
-    except ImportError as exc:
-        raise ProtocolError("datasets is not installed; pip install -r experiments/requirements.txt") from exc
-    spec = cfg["datasets"]["squad"]
-    ds = load_dataset(spec["huggingface"], split=spec["split"])
-    by_title: dict[str, list[dict[str, str]]] = {}
-    seen: dict[str, set[str]] = defaultdict(set)
-    rows = []
-    for row in ds:
+def _question(
+    dataset: str, qid: str, question: str, gold: list[str], unanswerable: bool,
+    source_ids: Sequence[str], *, yes_no: bool, hotpot_type: str | None,
+) -> dict[str, Any]:
+    if not qid:
+        raise ProtocolError(f"{dataset}: a question has an empty id")
+    if not source_ids:
+        raise ProtocolError(f"{dataset}:{qid}: source_passage_ids is empty")
+    if unanswerable and gold:
+        raise ProtocolError(f"{dataset}:{qid}: unanswerable question carried gold answers")
+    return {
+        "qid": qid,
+        "dataset": dataset,
+        "question": question,
+        "question_type": dataset,
+        "gold_answers": list(gold),
+        "unanswerable": bool(unanswerable),
+        "source_passage_ids": list(source_ids),
+        "yes_no": bool(yes_no),
+        "hotpot_type": hotpot_type,
+        "schema_version": 2,
+    }
+
+
+def squad_collection(examples: Sequence[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """One passage per distinct SQuAD ``(title, context)``. Source is that paragraph."""
+    passages_by_key: dict[str, dict[str, str]] = {}
+    questions = []
+    for row in examples:
         title = row["title"]
         context = row["context"]
-        if context not in seen[title]:
-            seen[title].add(context)
-            by_title.setdefault(title, []).append({
-                "id": _pid("squad", title + "\n" + context),
-                "title": title,
-                "text": context,
-            })
+        key = title + "\n" + context
+        passage = passages_by_key.get(key)
+        if passage is None:
+            passage = {"id": _pid("squad", key), "title": title, "text": context}
+            passages_by_key[key] = passage
         answers = list(row["answers"]["text"])
         unanswerable = len(answers) == 0
-        rows.append(_record(
+        questions.append(_question(
             "squad", row["id"], row["question"],
-            "unanswerable" if unanswerable else "answerable",
             [] if unanswerable else answers,
-            unanswerable, list(by_title[title]),
+            unanswerable, [passage["id"]], yes_no=False, hotpot_type=None,
         ))
-    # Pools were snapshotted as the file was scanned, so earlier questions in an
-    # article saw a shorter pool. Rebuild each pool from the finished article.
-    for rec in rows:
-        title = rec["pool"][0]["title"]
-        rec["pool"] = list(by_title[title])
-    info = {
-        "name": spec["huggingface"],
-        "split": spec["split"],
-        "n_raw": len(rows),
-        "fingerprint": getattr(ds, "_fingerprint", None),
-    }
-    return rows, info
+    passages = sorted(passages_by_key.values(), key=lambda p: p["id"])
+    return questions, passages
 
 
-def load_hotpot(cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    try:
-        from datasets import load_dataset
-    except ImportError as exc:
-        raise ProtocolError("datasets is not installed; pip install -r experiments/requirements.txt") from exc
-    spec = cfg["datasets"]["hotpot"]
-    ds = load_dataset(spec["huggingface"], spec["config"], split=spec["split"])
-    rows = []
-    for row in ds:
+def hotpot_collection(examples: Sequence[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """One passage per distinct Hotpot paragraph. Source ids are the supporting facts.
+
+    Yes/no answers are kept. ``yes_no`` is true when the gold answer is yes or no.
+    ``question_type`` is ``hotpot``; ``bridge`` / ``comparison`` stay on ``hotpot_type``.
+    """
+    passages_by_key: dict[str, dict[str, str]] = {}
+    questions = []
+    for row in examples:
         qtype = row["type"]
         if qtype not in ("bridge", "comparison"):
             raise ProtocolError(f"hotpot question {row['id']} has unexpected type {qtype!r}")
@@ -150,25 +162,128 @@ def load_hotpot(cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, An
         sentences = ctx["sentences"]
         if len(titles) != len(sentences):
             raise ProtocolError(f"hotpot question {row['id']} has mismatched context columns")
-        pool = []
+        by_title: dict[str, str] = {}
         for title, sents in zip(titles, sentences):
             text = title + "\n" + " ".join(sents)
-            pool.append({
-                "id": _pid("hotpot", row["id"] + "\n" + title + "\n" + text),
-                "title": title,
-                "text": text,
-            })
+            key = title + "\n" + text
+            passage = passages_by_key.get(key)
+            if passage is None:
+                passage = {"id": _pid("hotpot", key), "title": title, "text": text}
+                passages_by_key[key] = passage
+            if title in by_title and by_title[title] != passage["id"]:
+                raise ProtocolError(f"hotpot question {row['id']} repeats title {title!r} with two texts")
+            by_title[title] = passage["id"]
+        support = list((row.get("supporting_facts") or {}).get("title") or [])
+        source: list[str] = []
+        for title in support:
+            if title not in by_title:
+                raise ProtocolError(
+                    f"hotpot question {row['id']}: supporting title {title!r} is not in the context"
+                )
+            pid = by_title[title]
+            if pid not in source:
+                source.append(pid)
+        if not source:
+            raise ProtocolError(f"hotpot question {row['id']}: no supporting-fact paragraphs")
         answer = row["answer"]
         gold = [] if answer is None or answer == "" else [answer]
-        rows.append(_record("hotpot", row["id"], row["question"], qtype, gold, not gold, pool))
+        yes_no = isinstance(answer, str) and answer.strip().casefold() in {"yes", "no"}
+        questions.append(_question(
+            "hotpot", row["id"], row["question"], gold, not gold, source,
+            yes_no=yes_no, hotpot_type=qtype,
+        ))
+    passages = sorted(passages_by_key.values(), key=lambda p: p["id"])
+    return questions, passages
+
+
+def nq_collection(
+    objects: Sequence[dict[str, Any]], window: int, overlap: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]], int]:
+    """Every MRQA window is in the collection. Source windows contain a gold string."""
+    passages_by_id: dict[str, dict[str, str]] = {}
+    questions = []
+    n_contexts = 0
+    for obj in objects:
+        context = obj.get("context") or ""
+        pieces = chunk_windows(context, window, overlap)
+        if not pieces:
+            raise ProtocolError("nq context produced no windows")
+        n_contexts += 1
+        window_ids = []
+        for i, piece in enumerate(pieces):
+            pid = _pid("nq", context + f"\n{i}")
+            previous = passages_by_id.get(pid)
+            if previous is None:
+                passages_by_id[pid] = {"id": pid, "title": "", "text": piece}
+            elif previous["text"] != piece:
+                raise ProtocolError(f"nq passage {pid} has two different texts")
+            window_ids.append(pid)
+        for qa in obj["qas"]:
+            qid = str(qa["qid"])
+            gold = [a for a in qa.get("answers") or [] if isinstance(a, str) and a.strip()]
+            if not gold:
+                raise ProtocolError(
+                    f"nq {qid}: no gold answer. Refusing to guess which window is the source."
+                )
+            source = [
+                pid for pid in window_ids
+                if any(answer in passages_by_id[pid]["text"] for answer in gold)
+            ]
+            if not source:
+                raise ProtocolError(
+                    f"nq {qid}: no window contains a gold answer. "
+                    "Refusing to mark a different window as the source."
+                )
+            questions.append(_question(
+                "nq", qid, qa["question"], gold, False, source,
+                yes_no=False, hotpot_type=None,
+            ))
+    passages = sorted(passages_by_id.values(), key=lambda p: p["id"])
+    return questions, passages, n_contexts
+
+
+def _require_datasets():
+    try:
+        from datasets import load_dataset
+    except ImportError as exc:
+        raise ProtocolError(
+            "datasets is not installed; pip install -r experiments/requirements.txt"
+        ) from exc
+    return load_dataset
+
+
+def load_squad(cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, str]], dict[str, Any]]:
+    load_dataset = _require_datasets()
+    spec = cfg["datasets"]["squad"]
+    ds = load_dataset(spec["huggingface"], split=spec["split"])
+    questions, passages = squad_collection(ds)
+    info = {
+        "name": spec["huggingface"],
+        "split": spec["split"],
+        "n_raw": len(questions),
+        "n_passages": len(passages),
+        "collection": "shared_dev_split",
+        "fingerprint": getattr(ds, "_fingerprint", None),
+    }
+    return questions, passages, info
+
+
+def load_hotpot(cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, str]], dict[str, Any]]:
+    load_dataset = _require_datasets()
+    spec = cfg["datasets"]["hotpot"]
+    ds = load_dataset(spec["huggingface"], spec["config"], split=spec["split"])
+    questions, passages = hotpot_collection(ds)
     info = {
         "name": spec["huggingface"],
         "config": spec["config"],
         "split": spec["split"],
-        "n_raw": len(rows),
+        "n_raw": len(questions),
+        "n_passages": len(passages),
+        "collection": "shared_dev_split",
         "fingerprint": getattr(ds, "_fingerprint", None),
+        "n_yes_no": sum(1 for q in questions if q["yes_no"]),
     }
-    return rows, info
+    return questions, passages, info
 
 
 def _download(url: str, dest: Path, md5_hex: str) -> None:
@@ -190,7 +305,9 @@ def _download(url: str, dest: Path, md5_hex: str) -> None:
         )
 
 
-def load_nq(cfg: dict[str, Any], cache_dir: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def load_nq(
+    cfg: dict[str, Any], cache_dir: Path,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]], dict[str, Any]]:
     spec = cfg["datasets"]["nq"]
     url = spec["url"]
     md5_hex = spec["md5"]
@@ -200,8 +317,7 @@ def load_nq(cfg: dict[str, Any], cache_dir: Path) -> tuple[list[dict[str, Any]],
     _download(url, dest, md5_hex)
     window = int(cfg["nq_window_chars"])
     overlap = int(cfg["nq_overlap_chars"])
-    rows = []
-    n_lines = 0
+    objects = []
     with gzip.open(dest, "rt", encoding="utf-8") as fh:
         for line in fh:
             if not line.strip():
@@ -210,40 +326,27 @@ def load_nq(cfg: dict[str, Any], cache_dir: Path) -> tuple[list[dict[str, Any]],
             if "qas" not in obj:
                 # The MRQA files start with a header object.
                 continue
-            n_lines += 1
-            context = obj.get("context") or ""
-            pieces = chunk_windows(context, window, overlap)
-            source = _pid("nq-src", context)
-            pool = [{
-                "id": _pid("nq", context + f"\n{i}"),
-                "title": "",
-                "text": piece,
-                "source": source,
-                "role": "gold",
-            } for i, piece in enumerate(pieces)]
-            for qa in obj["qas"]:
-                gold = [a for a in qa.get("answers") or [] if isinstance(a, str) and a.strip()]
-                rows.append(_record(
-                    "nq", str(qa["qid"]), qa["question"], "nq", gold, not gold, pool,
-                ))
+            objects.append(obj)
+    questions, passages, n_contexts = nq_collection(objects, window, overlap)
     info = {
         "name": "mrqa-natural-questions-short-dev",
         "url": url,
         "md5": md5_hex,
-        "n_contexts": n_lines,
-        "n_raw": len(rows),
+        "n_contexts": n_contexts,
+        "n_raw": len(questions),
+        "n_passages": len(passages),
+        "collection": "shared_dev_split",
         "window_chars": window,
         "overlap_chars": overlap,
         "limitation": (
             "Wikipedia context is the MRQA truncation (first 800 tokens, answer "
             "inside the window), then split into overlapping character windows. "
-            "The full Wikipedia page is not in this file. The candidate pool "
-            "keeps every gold window and adds BM25 hard-negative windows from "
-            "other documents in the seeded sample until the pool reaches "
-            "nq_pool_size. Ranking ties break by passage id."
+            "The full Wikipedia page is not in this file. The shared collection "
+            "is every window in the dev file. A question's source passages are "
+            "the windows that contain a gold answer string."
         ),
     }
-    return rows, info
+    return questions, passages, info
 
 
 def expand_nq_pools(rows: list[dict[str, Any]], target: int, k1: float, b: float) -> dict[str, Any]:
@@ -337,9 +440,11 @@ SAMPLE_ORDER = (
     "Questions are sorted by qid, then random.Random(seed) shuffles those "
     "positions. The sample is the first n_per_dataset of that order and is "
     "written sorted by qid. A smaller n with the same seed is that prefix. "
-    "When a larger sample with this seed is already on disk, the prefix keeps "
-    "the previously written rows, including NQ pools, so retrieval for those "
-    "questions still matches. The seed is stored on this manifest."
+    "The passage collection is the full dev split and does not shrink with n. "
+    "When a larger schema-version-2 sample with this seed is already on disk, "
+    "the prefix keeps the previously written question rows. A manifest that "
+    "is not schema version 2 is refused: v1 per-question pools are not reused. "
+    "The seed is stored on this manifest."
 )
 
 
@@ -430,6 +535,29 @@ def write_sample(rows: list[dict[str, Any]], path: Path) -> None:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def passages_path(samples_dir: Path, dataset: str) -> Path:
+    return samples_dir / f"{dataset}.passages.jsonl"
+
+
+def _passage_rows(passages: Sequence[dict[str, str]]) -> list[dict[str, str]]:
+    ordered = sorted(passages, key=lambda p: p["id"])
+    seen: set[str] = set()
+    for passage in ordered:
+        pid = passage.get("id")
+        if not pid or pid in seen:
+            raise ProtocolError(f"shared collection passage id {pid!r} is missing or duplicated")
+        if "text" not in passage:
+            raise ProtocolError(f"shared collection passage {pid} has no text")
+        seen.add(pid)
+    return [{"id": p["id"], "title": p.get("title") or "", "text": p["text"]} for p in ordered]
+
+
+def _same_passages(left: Sequence[dict[str, str]], right: Sequence[dict[str, str]]) -> bool:
+    def key(row: dict[str, str]) -> tuple[str, str, str]:
+        return (row["id"], row.get("title") or "", row["text"])
+    return sorted(map(key, left)) == sorted(map(key, right))
+
+
 def _qid_list(manifest: dict[str, Any], dataset: str) -> list[str] | None:
     for block in manifest.get("qids") or []:
         if block.get("dataset") == dataset:
@@ -438,12 +566,38 @@ def _qid_list(manifest: dict[str, Any], dataset: str) -> list[str] | None:
     return None
 
 
+def _check_question_rows(rows: Sequence[dict[str, Any]], passages: Sequence[dict[str, str]], dataset: str) -> None:
+    known = {p["id"] for p in passages}
+    for row in rows:
+        if row.get("schema_version") != 2:
+            raise ProtocolError(
+                f"{dataset}:{row.get('qid')}: question row is not schema_version 2. "
+                "v1 rows are not reused."
+            )
+        if row.get("question_type") != dataset:
+            raise ProtocolError(
+                f"{dataset}:{row.get('qid')}: question_type is {row.get('question_type')!r}. "
+                "v2 question_type is the dataset name."
+            )
+        missing = [pid for pid in row.get("source_passage_ids") or [] if pid not in known]
+        if not row.get("source_passage_ids") or missing:
+            raise ProtocolError(
+                f"{dataset}:{row.get('qid')}: source passage is not in the shared collection"
+            )
+
+
 def build_sample(cfg: dict[str, Any], results: Path, n: int, seed: int,
                  datasets: tuple[str, ...] = DATASETS) -> dict[str, Any]:
     cache = results / "cache"
     out_dir = results / "samples"
     manifest_path = out_dir / "sample_manifest.json"
     previous = read_json(manifest_path) if manifest_path.is_file() else None
+    if previous is not None and previous.get("schema_version") != 2:
+        raise ProtocolError(
+            "results/samples/sample_manifest.json is not schema_version 2. "
+            "v1 per-question pools and v1 generation rows are not reused. "
+            "Move that samples directory aside and rerun."
+        )
     per_info = {}
     counts = {}
     all_qids = []
@@ -460,9 +614,10 @@ def build_sample(cfg: dict[str, Any], results: Path, n: int, seed: int,
     shrunk_from: dict[str, int] = {}
     for name in requested:
         if name == "nq":
-            rows, info = load_nq(cfg, cache)
+            rows, passages, info = load_nq(cfg, cache)
         else:
-            rows, info = LOADERS[name](cfg)
+            rows, passages, info = LOADERS[name](cfg)
+        passages = _passage_rows(passages)
         picked = sample_rows(rows, n, seed, name)
         preserved = False
         if previous is not None and previous.get("seed") == seed:
@@ -483,26 +638,39 @@ def build_sample(cfg: dict[str, Any], results: Path, n: int, seed: int,
                 if kept is None:
                     raise ProtocolError(
                         f"{name}: the first {n} questions of the seed-{seed} shuffle "
-                        f"are not all in {path.name}. Refusing to rebuild pools for a committed sample."
+                        f"are not all in {path.name}. Refusing to rebuild a committed sample."
                     )
+                on_disk = passages_path(out_dir, name)
+                if not on_disk.is_file():
+                    raise ProtocolError(
+                        f"{name}: question rows were kept and {on_disk.name} is missing. "
+                        "Refusing to rebuild the shared collection under a committed sample."
+                    )
+                disk_passages = read_jsonl(on_disk)
+                if not _same_passages(disk_passages, passages):
+                    raise ProtocolError(
+                        f"{name}: the shared passage collection changed under seed {seed}. "
+                        "Refusing to replace a committed sample."
+                    )
+                passages = _passage_rows(disk_passages)
                 picked = kept
                 preserved = True
                 shrunk_from[name] = old_n
-        if name == "nq":
-            if preserved:
-                info.update(summarize_nq_pools(picked, int(cfg["nq_pool_size"])))
-            else:
-                pool_info = expand_nq_pools(
-                    picked, int(cfg["nq_pool_size"]), float(cfg["bm25_k1"]), float(cfg["bm25_b"]),
-                )
-                info.update(pool_info)
-        prepared.append((name, picked, info, preserved))
-    for name, picked, info, preserved in prepared:
+        _check_question_rows(picked, passages, name)
+        info["n_yes_no"] = sum(1 for row in picked if row.get("yes_no"))
+        info["n_passages"] = len(passages)
+        prepared.append((name, picked, passages, info, preserved))
+    for name, picked, passages, info, preserved in prepared:
         path = out_dir / f"{name}.jsonl"
         write_sample(picked, path)
+        ppath = passages_path(out_dir, name)
+        write_sample(passages, ppath)
         info["sha256"] = sha256_file(path)
+        info["passages_sha256"] = sha256_file(ppath)
         info["n_sampled"] = len(picked)
         info["path"] = str(path.relative_to(results.parent)) if path.is_absolute() else str(path)
+        info["passages_path"] = str(ppath.relative_to(results.parent)) if ppath.is_absolute() else str(ppath)
+        info["collection"] = "shared_dev_split"
         if preserved:
             info["rows_kept_from_previous_sample"] = True
         per_info[name] = info
@@ -526,10 +694,13 @@ def build_sample(cfg: dict[str, Any], results: Path, n: int, seed: int,
     all_qids.sort(key=lambda block: DATASETS.index(block["dataset"]))
     manifest = artifact_meta(
         cfg, seed,
+        schema_version=2,
         n_per_dataset=n,
         datasets=per_info,
         counts=counts,
         stage="sample",
+        collection="shared_dev_split",
+        question_type="dataset",
         sampling={
             "seed": seed,
             "n_per_dataset": n,
@@ -537,8 +708,6 @@ def build_sample(cfg: dict[str, Any], results: Path, n: int, seed: int,
             "prefix_of_n": shrunk_from or None,
         },
     )
-    # qids are part of the manifest so the sample can be checked without
-    # re-reading every pool.
     manifest["qids"] = all_qids
     write_json(out_dir / "sample_manifest.json", manifest)
     return manifest

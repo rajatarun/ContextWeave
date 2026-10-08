@@ -69,15 +69,21 @@ def reprice_rows(cfg: dict[str, Any], rows: list[dict[str, Any]], when: str,
         model_id = row.get("model_id")
         if not isinstance(model_id, str) or not model_id:
             raise ProtocolError(f"{place}: missing model_id. Refusing to guess a price.")
-        price = price_for(cfg, model_id)
+        pricing = row.get("pricing") or "on_demand"
+        if pricing not in ("on_demand", "batch"):
+            raise ProtocolError(
+                f"{place}: pricing is {pricing!r}. Expected on_demand or batch."
+            )
+        price = price_for(cfg, model_id, pricing)
         in_tok = _token_count(row, "input_tokens", place)
         out_tok = _token_count(row, "output_tokens", place)
         old_usd = _logged_usd(row, place)
-        new_usd = cost_usd(cfg, model_id, in_tok, out_tok)
+        new_usd = cost_usd(cfg, model_id, in_tok, out_tok, pricing)
         body = dict(row)
         if body.get("usd_at_logged_price") is None:
             body["usd_at_logged_price"] = old_usd
         body["usd"] = new_usd
+        body["pricing"] = pricing
         body["price_usd_per_million"] = {
             "input": float(price["input"]),
             "output": float(price["output"]),
