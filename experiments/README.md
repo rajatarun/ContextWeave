@@ -20,6 +20,10 @@ artifacts; a missing artifact is an empty cell marked pending.
 | Calibration | `scripts/experiments/calibrate.py` | no |
 | Replay | `scripts/experiments/replay.py` | no |
 | Analyses | `scripts/experiments/analyses.py` | no |
+| Subset | `scripts/experiments/subset.py` | Haiku and Nova only |
+| Study | `scripts/experiments/study.py` | no |
+| Projection | `scripts/experiments/project_cost.py` | no |
+| Runner | `scripts/experiments/run_all.py` | the model stages |
 | Tables | `scripts/experiments/write_results.py` | no |
 
 Commands, in order, are in `RUNBOOK.md`.
@@ -412,6 +416,49 @@ counts stops the run. An error line with no usage stores zero tokens and
 Throttling is retried with backoff. `ValidationException` is stored on that
 row. `AccessDenied` stops the process. Five identical validation messages in
 a row also stop the process.
+
+## Subset, second generator, and the study
+
+`subset.py select` draws `v2.subset_questions` (250) question ids per dataset.
+The shuffle stream is `subset:{dataset}`. A dataset with fewer questions than
+that stops the run.
+
+`subset.py haiku` draws `v2.subset_haiku_samples` (5) answers at
+`v2.subset_temperature` (1) with the generator model. Each sample has its own
+file under `results/subset/haiku/sample_{i}/`. The run seed and the sample
+index are stored on `meta.json`. The request itself has no seed parameter.
+`subset.py agreement` writes `results/subset/agreement.json`. The modal
+fraction uses SQuAD normalisation. A question that is missing any sample
+leaves the means null.
+
+`subset.py nova` calls `subset_generator_model_id`
+(`us.amazon.nova-pro-v1:0`) once per subset question and arm, at temperature
+0. `--inference-mode batch` and `--inference-mode on_demand` both go through
+the generation stage. A batch smaller than `batch.min_records` is not
+submitted and is not padded.
+
+`study.py` reads the joined log and writes `results/study/study.json`. It
+records `s^2 / Var(R)`, `s^2 / (m(1-m))`, and information per round
+(`s^2` over the residual variance). `m` is the mean of joined correct on rows
+where the reward was observed. Beta and Gaussian Thompson sampling run for
+`v2.replay_seeds` seeds and `v2.replay_rounds` rounds, with drift discounts
+`v2.drift_discounts`. Judge coverage uses `v2.judge_coverage` and recomputes
+the verified reward. The assumption check is the same cluster-bootstrap
+comparison the analyses stage writes. A missing subset, agreement, judge, or
+Nova file becomes a null block with a reason. The short replay in
+`replay.py` keeps the top-level `replay_seeds` list.
+
+`project_cost.py` prints call counts and on-demand and batch USD from the
+config prices before any model call. Input tokens are the prompt template
+with a placeholder question and no passage text. Output tokens are the
+configured maximum. Adjudication calls stay pending until the token-F1 band
+has been counted. `--write` stores `results/cost_projection.json`.
+
+`run_all.py` prints that projection, then runs the stages in order.
+`--project-only` stops after the print. A real run requires `--max-usd`.
+
+`write_results.py` copies these artifacts into `results/FINDINGS.md`. A
+missing file or a null estimate is the cell text `pending`.
 
 ## Randomness and metadata
 

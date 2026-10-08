@@ -215,6 +215,30 @@ python3 scripts/experiments/analyses.py --seed 0 --bootstrap 1000
 python3 scripts/experiments/write_results.py --seed 0
 ```
 
+## 7. Projection, subset, and the study
+
+Print the projection before spending. `n` and the judge rate default to the
+config (`n_per_dataset` 1100, `v2.judge_sample_rate` 0.60).
+
+```bash
+python3 scripts/experiments/project_cost.py --n 1100 --judge-rate 0.6
+python3 scripts/experiments/subset.py select --seed 0
+python3 scripts/experiments/subset.py haiku --seed 0 --max-usd 5 --inference-mode on_demand
+python3 scripts/experiments/subset.py nova --seed 0 --max-usd 5 --inference-mode batch
+python3 scripts/experiments/subset.py agreement --seed 0
+python3 scripts/experiments/study.py --seed 0
+```
+
+The study defaults are 500 seeds and 10000 rounds. A short run passes
+`--seeds` and `--rounds`. `run_all.py` prints the projection and then runs
+the stages. It needs `--max-usd` before any model stage starts.
+`--project-only` prints the projection and exits.
+
+```bash
+python3 scripts/experiments/run_all.py --project-only --n 1100 --judge-rate 0.6
+python3 scripts/experiments/run_all.py --seed 0 --max-usd 29 --inference-mode on_demand
+```
+
 Replay writes `results/replay/replay_summary.json`, a CSV of cumulative
 regret per seed, and a PNG per dataset and update rule.
 `results/FINDINGS.md` and `results/PENDING.md` are overwritten from the
@@ -250,5 +274,5 @@ tables unless the run used the real models and the full sample.
 ## Tests
 
 ```bash
-python3 -m pytest tests/test_experiment_pipeline.py tests/test_experiment_v2.py tests/test_experiment_signals.py tests/test_experiment_labels.py tests -q
+python3 -m pytest tests/test_experiment_pipeline.py tests/test_experiment_v2.py tests/test_experiment_signals.py tests/test_experiment_labels.py tests/test_experiment_study.py tests -q
 ```
