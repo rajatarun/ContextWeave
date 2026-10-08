@@ -1,12 +1,13 @@
-"""One spend ledger for generation and the judge.
+"""One spend ledger for generation, the judge, and adjudication.
 
-Both stages append a row per paid call to ``results/cost_ledger.jsonl`` (or
-``.jsonl.gz``). Before a call, a stage refuses to proceed when its own
-``--max-usd`` or the global ``--total-usd-cap`` (default 30) would be crossed.
-The cap check uses the estimate; the row that was already paid for is kept.
+Generation, the judge, and adjudication append a row per paid call to
+``results/cost_ledger.jsonl`` (or ``.jsonl.gz``). Before a call, a stage
+refuses to proceed when its own ``--max-usd`` or the global
+``--total-usd-cap`` (default 30) would be crossed. The cap check uses the
+estimate; the row that was already paid for is kept.
 
-The cap sums each row's ``usd``. Generation and the judge write that field
-from the current config price and the call's token counts.
+The cap sums each row's ``usd``. Those stages write that field from the
+current config price and the call's token counts.
 ``scripts/experiments/reprice_ledger.py`` rewrites ``usd`` the same way after
 a price change, so the cap tracks the bill.
 """

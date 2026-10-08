@@ -100,12 +100,12 @@ parse stays in `deployed_self_status` and is what the fallback row uses.
 Rows already written are skipped. A generation file whose rows are not
 schema version 2 is refused.
 
-An abstention is `abstain_correct`, and counts as correct on
-`abstention_counts_correct`, only when `source_retrieved` is true and the
-question is unanswerable. When a source passage is missing from the top-k,
-the label is `abstain_retrieval_miss` and it does not count as correct. When
-the source was retrieved and the question is answerable, the label is
-`abstain_incorrect`. The joined token-F1 `correct` field is unchanged.
+An abstention is `abstain_correct`, and the joined `correct` bit is 1, only
+when `source_retrieved` is true and the question is unanswerable. When a
+source passage is missing from the top-k, the label is
+`abstain_retrieval_miss` and `correct` is 0. When the source was retrieved
+and the question is answerable, the label is `abstain_incorrect` and
+`correct` is 0. `token_f1_correct` keeps the 0.5 threshold on the same row.
 Ledger rows record `pricing` so a batch call is billed from the batch table.
 
 Generation and the judge share `results/cost_ledger.jsonl` (gzipped when the
@@ -137,7 +137,27 @@ already wrote, and lists the rest in `results/generation/pending.json` or
 `results/signals/judge_pending.json`. That stop is not an error. A row named
 there is pending, and later stages score only the completed rows.
 
-## 4. Signals
+## 4. Adjudication
+
+Token F1 inside `[0.2, 0.8]` (both ends included), on a non-abstention, is
+adjudicated by `openai.gpt-oss-120b-1:0` on demand. Temperature is 0. The
+seed is stored on the artifact and on every row. Each row stores the system
+prompt, the user prompt, and the raw reply.
+
+```bash
+python3 scripts/experiments/adjudicate.py --dry-run --seed 0
+python3 scripts/experiments/adjudicate.py --seed 0 --max-usd 1 --total-usd-cap 29.80
+```
+
+The dry-run prices an upper bound and does not call the model. A real run
+checks the shared ledger before each call. A reply that is not
+`{"correct": true}` or `{"correct": false}` is stored as `unparseable` and
+the script exits non-zero. Access denied writes
+`results/adjudication/adjudicator_unavailable.json` and exits non-zero. Rows
+already written for this seed are skipped. A file written under another seed
+is refused.
+
+## 5. Signals
 
 Lexical grounding and NLI score the stored claim against each passage and
 against each pair. NLI splits those texts into sentence windows that fit
@@ -183,7 +203,7 @@ prompt contains the generated answer and the dry-run does not invent one.
 Pass `--allow-same-judge` only if you intentionally set the judge id equal to
 the generator id. The flag is recorded in `results/signals/judge_meta.json`.
 
-## 5. Calibration, replay, analyses, tables
+## 6. Calibration, replay, analyses, tables
 
 These read the files above. If a signal file is missing they stop, and
 `write_results.py` leaves the corresponding cells pending.
@@ -210,6 +230,8 @@ python3 scripts/experiments/sample_datasets.py --seed 0 --n-per-dataset 10 --res
 python3 scripts/experiments/retrieve.py --seed 0 --results "$SMOKE"
 python3 scripts/experiments/generate.py --dry-run --seed 0 --results "$SMOKE"
 python3 scripts/experiments/generate.py --seed 0 --max-usd 1 --total-usd-cap 2 --results "$SMOKE"
+python3 scripts/experiments/adjudicate.py --dry-run --seed 0 --results "$SMOKE"
+python3 scripts/experiments/adjudicate.py --seed 0 --max-usd 1 --total-usd-cap 2 --results "$SMOKE"
 python3 scripts/experiments/signals.py lexical --seed 0 --results "$SMOKE"
 python3 scripts/experiments/signals.py nli --seed 0 --results "$SMOKE"
 python3 scripts/experiments/signals.py judge --seed 0 --max-usd 1 --total-usd-cap 2 --results "$SMOKE"
@@ -228,5 +250,5 @@ tables unless the run used the real models and the full sample.
 ## Tests
 
 ```bash
-python3 -m pytest tests/test_experiment_pipeline.py tests/test_experiment_v2.py tests/test_experiment_signals.py tests -q
+python3 -m pytest tests/test_experiment_pipeline.py tests/test_experiment_v2.py tests/test_experiment_signals.py tests/test_experiment_labels.py tests -q
 ```

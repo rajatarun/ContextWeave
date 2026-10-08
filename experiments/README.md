@@ -15,6 +15,7 @@ artifacts; a missing artifact is an empty cell marked pending.
 | Sample | `scripts/experiments/sample_datasets.py` | no |
 | Retrieval | `scripts/experiments/retrieve.py` | no |
 | Generation | `scripts/experiments/generate.py` | yes, except `--dry-run` |
+| Adjudication | `scripts/experiments/adjudicate.py` | yes, except `--dry-run` |
 | Signals | `scripts/experiments/signals.py` | judge only |
 | Calibration | `scripts/experiments/calibrate.py` | no |
 | Replay | `scripts/experiments/replay.py` | no |
@@ -70,8 +71,8 @@ stored on `results/samples/sample_manifest.json` (`seed`, and again under
 `sampling`). Fewer questions than requested is an error. The script does not
 pad. A same-seed run replaces a committed sample only when the question ids
 are unchanged or are this prefix, and only when the shared passage file is
-present and unchanged. Generation, signals, calibration, replay, analyses,
-and retrieval stats read only question ids in `results/samples/`.
+present and unchanged. Generation, adjudication, signals, calibration, replay,
+analyses, and retrieval stats read only question ids in `results/samples/`.
 
 ## Retrieval arms
 
@@ -120,14 +121,17 @@ Hotpot supporting-fact paragraphs and a multi-window NQ context can differ.
 ## Correctness
 
 Token F1 uses the SQuAD normalisation in `scripts/verified_reward_bench.py`.
-An answerable question is correct when that F1 is at least 0.5. An
-unanswerable question is correct exactly when the answer abstains. Abstention
-is `verified_reward_bench.is_abstention`: the normalised answer is empty, or
-it matches `verified_reward._ABSTAIN_RE` (phrases such as "insufficient
-evidence", "do not contain", "no information", "not mentioned", and
-"cannot answer" that the claim splitter already drops). Replay, calibration,
-and the joined `correct` field still use this token-F1 rule. The abstention
-labels below are stored on the generation row for later analysis.
+`token_f1_correct` on the joined row is 1 when that F1 is at least 0.5.
+An unanswerable question scores token F1 1 exactly when the answer abstains.
+Abstention is `verified_reward_bench.is_abstention`: the normalised answer is
+empty, or it matches `verified_reward._ABSTAIN_RE` (phrases such as
+"insufficient evidence", "do not contain", "no information", "not mentioned",
+and "cannot answer" that the claim splitter already drops).
+
+The joined `correct` field is the label replay, calibration, and analyses
+use. An `ok` or `omitted` abstention follows the abstention label below.
+`token_f1_correct` stays on the row beside it. A failed or truncated call
+keeps a null abstention label, and `correct` follows token F1.
 
 A second rate is stored beside the token-F1 label: whether the normalised
 gold string is contained in the normalised answer. It is for answers that
@@ -161,11 +165,34 @@ When every source passage is in the top-k and the question is answerable, the
 label is `abstain_incorrect` and `abstention_counts_correct` is false. The
 answer was in the passages the generator saw.
 
-A non-abstention has a null abstention label. Token F1, and a later
-adjudication of F1 in [0.2, 0.8], decide those rows. `gold_in_top_k` (at
-least one source id in the top-k) is stored beside `source_retrieved` so a
-partial Hotpot or NQ hit can be counted separately from the full source set
-the abstention rule uses.
+A non-abstention has a null abstention label. When its token F1 is outside
+`[v2.adjudication_f1_low, v2.adjudication_f1_high]` (0.2 and 0.8, both ends
+included), `correct` is `token_f1_correct`. When token F1 is inside that
+band, `correct` is the adjudicator's 0/1 label. The joined row also stores
+`gold_in_top_k`, `source_retrieved`, `yes_no`, and `correct_source`
+(`abstention`, `token_f1`, or `adjudication`). `source_retrieved` true with
+`gold_in_top_k` false stops the join. A band row with no adjudication row
+stops the join. A question with an arm still listed in
+`results/adjudication/pending.json` is left out of the join until that arm
+is written.
+
+`scripts/experiments/adjudicate.py` calls `openai.gpt-oss-120b-1:0` through
+Bedrock Converse, on demand, at temperature 0. The run seed is stored on the
+artifact and on every row. Each row stores the system prompt, the user
+prompt, and the raw reply. The spend cap is checked before the call, on the
+shared ledger, under stage `adjudicate`. `--dry-run` prices an upper bound
+with `ceil(utf-8 bytes / 4)` and `adjudicator_max_output_tokens` and does not
+call the model. A reply that is not `{"correct": true}` or
+`{"correct": false}` is stored as `unparseable` and the script exits
+non-zero. The join then stops on that row. Access denied writes
+`results/adjudication/adjudicator_unavailable.json` and exits non-zero
+without inventing a label.
+
+HotpotQA yes/no questions stay in the hotpot sample. Analyses writes
+`datasets.hotpot.yes_no` with a `yes_no` slice and an `other` slice. Each
+slice has the joined-correct rate, the token-F1 rate, `gold_in_top_k`,
+`source_retrieved`, and the three abstention counts. `write_results.py`
+prints that block under its own heading.
 
 ## Self-confidence
 
@@ -283,7 +310,8 @@ the stage. The artifact stores the seed, the holdout ids, and the
 coefficients. There is no random step inside the fit.
 
 `oracle` writes two files and does not call a model. `oracle_correct` is the
-token-F1 label, the same rule as the joined `correct` field.
+token-F1 label. Joined `correct` applies the abstention rule and, inside the
+F1 band, the adjudicator, on top of that bit.
 `oracle_retrieval` is 1 when `source_retrieved` is true. A retrieval row
 without that field stops the stage. The row also keeps `gold_in_top_k` so a
 partial source hit can be counted later.
@@ -317,8 +345,11 @@ history is a missing reward. Confidences from arms that were not selected are
 not used. The definition is stored on the analyses artifact.
 
 `self_with_fallbacks` substitutes 0.7 / 0.5 / 0.0 from the deployed strict
-status (omitted / unparseable / failed). `oracle` uses binary token-F1
-correctness, not the gold-contained rate.
+status (omitted / unparseable / failed). `oracle` uses the joined `correct`
+bit: the abstention label, the adjudicator inside the F1 band, and token F1
+outside it. The gold-contained rate stays a sensitivity check. The file
+`signals/oracle_correct.jsonl` remains the token-F1 oracle written before
+adjudication.
 
 ## Calibration and the prediction
 

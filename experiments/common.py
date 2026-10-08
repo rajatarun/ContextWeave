@@ -51,6 +51,7 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
         "grounding_threshold", "judge_sample_rate", "grounding_weight",
         "judge_weight", "self_weight", "generator_model_id", "judge_model_id",
         "subset_generator_model_id", "adjudicator_model_id",
+        "adjudicator_temperature", "adjudicator_max_output_tokens",
         "region", "temperature", "generator_max_output_tokens",
         "judge_max_output_tokens", "prices_usd_per_million_tokens",
         "fallback_omitted", "fallback_unparseable", "fallback_failed",

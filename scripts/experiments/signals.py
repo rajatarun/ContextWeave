@@ -242,7 +242,7 @@ def _oracle(results: Path, cfg: dict[str, Any], seed: int, names: list[str], row
             ))
     meta = artifact_meta(
         cfg, seed, stage="signals_oracle", written=n, deterministic=True,
-        oracle_correct="token F1 correct, the same rule as the joined correct field",
+        oracle_correct="token F1 correct. Joined correct applies abstention labels and adjudication on top of this bit.",
         oracle_retrieval="1 when every source passage is in the generator top-k",
     )
     write_json(results / "signals" / "oracle_meta.json", meta)

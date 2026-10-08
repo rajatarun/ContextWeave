@@ -316,7 +316,7 @@ def test_missingness_and_slopes_do_not_fill_none_with_zero():
                 "nli_grounding": None, "nli_grounding_reason": "signal_file_missing",
                 "judge": None, "judge_reason": "not_sampled",
             })
-    out = analyse(rows, seed=1, n_boot=20)
+    out = analyse(rows, seed=1, n_boot=20, f1_low=0.2, f1_high=0.8)
     self_m = out["datasets"]["squad"]["self"]["missingness"]
     assert self_m["semantic_search"]["m"] == 1.0
     assert self_m["graph_first"]["m"] == 0.0

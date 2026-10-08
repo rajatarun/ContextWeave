@@ -125,6 +125,7 @@ def render(results: Path) -> tuple[str, str]:
             doc.pending.append({"table": "claims", "cell": claim["id"], "reason": claim["because"]})
     _pending_file(doc, results, "generation/pending.json", "generation")
     _pending_file(doc, results, "signals/judge_pending.json", "judge")
+    _pending_file(doc, results, "adjudication/pending.json", "adjudication")
 
     sample = _load(results / "samples" / "sample_manifest.json")
     doc.h("Sample")
@@ -352,13 +353,22 @@ def render(results: Path) -> tuple[str, str]:
         doc.pending.append({"table": "replay", "cell": "curves", "reason": "results/replay/replay_summary.json is missing"})
 
     doc.h("Correctness sensitivity")
-    doc.p(
-        "Primary correctness is token F1 at least 0.5 "
-        "(an unanswerable question counts only when the answer abstains). "
-        "The secondary rate is how often the normalised gold string is contained "
-        "in the normalised answer. It does not replace the primary label, and "
-        "replay, calibration, and rankings do not use it."
-    )
+    rule = None
+    if analyses:
+        for name in DATASETS:
+            block = ((analyses.get("datasets") or {}).get(name) or {}).get("correctness_sensitivity")
+            if isinstance(block, dict) and block.get("primary_rule"):
+                rule = str(block["primary_rule"])
+                break
+    if rule:
+        doc.p(rule)
+    else:
+        doc.p("The correctness rule is pending until analyses.json stores primary_rule.")
+        doc.pending.append({
+            "table": "correctness",
+            "cell": "primary rule",
+            "reason": "results/analyses/analyses.json has no primary_rule",
+        })
     sens_rows = []
     for name in DATASETS:
         block = (((analyses or {}).get("datasets") or {}).get(name) or {}).get("correctness_sensitivity") if analyses else None
@@ -374,9 +384,49 @@ def render(results: Path) -> tuple[str, str]:
             doc.cell("correctness", f"{name} gold contained", (block or {}).get("secondary_rate") if block else None, reason or "secondary rate null"),
         ])
     doc.table(
-        "Token F1 and gold contained in the answer",
-        ["dataset", "primary rate (token F1 >= 0.5)", "secondary rate (gold contained)"],
+        "Joined correctness and gold contained in the answer",
+        ["dataset", "primary rate (joined correct)", "secondary rate (gold contained)"],
         sens_rows,
+    )
+    doc.h("HotpotQA yes/no")
+    hotpot = ((analyses or {}).get("datasets") or {}).get("hotpot") if analyses else None
+    yes_no = hotpot.get("yes_no") if isinstance(hotpot, dict) else None
+    if analyses is None:
+        yes_reason = "results/analyses/analyses.json is missing"
+    elif not isinstance(hotpot, dict):
+        yes_reason = "hotpot was not in this analyses run"
+    elif not isinstance(yes_no, dict):
+        yes_reason = "analyses.json has no hotpot yes_no block"
+    else:
+        yes_reason = ""
+    yes_rows = []
+    for label, title in (("yes_no", "yes/no"), ("other", "other HotpotQA")):
+        block = yes_no.get(label) if isinstance(yes_no, dict) else None
+        if not isinstance(block, dict):
+            reason = yes_reason or f"no {label} slice"
+            block = {}
+        elif block.get("n") == 0:
+            reason = f"no HotpotQA rows in the {title} slice"
+        else:
+            reason = ""
+        yes_rows.append([
+            title,
+            doc.cell("hotpot yes/no", f"{label} n", block.get("n"), reason or "n null"),
+            doc.cell("hotpot yes/no", f"{label} correct", block.get("correct_rate"), reason or "correct rate null"),
+            doc.cell("hotpot yes/no", f"{label} token f1", block.get("token_f1_rate"), reason or "token F1 rate null"),
+            doc.cell("hotpot yes/no", f"{label} gold in top k", block.get("gold_in_top_k_rate"), reason or "gold_in_top_k rate null"),
+            doc.cell("hotpot yes/no", f"{label} source retrieved", block.get("source_retrieved_rate"), reason or "source_retrieved rate null"),
+            doc.cell("hotpot yes/no", f"{label} abstain correct", block.get("abstain_correct"), reason or "abstain_correct null"),
+            doc.cell("hotpot yes/no", f"{label} abstain retrieval miss", block.get("abstain_retrieval_miss"), reason or "abstain_retrieval_miss null"),
+            doc.cell("hotpot yes/no", f"{label} abstain incorrect", block.get("abstain_incorrect"), reason or "abstain_incorrect null"),
+        ])
+    doc.table(
+        "HotpotQA yes/no questions, reported apart from the other HotpotQA questions",
+        [
+            "slice", "n", "joined correct", "token F1", "gold_in_top_k", "source_retrieved",
+            "abstain_correct", "abstain_retrieval_miss", "abstain_incorrect",
+        ],
+        yes_rows,
     )
 
     doc.h("Assumption check and missingness")
