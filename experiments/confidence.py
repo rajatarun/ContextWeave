@@ -90,6 +90,20 @@ def first_json_object(raw_text: str) -> dict[str, Any] | None:
     return None
 
 
+def _claim_field(obj: dict[str, Any] | None) -> str | None:
+    """The generator's ``claim`` string, or null when the object has none.
+
+    An empty string is a claim the model sent empty. A missing field is null.
+    Callers do not copy the answer into the claim.
+    """
+    if not isinstance(obj, dict):
+        return None
+    raw = obj.get("claim")
+    if isinstance(raw, str):
+        return raw.strip()
+    return None
+
+
 def _answer_field(obj: dict[str, Any] | None) -> str:
     if not isinstance(obj, dict):
         return ""
@@ -168,6 +182,7 @@ def parse_self_confidence(
             "reported": False,
             "status": "failed",
             "answer": "",
+            "claim": None,
             "trailing_truncated": False,
             "deployed_value": FAILED,
             "deployed_reported": False,
@@ -181,7 +196,7 @@ def parse_self_confidence(
             # The model abstained in prose and did not report a confidence.
             # That is the omitted case, including when later prose hit the cap.
             return _with_deployed(
-                {"value": None, "reported": False, "status": "omitted"},
+                {"value": None, "reported": False, "status": "omitted", "claim": None},
                 text, bare, False,
             )
         if truncated:
@@ -190,20 +205,22 @@ def parse_self_confidence(
                 "reported": False,
                 "status": "truncated",
                 "answer": "",
+                "claim": None,
                 "trailing_truncated": False,
                 "deployed_value": None,
                 "deployed_reported": False,
                 "deployed_status": "truncated",
             }
         return _with_deployed(
-            {"value": None, "reported": False, "status": "unparseable"},
+            {"value": None, "reported": False, "status": "unparseable", "claim": None},
             text, "", False,
         )
     answer = _answer_field(obj)
     number = _confidence_number(obj)
+    claim = _claim_field(obj)
     if number is None:
-        robust = {"value": None, "reported": False, "status": "omitted"}
+        robust = {"value": None, "reported": False, "status": "omitted", "claim": claim}
     else:
-        robust = {"value": number, "reported": True, "status": "ok"}
+        robust = {"value": number, "reported": True, "status": "ok", "claim": claim}
     # A complete object is an observation even when prose after it was cut off.
     return _with_deployed(robust, text, answer, bool(truncated))

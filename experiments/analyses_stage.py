@@ -29,7 +29,9 @@ import random
 from collections import Counter, defaultdict
 from typing import Any, Sequence
 
+from experiments.common import ProtocolError
 from experiments.judge_access import JUDGE_ACCESS_REASON
+from experiments.labels import ABSTAIN_CORRECT, ABSTAIN_INCORRECT, ABSTAIN_RETRIEVAL_MISS
 from experiments.metrics import cluster_bootstrap, conditional_mean
 from experiments.replay_stage import NORMALIZED_SELF_DEFINITION
 
@@ -151,16 +153,62 @@ def _skip_confidence(row: dict[str, Any]) -> float | None:
     return None
 
 
-def _sensitivity(group: Sequence[dict[str, Any]]) -> dict[str, Any]:
-    """Primary token-F1 rate, and the gold-contained rate beside it.
+def _rate(rows: Sequence[dict[str, Any]], key: str) -> float | None:
+    if not rows:
+        return None
+    return sum(int(row[key]) for row in rows) / len(rows)
 
-    The secondary rate is not a correctness label. Rows with no gold span
+
+def hotpot_yes_no(group: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Correctness for Hotpot yes/no questions, and for the other Hotpot questions.
+
+    Rates are null when a slice is empty. Counts of abstention labels are
+    zero when that label is absent from the slice.
+    """
+    missing = [row.get("qid") for row in group if "yes_no" not in row]
+    if missing:
+        raise ProtocolError(f"hotpot row {missing[0]} has no yes_no")
+    for row in group:
+        for key in ("correct", "token_f1_correct", "gold_in_top_k", "source_retrieved"):
+            if key not in row:
+                raise ProtocolError(f"hotpot row {row.get('qid')} has no {key}")
+        if row["yes_no"] not in (True, False):
+            raise ProtocolError(f"hotpot row {row.get('qid')} yes_no is {row['yes_no']!r}")
+
+    def pack(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
+        counts = Counter(row.get("abstention_label") for row in rows)
+        return {
+            "n": len(rows),
+            "correct_rate": _rate(rows, "correct"),
+            "token_f1_rate": _rate(rows, "token_f1_correct"),
+            "gold_in_top_k_rate": _rate(rows, "gold_in_top_k"),
+            "source_retrieved_rate": _rate(rows, "source_retrieved"),
+            "abstain_correct": int(counts.get(ABSTAIN_CORRECT, 0)),
+            "abstain_retrieval_miss": int(counts.get(ABSTAIN_RETRIEVAL_MISS, 0)),
+            "abstain_incorrect": int(counts.get(ABSTAIN_INCORRECT, 0)),
+        }
+
+    return {
+        "yes_no": pack([row for row in group if row["yes_no"] is True]),
+        "other": pack([row for row in group if row["yes_no"] is False]),
+    }
+
+
+def _sensitivity(group: Sequence[dict[str, Any]], f1_low: float, f1_high: float) -> dict[str, Any]:
+    """Joined-correctness rate, and the gold-contained rate beside it.
+
+    The secondary rate is a sensitivity check. Rows with no gold span
     (unanswerable questions) are left out of it.
     """
     primary = [row for row in group if "correct" in row]
     secondary = [row for row in group if row.get("gold_contained") is not None]
     return {
-        "primary_rule": "token_f1 >= 0.5; an unanswerable question is correct only when the answer abstains",
+        "primary_rule": (
+            "Joined correct uses the abstention label when the answer abstains: "
+            "it is correct only when every source passage was retrieved and the question "
+            "is unanswerable. Otherwise token F1 decides outside "
+            f"[{f1_low}, {f1_high}], and the adjudicator decides inside that band."
+        ),
         "primary_rate": (sum(int(row["correct"]) for row in primary) / len(primary)) if primary else None,
         "secondary_rule": "normalized gold string contained in the normalized answer",
         "secondary_rate": (
@@ -222,7 +270,14 @@ def _combination(group: Sequence[dict[str, Any]], rng: random.Random, n_boot: in
     }
 
 
-def analyse(rows: Sequence[dict[str, Any]], seed: int, n_boot: int) -> dict[str, Any]:
+def analyse(
+    rows: Sequence[dict[str, Any]],
+    seed: int,
+    n_boot: int,
+    *,
+    f1_low: float,
+    f1_high: float,
+) -> dict[str, Any]:
     by_dataset: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         by_dataset[row["dataset"]].append(row)
@@ -243,7 +298,9 @@ def analyse(rows: Sequence[dict[str, Any]], seed: int, n_boot: int) -> dict[str,
             }
         signals["fallback"] = _fallback(group)
         signals["combination"] = _combination(group, rng, n_boot)
-        signals["correctness_sensitivity"] = _sensitivity(group)
+        signals["correctness_sensitivity"] = _sensitivity(group, f1_low, f1_high)
+        if name == "hotpot":
+            signals["yes_no"] = hotpot_yes_no(group)
         datasets[name] = signals
     return {
         "datasets": datasets,

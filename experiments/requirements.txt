@@ -6,4 +6,5 @@ matplotlib>=3.8
 PyYAML>=6.0
 numpy
 boto3>=1.34
+spacy>=3.7
 pytest>=8.0

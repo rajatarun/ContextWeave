@@ -101,6 +101,17 @@ def write_assumptions(path: Path, cfg: dict[str, Any], seed: int) -> dict[str, A
     return body
 
 
+def _ratio_cell(doc: _Doc, table: str, cell: str, block: Any, key: str) -> str:
+    if not isinstance(block, dict):
+        return doc.cell(table, cell, None, "ratio block missing")
+    value = block.get(key)
+    if value is None:
+        reasons = block.get("null_reasons") or {}
+        reason = reasons.get(key) or reasons.get("all") or f"{key} null"
+        return doc.cell(table, cell, None, str(reason))
+    return doc.cell(table, cell, value, f"{key} null")
+
+
 def _pending_file(doc: _Doc, results: Path, relative: str, table: str) -> None:
     path = results / relative
     if not path.is_file():
@@ -125,6 +136,7 @@ def render(results: Path) -> tuple[str, str]:
             doc.pending.append({"table": "claims", "cell": claim["id"], "reason": claim["because"]})
     _pending_file(doc, results, "generation/pending.json", "generation")
     _pending_file(doc, results, "signals/judge_pending.json", "judge")
+    _pending_file(doc, results, "adjudication/pending.json", "adjudication")
 
     sample = _load(results / "samples" / "sample_manifest.json")
     doc.h("Sample")
@@ -177,12 +189,20 @@ def render(results: Path) -> tuple[str, str]:
             "reason": "results/generation/dry_run_cost.json is missing",
         })
     else:
-        doc.table("Generator cost upper bound", ["field", "value"], [
+        if est.get("expected_output_tokens_per_call") is None:
+            token_label = "output tokens (upper bound)"
+            token_value = est.get("output_tokens_upper_bound")
+            usd_label = "USD upper bound"
+        else:
+            token_label = "output tokens (expected)"
+            token_value = est.get("output_tokens_estimate", est.get("output_tokens_upper_bound"))
+            usd_label = "USD (expected)"
+        doc.table("Generator cost estimate", ["field", "value"], [
             ["model", _fmt(est.get("model_id"))],
             ["calls", doc.cell("dry-run", "calls", est.get("n_calls"), "n_calls null")],
             ["input tokens (estimate)", doc.cell("dry-run", "input tokens", est.get("input_tokens_estimate"), "input tokens null")],
-            ["output tokens (upper bound)", doc.cell("dry-run", "output tokens", est.get("output_tokens_upper_bound"), "output tokens null")],
-            ["USD upper bound", doc.cell("dry-run", "usd", est.get("usd_upper_bound"), "usd null")],
+            [token_label, doc.cell("dry-run", "output tokens", token_value, "output tokens null")],
+            [usd_label, doc.cell("dry-run", "usd", est.get("usd_upper_bound"), "usd null")],
         ])
         doc.p(str(est.get("estimator", "")))
         doc.p(str(est.get("output_policy", "")))
@@ -352,13 +372,22 @@ def render(results: Path) -> tuple[str, str]:
         doc.pending.append({"table": "replay", "cell": "curves", "reason": "results/replay/replay_summary.json is missing"})
 
     doc.h("Correctness sensitivity")
-    doc.p(
-        "Primary correctness is token F1 at least 0.5 "
-        "(an unanswerable question counts only when the answer abstains). "
-        "The secondary rate is how often the normalised gold string is contained "
-        "in the normalised answer. It does not replace the primary label, and "
-        "replay, calibration, and rankings do not use it."
-    )
+    rule = None
+    if analyses:
+        for name in DATASETS:
+            block = ((analyses.get("datasets") or {}).get(name) or {}).get("correctness_sensitivity")
+            if isinstance(block, dict) and block.get("primary_rule"):
+                rule = str(block["primary_rule"])
+                break
+    if rule:
+        doc.p(rule)
+    else:
+        doc.p("The correctness rule is pending until analyses.json stores primary_rule.")
+        doc.pending.append({
+            "table": "correctness",
+            "cell": "primary rule",
+            "reason": "results/analyses/analyses.json has no primary_rule",
+        })
     sens_rows = []
     for name in DATASETS:
         block = (((analyses or {}).get("datasets") or {}).get(name) or {}).get("correctness_sensitivity") if analyses else None
@@ -374,9 +403,49 @@ def render(results: Path) -> tuple[str, str]:
             doc.cell("correctness", f"{name} gold contained", (block or {}).get("secondary_rate") if block else None, reason or "secondary rate null"),
         ])
     doc.table(
-        "Token F1 and gold contained in the answer",
-        ["dataset", "primary rate (token F1 >= 0.5)", "secondary rate (gold contained)"],
+        "Joined correctness and gold contained in the answer",
+        ["dataset", "primary rate (joined correct)", "secondary rate (gold contained)"],
         sens_rows,
+    )
+    doc.h("HotpotQA yes/no")
+    hotpot = ((analyses or {}).get("datasets") or {}).get("hotpot") if analyses else None
+    yes_no = hotpot.get("yes_no") if isinstance(hotpot, dict) else None
+    if analyses is None:
+        yes_reason = "results/analyses/analyses.json is missing"
+    elif not isinstance(hotpot, dict):
+        yes_reason = "hotpot was not in this analyses run"
+    elif not isinstance(yes_no, dict):
+        yes_reason = "analyses.json has no hotpot yes_no block"
+    else:
+        yes_reason = ""
+    yes_rows = []
+    for label, title in (("yes_no", "yes/no"), ("other", "other HotpotQA")):
+        block = yes_no.get(label) if isinstance(yes_no, dict) else None
+        if not isinstance(block, dict):
+            reason = yes_reason or f"no {label} slice"
+            block = {}
+        elif block.get("n") == 0:
+            reason = f"no HotpotQA rows in the {title} slice"
+        else:
+            reason = ""
+        yes_rows.append([
+            title,
+            doc.cell("hotpot yes/no", f"{label} n", block.get("n"), reason or "n null"),
+            doc.cell("hotpot yes/no", f"{label} correct", block.get("correct_rate"), reason or "correct rate null"),
+            doc.cell("hotpot yes/no", f"{label} token f1", block.get("token_f1_rate"), reason or "token F1 rate null"),
+            doc.cell("hotpot yes/no", f"{label} gold in top k", block.get("gold_in_top_k_rate"), reason or "gold_in_top_k rate null"),
+            doc.cell("hotpot yes/no", f"{label} source retrieved", block.get("source_retrieved_rate"), reason or "source_retrieved rate null"),
+            doc.cell("hotpot yes/no", f"{label} abstain correct", block.get("abstain_correct"), reason or "abstain_correct null"),
+            doc.cell("hotpot yes/no", f"{label} abstain retrieval miss", block.get("abstain_retrieval_miss"), reason or "abstain_retrieval_miss null"),
+            doc.cell("hotpot yes/no", f"{label} abstain incorrect", block.get("abstain_incorrect"), reason or "abstain_incorrect null"),
+        ])
+    doc.table(
+        "HotpotQA yes/no questions, reported apart from the other HotpotQA questions",
+        [
+            "slice", "n", "joined correct", "token F1", "gold_in_top_k", "source_retrieved",
+            "abstain_correct", "abstain_retrieval_miss", "abstain_incorrect",
+        ],
+        yes_rows,
     )
 
     doc.h("Assumption check and missingness")
@@ -429,6 +498,290 @@ def render(results: Path) -> tuple[str, str]:
         doc.table("Non-overlapping E[R | Y, arm] intervals", ["dataset", "signal", "n pairs", "any"], a_rows)
         doc.table("Missingness m_a", ["dataset", "signal", "mean m", "m by arm", "accuracy missing vs observed"], m_rows)
         doc.p(str(analyses.get("normalized_self_definition") or ""))
+
+    doc.h("Cost projection")
+    cfg = load_config()
+    doc.p(
+        f"The Bedrock ceiling is total_usd_cap {cfg['total_usd_cap']}. "
+        f"already_spent_usd {cfg['already_spent_usd']} is spend already on the AWS bill "
+        "from prior ledgers. The cap check adds it to this results ledger. A job is refused "
+        f"when that sum plus the projected job cost times spend_safety_factor "
+        f"{cfg['spend_safety_factor']} exceeds the ceiling. "
+        f"Bulk stages default to `{cfg['inference_mode']}`."
+    )
+    doc.p(
+        "Projected spend is copied from `results/cost_projection.json` when that file is present. "
+        "That artifact records whether input tokens were measured from the retrieved passages "
+        "or taken from the prompt template, whether output tokens are a ledger mean or "
+        "expected_output_tokens, and the adjudication call count, which is an assumption. "
+        "The printed USD is the projected cost. The safety factor is applied only in the cap check."
+    )
+    projection = _load(results / "cost_projection.json")
+    if projection is None or projection.get("kind") != "projection":
+        doc.p("Cost projection artifact is missing.")
+        doc.pending.append({
+            "table": "cost projection",
+            "cell": "all",
+            "reason": "results/cost_projection.json is missing",
+        })
+    else:
+        proj_rows = []
+        for stage in projection.get("stages") or []:
+            name = str(stage.get("stage"))
+            calls_reason = stage.get("calls_reason") or "calls null"
+            usd_reason = stage.get("usd_reason") or "usd null"
+            proj_rows.append([
+                name,
+                doc.cell("cost projection", f"{name} calls", stage.get("calls"), calls_reason),
+                doc.cell("cost projection", f"{name} on-demand", stage.get("on_demand_usd"), usd_reason),
+                doc.cell("cost projection", f"{name} batch", stage.get("batch_usd"), usd_reason),
+            ])
+        doc.table("Projected spend by stage", ["stage", "calls", "on-demand USD", "batch USD"], proj_rows)
+        doc.p(str(projection.get("input_scope") or ""))
+        doc.p(str(projection.get("sum_note") or ""))
+        doc.p(
+            "Sum of determined stages, on-demand "
+            + doc.cell("cost projection", "sum on-demand", projection.get("sum_on_demand_usd"), "sum null")
+            + ", batch "
+            + doc.cell("cost projection", "sum batch", projection.get("sum_batch_usd"), "sum null")
+            + "."
+        )
+
+    doc.h("Subset")
+    subset = _load(results / "subset" / "subset.json")
+    if subset is None:
+        doc.p("Subset manifest is missing.")
+        doc.pending.append({
+            "table": "subset", "cell": "all",
+            "reason": "results/subset/subset.json is missing",
+        })
+    else:
+        scope = subset.get("subset_scope")
+        doc.p(f"Scope stored on the manifest: `{scope}`. Seed `{subset.get('seed')}`.")
+        sub_rows = []
+        for name in DATASETS:
+            block = (subset.get("datasets") or {}).get(name)
+            reason = f"no subset block for {name}"
+            sub_rows.append([
+                name,
+                doc.cell("subset", f"{name} n", (block or {}).get("n") if isinstance(block, dict) else None, reason),
+                doc.cell("subset", f"{name} stream", (block or {}).get("stream") if isinstance(block, dict) else None, reason),
+            ])
+        doc.table("Seeded subset", ["dataset", "n", "stream"], sub_rows)
+
+    doc.h("Haiku agreement")
+    cfg = load_config()
+    doc.p(
+        f"`v2.subset_samples` is {cfg['v2']['subset_samples']}. "
+        f"The subset study draws that many Haiku answers at temperature {cfg['v2']['subset_temperature']}."
+    )
+    agreement = _load(results / "subset" / "agreement.json")
+    if agreement is None:
+        doc.p("Agreement artifact is missing.")
+        doc.pending.append({
+            "table": "agreement", "cell": "all",
+            "reason": "results/subset/agreement.json is missing",
+        })
+    else:
+        if agreement.get("definition"):
+            doc.p(str(agreement["definition"]))
+        doc.p(
+            "Samples recorded on the artifact: "
+            + doc.cell("agreement", "n_samples", agreement.get("n_samples"), "n_samples missing")
+            + "."
+        )
+        agr_rows = []
+        for name in DATASETS:
+            block = (agreement.get("datasets") or {}).get(name)
+            if not isinstance(block, dict):
+                reason = f"no agreement block for {name}"
+                block = {}
+            else:
+                reason = str(block.get("reason") or "agreement value null")
+            agr_rows.append([
+                name,
+                doc.cell("agreement", f"{name} n", block.get("n_scored"), reason),
+                doc.cell("agreement", f"{name} modal", block.get("mean_modal_fraction"), reason),
+                doc.cell("agreement", f"{name} pairwise", block.get("mean_pairwise_agreement"), reason),
+            ])
+        doc.table(
+            "Temperature-1 Haiku samples",
+            ["dataset", "n", "mean modal fraction", "mean pairwise agreement"],
+            agr_rows,
+        )
+
+    study = _load(results / "study" / "study.json")
+    doc.h("Signal information")
+    if study is None:
+        doc.p("Study artifact is missing.")
+        doc.pending.append({
+            "table": "information", "cell": "all",
+            "reason": "results/study/study.json is missing",
+        })
+    else:
+        definitions = study.get("definitions") or {}
+        for key in ("m", "s2_over_var_r", "s2_over_m_1m", "information_per_round"):
+            if definitions.get(key):
+                doc.p(str(definitions[key]))
+        info = study.get("information") or {}
+        info_rows = []
+        for name in (*DATASETS, "all"):
+            for signal in ("self", "lexical_grounding", "nli_grounding", "judge", "verified", "oracle"):
+                block = (info.get(name) or {}).get(signal)
+                info_rows.append([
+                    name, signal,
+                    _ratio_cell(doc, "information", f"{name} {signal} n", block, "n"),
+                    _ratio_cell(doc, "information", f"{name} {signal} m", block, "m"),
+                    _ratio_cell(doc, "information", f"{name} {signal} s2/var", block, "s2_over_var_r"),
+                    _ratio_cell(doc, "information", f"{name} {signal} s2/m", block, "s2_over_m_1m"),
+                    _ratio_cell(doc, "information", f"{name} {signal} info", block, "information_per_round"),
+                ])
+        doc.table(
+            "s^2 / Var(R), s^2 / (m(1-m)), and information per round",
+            ["dataset", "signal", "n", "m", "s^2/Var(R)", "s^2/(m(1-m))", "information per round"],
+            info_rows,
+        )
+
+    doc.h("Thompson sampling streams")
+    if study is None:
+        doc.p("Study artifact is missing.")
+        doc.pending.append({
+            "table": "streams", "cell": "all",
+            "reason": "results/study/study.json is missing",
+        })
+    else:
+        thompson = study.get("thompson") or {}
+        for key in ("beta_thompson", "gaussian_thompson", "streams", "drift"):
+            text = ((thompson.get("definitions") or {}).get(key)) or ((study.get("definitions") or {}).get(key))
+            if text:
+                doc.p(str(text))
+        stream_rows = []
+        blocks = thompson.get("streams") or []
+        if not blocks:
+            reason = str(thompson.get("reason") or "no stream blocks")
+            stream_rows.append(["pending", "pending", "pending", "pending", "pending", "pending", "pending"])
+            doc.pending.append({"table": "streams", "cell": "all", "reason": reason})
+        for block in blocks:
+            label = f"{block.get('policy')} {block.get('discount_label')}"
+            stream_rows.append([
+                doc.cell("streams", f"{label} policy", block.get("policy"), "policy null"),
+                doc.cell("streams", f"{label} discount", block.get("discount_label"), "discount null"),
+                doc.cell("streams", f"{label} seeds", block.get("n_seeds"), "n_seeds null"),
+                doc.cell("streams", f"{label} rounds", block.get("n_rounds"), "n_rounds null"),
+                doc.cell("streams", f"{label} pseudo", block.get("pseudo_regret_mean"), "pseudo regret null"),
+                doc.cell("streams", f"{label} realized", block.get("realized_regret_mean"), "realized regret null"),
+                doc.cell("streams", f"{label} share", block.get("best_arm_share_mean"), "best-arm share null"),
+            ])
+        doc.table(
+            "Beta and Gaussian Thompson sampling on joined correct",
+            ["policy", "discount", "seeds", "rounds", "pseudo-regret", "realized regret", "best-arm share"],
+            stream_rows,
+        )
+
+    doc.h("Judge coverage")
+    if study is None:
+        doc.p("Study artifact is missing.")
+        doc.pending.append({
+            "table": "judge coverage", "cell": "all",
+            "reason": "results/study/study.json is missing",
+        })
+    else:
+        coverage = study.get("judge_coverage") or {}
+        definition = (study.get("definitions") or {}).get("judge_coverage")
+        if definition:
+            doc.p(str(definition))
+        if coverage.get("reason"):
+            doc.p(str(coverage["reason"]))
+        cov_rows = []
+        rate_blocks = coverage.get("rates") or []
+        if not rate_blocks:
+            doc.pending.append({
+                "table": "judge coverage", "cell": "rates",
+                "reason": str(coverage.get("reason") or "no coverage rates"),
+            })
+        for block in rate_blocks:
+            rate = block.get("rate")
+            for signal in ("verified", "judge"):
+                ratios = block.get(signal)
+                label = f"{rate} {signal}"
+                if ratios is None:
+                    reason = str(block.get("reason") or coverage.get("reason") or "coverage ratios null")
+                    cov_rows.append([str(rate), signal, "pending", "pending", "pending"])
+                    for metric in ("s2/var", "s2/m", "info"):
+                        doc.pending.append({"table": "judge coverage", "cell": f"{label} {metric}", "reason": reason})
+                    continue
+                cov_rows.append([
+                    _fmt(rate) if rate is not None else "pending",
+                    signal,
+                    _ratio_cell(doc, "judge coverage", f"{label} s2/var", ratios, "s2_over_var_r"),
+                    _ratio_cell(doc, "judge coverage", f"{label} s2/m", ratios, "s2_over_m_1m"),
+                    _ratio_cell(doc, "judge coverage", f"{label} info", ratios, "information_per_round"),
+                ])
+        if cov_rows:
+            doc.table(
+                "Judge coverage on the pooled log",
+                ["rate", "signal", "s^2/Var(R)", "s^2/(m(1-m))", "information per round"],
+                cov_rows,
+            )
+
+    doc.h("Study assumption check")
+    if study is None:
+        doc.p("Study artifact is missing.")
+        doc.pending.append({
+            "table": "study assumption", "cell": "all",
+            "reason": "results/study/study.json is missing",
+        })
+    else:
+        assumption = study.get("assumption") or {}
+        if assumption.get("definition"):
+            doc.p(str(assumption["definition"]))
+        a_rows = []
+        for name in DATASETS:
+            for signal in SIGNALS:
+                block = ((assumption.get("datasets") or {}).get(name) or {}).get(signal)
+                reason = f"no study assumption block for {name} {signal}"
+                a_rows.append([
+                    name, signal,
+                    doc.cell(
+                        "study assumption", f"{name} {signal} pairs",
+                        block.get("n_nonoverlapping_pairs") if isinstance(block, dict) else None,
+                        reason,
+                    ),
+                ])
+        doc.table("Non-overlapping pairs from the study artifact", ["dataset", "signal", "n pairs"], a_rows)
+
+    doc.h("Second generator")
+    if study is None:
+        doc.p("Study artifact is missing.")
+        doc.pending.append({
+            "table": "nova", "cell": "all",
+            "reason": "results/study/study.json is missing",
+        })
+    else:
+        nova = study.get("nova") or {}
+        if nova.get("definition"):
+            doc.p(str(nova["definition"]))
+        if nova.get("reason"):
+            doc.p(str(nova["reason"]))
+        nova_rows = []
+        for name in DATASETS:
+            block = (nova.get("datasets") or {}).get(name) if isinstance(nova.get("datasets"), dict) else None
+            if not isinstance(block, dict):
+                reason = str(nova.get("reason") or f"no nova block for {name}")
+                block = {}
+            else:
+                reason = str(block.get("reason") or "nova value null")
+            nova_rows.append([
+                name,
+                doc.cell("nova", f"{name} n", block.get("n"), reason),
+                doc.cell("nova", f"{name} f1", block.get("mean_f1"), reason),
+                doc.cell("nova", f"{name} token f1", block.get("token_f1_correct_rate"), reason),
+            ])
+        doc.table(
+            "Nova Pro token F1 on the subset",
+            ["dataset", "n", "mean token F1", "token-F1 correct rate"],
+            nova_rows,
+        )
 
     findings = "\n".join(doc.lines).rstrip() + "\n"
     pend_lines = ["# Pending cells", ""]

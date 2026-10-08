@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+import re
 import sys
 from pathlib import Path
 
@@ -164,13 +165,17 @@ def test_prediction_verdicts():
     assert overall_verdict(mixed)["verdict"] == "contradicted"
 
 
+def _capital_entities(text: str) -> list[str]:
+    return re.findall(r"\b[A-Z][a-zA-Z0-9]+(?:\s+[A-Z][a-zA-Z0-9]+)*\b", text or "")
+
+
 def test_graph_and_bm25_rank_the_supporting_passage_first():
     passages = [
         {"id": "a", "text": "Ada Lovelace met Charles Babbage in London."},
         {"id": "b", "text": "Charles Babbage built the Analytical Engine."},
         {"id": "c", "text": "Bananas are yellow fruit from tropical farms."},
     ]
-    scores = graph_scores("What did Ada Lovelace do?", passages)
+    scores = graph_scores("What did Ada Lovelace do?", passages, _capital_entities)
     order = sorted(range(3), key=lambda i: (-scores[i], passages[i]["id"]))
     assert passages[order[0]]["id"] == "a"
     assert passages[order[-1]]["id"] == "c"
@@ -186,10 +191,12 @@ def test_graph_and_bm25_rank_the_supporting_passage_first():
             out.append(vec)
         return out
 
-    ranked = rank_pool("bananas", passages, embed, top_k=2)
+    ranked, meta = rank_pool("bananas", passages, embed, top_k=2, entity_fn=_capital_entities)
+    assert meta["score_normalization"] == "per_query_minmax"
     assert set(ranked) == {"semantic_search", "graph_first", "keyword_boosted", "hybrid"}
     assert len(ranked["semantic_search"]) == 2
     assert ranked["semantic_search"][0]["rank"] == 1
+    assert "raw_score" in ranked["semantic_search"][0]
 
 
 def _arm_row(qid, arm, correct, status, confidence, grounding=None, judge=None):
@@ -309,7 +316,7 @@ def test_missingness_and_slopes_do_not_fill_none_with_zero():
                 "nli_grounding": None, "nli_grounding_reason": "signal_file_missing",
                 "judge": None, "judge_reason": "not_sampled",
             })
-    out = analyse(rows, seed=1, n_boot=20)
+    out = analyse(rows, seed=1, n_boot=20, f1_low=0.2, f1_high=0.8)
     self_m = out["datasets"]["squad"]["self"]["missingness"]
     assert self_m["semantic_search"]["m"] == 1.0
     assert self_m["graph_first"]["m"] == 0.0
@@ -369,6 +376,21 @@ def test_dry_run_does_not_call_a_model_and_price_table_is_closed():
     assert estimate["n_calls"] == 1
     assert estimate["input_tokens_estimate"] > 0
     assert estimate["usd_upper_bound"] > 0
+    assert estimate["expected_output_tokens_per_call"] == pytest.approx(70)
+    assert estimate["output_tokens_estimate"] == pytest.approx(70)
+    assert estimate["generator_max_output_tokens"] == 256
+    assert "expected_output_tokens" in estimate["output_policy"]
+    assert "256" in estimate["output_policy"]
+    haiku = price_for(cfg, cfg["generator_model_id"])
+    assert haiku["input"] == pytest.approx(1.10)
+    assert haiku["output"] == pytest.approx(5.50)
+    assert "input 1.00 / output 5.00" in haiku["source"]
+    llama = price_for(cfg, cfg["judge_model_id"])
+    assert llama["input"] == pytest.approx(0.72)
+    assert llama["output"] == pytest.approx(0.72)
+    comment = (ROOT / "experiments" / "config.yaml").read_text()
+    assert "input 1.00 / output 5.00" in comment
+    assert "input 1.10 / output 5.50" in comment
     with pytest.raises(ProtocolError):
         price_for(cfg, "unknown-model")
     user = build_user_message("Where?", rows[0]["passages"])
@@ -383,6 +405,7 @@ def test_generate_records_validation_and_stops_on_access_denied(tmp_path: Path):
         {
             "qid": "q1", "dataset": "squad", "arm": arm, "question_type": "answerable",
             "question": "Where?", "passages": [{"title": "", "text": "Paris is the capital."}],
+            "unanswerable": False, "source_retrieved": True,
         }
         for arm in ("semantic_search", "graph_first")
     ]
@@ -563,7 +586,8 @@ def test_judge_score_is_compared_to_correctness_as_stored():
     assert metrics["n_observed"] == 2
     assert metrics["brier"] == 0.5
     prompt = (ROOT / "experiments" / "prompts" / "generator_system.txt").read_text()
-    assert '{"answer": "insufficient evidence", "confidence": <0-1>}' in prompt
+    assert '"claim": "<one sentence>"' in prompt
+    assert 'When you abstain, the claim is "The passages do not contain the answer."' in prompt
     assert "nothing before or after it" in prompt
     assert "answer yes or no" in prompt
     assert (
@@ -573,7 +597,7 @@ def test_judge_score_is_compared_to_correctness_as_stored():
     assert "Use 0 when" not in prompt
     assert "taken directly" not in prompt
     assert load_config()["generator_max_output_tokens"] == 256
-    assert load_config()["n_per_dataset"] == 1200
+    assert load_config()["n_per_dataset"] == 1100
 
 
 def _client_error(code: str, message: str):
@@ -710,6 +734,7 @@ def test_truncation_is_recorded_and_is_not_the_unparseable_fallback(tmp_path: Pa
     retrieval = [{
         "qid": "q1", "dataset": "squad", "arm": "semantic_search", "question_type": "answerable",
         "question": "Where?", "passages": [{"title": "", "text": "Paris is the capital."}],
+        "unanswerable": False, "source_retrieved": True,
     }]
     budget = Budget(tmp_path, "generate", max_usd=10, total_usd_cap=30)
     summary = generate_rows(
@@ -737,12 +762,13 @@ def test_spend_cap_stops_cleanly_and_lists_the_rest_pending(tmp_path: Path):
         {
             "qid": "q1", "dataset": "squad", "arm": arm, "question_type": "answerable",
             "question": "Where?", "passages": passages,
+            "unanswerable": False, "source_retrieved": True,
         }
         for arm in ("semantic_search", "graph_first")
     ]
     user = build_user_message(rows[0]["question"], passages)
     in_tok = prompt_token_estimate(system_prompt(), user)
-    out_tok = int(cfg["generator_max_output_tokens"])
+    out_tok = int(cfg["expected_output_tokens"][cfg["generator_model_id"]])
     one_call = cost_usd(cfg, cfg["generator_model_id"], in_tok, out_tok)
 
     class Client:
@@ -764,6 +790,7 @@ def test_spend_cap_stops_cleanly_and_lists_the_rest_pending(tmp_path: Path):
     code = gen.main([
         "--results", str(tmp_path), "--datasets", "squad", "--seed", "0",
         "--max-usd", f"{one_call * 1.5:.10f}", "--total-usd-cap", "30",
+        "--inference-mode", "on_demand",
     ])
     assert code == 0
     written = read_jsonl(tmp_path / "generation" / "squad.jsonl")
@@ -784,16 +811,20 @@ def _mini_squad(tmp_path: Path) -> None:
     cfg = load_config()
     question = {
         "qid": "q1", "dataset": "squad", "question": "Where is the capital?",
-        "question_type": "answerable", "gold_answers": ["Paris"], "unanswerable": False,
+        "question_type": "squad", "gold_answers": ["Paris"], "unanswerable": False,
+        "source_passage_ids": ["p"], "yes_no": False, "schema_version": 2,
     }
     _write_jsonl(tmp_path / "samples" / "squad.jsonl", [question])
     passages = [{"id": "p", "title": "France", "text": "Paris is the capital of France."}]
+    _write_jsonl(tmp_path / "samples" / "squad.passages.jsonl", passages)
     retrieval = []
     generation = []
     for arm in ("semantic_search", "graph_first", "keyword_boosted", "hybrid"):
         retrieval.append({
-            "qid": "q1", "dataset": "squad", "arm": arm, "question_type": "answerable",
+            "qid": "q1", "dataset": "squad", "arm": arm, "question_type": "squad",
             "question": question["question"], "passages": passages, "pool_size": 1,
+            "gold_in_top_k": True, "source_retrieved": True, "unanswerable": False,
+            "source_passage_ids": ["p"],
         })
         generation.append({
             "qid": "q1", "dataset": "squad", "arm": arm, "question_type": "answerable",
@@ -833,6 +864,7 @@ def test_judge_access_denied_stays_pending_downstream(tmp_path: Path, capsys):
     code = signals.main([
         "judge", "--results", str(tmp_path), "--datasets", "squad", "--seed", "0",
         "--config", str(config_path), "--max-usd", "3", "--total-usd-cap", "30",
+        "--inference-mode", "on_demand",
     ])
     assert code == 2
     assert JUDGE_ACCESS_REASON in capsys.readouterr().err
@@ -998,79 +1030,300 @@ def test_twelve_hundred_is_the_prefix_of_the_fifteen_hundred_draw():
     assert [r["qid"] for r in small] == sorted(r["qid"] for r in order[:1200])
 
 
-def _plain_row(dataset: str, qid: str, pool: list[dict]) -> dict:
-    return {
-        "qid": qid, "dataset": dataset, "question": f"question {qid}",
-        "question_type": "answerable" if dataset != "nq" else "nq",
-        "gold_answers": ["answer"], "unanswerable": False, "pool": pool,
-    }
+def _shared_bundle(dataset: str, n: int) -> tuple[list[dict], list[dict]]:
+    passages = [
+        {"id": f"{dataset[0]}p{i:05d}", "title": dataset, "text": f"{dataset} passage {i} alpha"}
+        for i in range(n)
+    ]
+    questions = []
+    for i, passage in enumerate(passages):
+        qid = f"{dataset[0]}{i:05d}"
+        questions.append({
+            "qid": qid, "dataset": dataset, "question": f"question {qid}",
+            "question_type": dataset, "gold_answers": ["answer"], "unanswerable": False,
+            "source_passage_ids": [passage["id"]], "yes_no": False, "hotpot_type": None,
+            "schema_version": 2,
+        })
+    return questions, passages
 
 
-def test_smaller_n_keeps_the_seeded_prefix_and_the_previous_pools(tmp_path, monkeypatch):
-    """A same-seed shrink keeps written rows, so NQ pools are not drawn again."""
+def _install_shared_loaders(monkeypatch, bundles: dict):
     import json as jsonlib
+    from experiments import data as data_mod
+
+    def _copy(name):
+        questions, passages = bundles[name]
+        return (
+            jsonlib.loads(jsonlib.dumps(questions)),
+            jsonlib.loads(jsonlib.dumps(passages)),
+            {"name": name},
+        )
+
+    monkeypatch.setitem(data_mod.LOADERS, "squad", lambda _cfg: _copy("squad"))
+    monkeypatch.setitem(data_mod.LOADERS, "hotpot", lambda _cfg: _copy("hotpot"))
+    monkeypatch.setattr(data_mod, "load_nq", lambda _cfg, _cache: _copy("nq"))
+
+
+def test_smaller_n_keeps_the_seeded_prefix_and_the_shared_collection(tmp_path, monkeypatch):
+    """A same-seed shrink keeps written question rows and the shared collection."""
     from experiments import data as data_mod
     from experiments.common import read_jsonl
 
     cfg = load_config()
-    cfg["nq_pool_size"] = 2
-    squad = [_plain_row("squad", f"s{i}", [{"id": f"sp{i}", "text": f"squad {i}"}]) for i in range(6)]
-    hotpot = [_plain_row("hotpot", f"h{i}", [{"id": f"hp{i}", "text": f"hotpot {i}"}]) for i in range(6)]
-    nq = [
-        _plain_row("nq", f"n{i}", [{
-            "id": f"g{i}", "title": "", "text": f"unique gold window {i} alpha",
-            "source": f"src{i}", "role": "gold",
-        }])
-        for i in range(6)
-    ]
-
-    def _copy(rows, info):
-        return jsonlib.loads(jsonlib.dumps(rows)), dict(info)
-
-    monkeypatch.setitem(data_mod.LOADERS, "squad", lambda _cfg: _copy(squad, {"name": "squad"}))
-    monkeypatch.setitem(data_mod.LOADERS, "hotpot", lambda _cfg: _copy(hotpot, {"name": "hotpot"}))
-    monkeypatch.setattr(data_mod, "load_nq", lambda _cfg, _cache: _copy(nq, {"name": "nq"}))
-    calls = {"n": 0}
-    real_expand = data_mod.expand_nq_pools
-
-    def _counting(rows, target, k1, b):
-        calls["n"] += 1
-        return real_expand(rows, target, k1, b)
-
-    monkeypatch.setattr(data_mod, "expand_nq_pools", _counting)
+    bundles = {name: _shared_bundle(name, 6) for name in ("squad", "hotpot", "nq")}
+    _install_shared_loaders(monkeypatch, bundles)
     names = ("squad", "hotpot", "nq")
     first = data_mod.build_sample(cfg, tmp_path, 4, 0, names)
-    assert calls["n"] == 1
+    assert first["schema_version"] == 2
     assert first["seed"] == 0
     assert first["sampling"]["seed"] == 0
     assert first["sampling"]["order"] == SAMPLE_ORDER
     assert first["sampling"]["prefix_of_n"] is None
-    before = {
-        row["qid"]: [passage["id"] for passage in row["pool"]]
-        for row in read_jsonl(tmp_path / "samples" / "nq.jsonl")
-    }
+    assert first["collection"] == "shared_dev_split"
+    before = {row["qid"]: row for row in read_jsonl(tmp_path / "samples" / "nq.jsonl")}
     assert len(before) == 4
-    assert all(len(ids) == 2 for ids in before.values())
+    assert all(row["question_type"] == "nq" and row["schema_version"] == 2 for row in before.values())
+    passages_before = read_jsonl(tmp_path / "samples" / "nq.passages.jsonl")
+    assert len(passages_before) == 6
+    assert {row["source_passage_ids"][0] for row in before.values()} <= {p["id"] for p in passages_before}
 
     second = data_mod.build_sample(cfg, tmp_path, 2, 0, names)
-    assert calls["n"] == 1
     assert second["sampling"]["prefix_of_n"] == {"squad": 4, "hotpot": 4, "nq": 4}
     assert second["n_per_dataset"] == 2
     assert second["datasets"]["nq"]["rows_kept_from_previous_sample"] is True
-    order = seeded_order(nq, 0, "nq")
-    kept_ids = [row["qid"] for row in read_jsonl(tmp_path / "samples" / "nq.jsonl")]
+    order = seeded_order(bundles["nq"][0], 0, "nq")
+    kept = read_jsonl(tmp_path / "samples" / "nq.jsonl")
+    kept_ids = [row["qid"] for row in kept]
     assert kept_ids == sorted(row["qid"] for row in order[:2])
-    after = {
-        row["qid"]: [passage["id"] for passage in row["pool"]]
-        for row in read_jsonl(tmp_path / "samples" / "nq.jsonl")
-    }
-    assert set(after) < set(before)
-    for qid, ids in after.items():
-        assert ids == before[qid]
+    for row in kept:
+        assert row == before[row["qid"]]
+    assert read_jsonl(tmp_path / "samples" / "nq.passages.jsonl") == passages_before
     with pytest.raises(ProtocolError, match="question ids changed"):
         data_mod.build_sample(cfg, tmp_path, 4, 0, names)
     still = [row["qid"] for row in read_jsonl(tmp_path / "samples" / "nq.jsonl")]
     assert still == kept_ids
+    manifest = json.loads((tmp_path / "samples" / "sample_manifest.json").read_text())
+    manifest.pop("schema_version")
+    (tmp_path / "samples" / "sample_manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ProtocolError, match="schema_version 2"):
+        data_mod.build_sample(cfg, tmp_path, 2, 0, names)
+
+
+def test_eleven_hundred_keeps_the_twelve_hundred_prefix_of_the_fifteen_hundred_draw(tmp_path, monkeypatch):
+    """1100 is a same-seed shrink of 1200, which is a same-seed shrink of 1500."""
+    from experiments import data as data_mod
+    from experiments.common import read_jsonl
+
+    rows = [{"qid": f"q{i:05d}", "dataset": "squad"} for i in range(2000)]
+    order = [row["qid"] for row in seeded_order(rows, 0, "squad")]
+    assert [row["qid"] for row in sample_rows(rows, 1500, 0, "squad")] == sorted(order[:1500])
+    assert [row["qid"] for row in sample_rows(rows, 1200, 0, "squad")] == sorted(order[:1200])
+    assert [row["qid"] for row in sample_rows(rows, 1100, 0, "squad")] == sorted(order[:1100])
+    assert set(order[:1100]) < set(order[:1200]) < set(order[:1500])
+
+    cfg = load_config()
+    bundles = {name: _shared_bundle(name, 1600) for name in ("squad", "hotpot", "nq")}
+    _install_shared_loaders(monkeypatch, bundles)
+    names = ("squad", "hotpot", "nq")
+    data_mod.build_sample(cfg, tmp_path, 1500, 0, names)
+    original = {
+        name: {row["qid"]: row for row in read_jsonl(tmp_path / "samples" / f"{name}.jsonl")}
+        for name in names
+    }
+    passages = {
+        name: read_jsonl(tmp_path / "samples" / f"{name}.passages.jsonl")
+        for name in names
+    }
+    assert {len(table) for table in original.values()} == {1500}
+    assert all(len(table) == 1600 for table in passages.values())
+
+    second = data_mod.build_sample(cfg, tmp_path, 1200, 0, names)
+    assert second["n_per_dataset"] == 1200
+    assert second["sampling"]["prefix_of_n"] == {"squad": 1500, "hotpot": 1500, "nq": 1500}
+    assert second["datasets"]["nq"]["rows_kept_from_previous_sample"] is True
+    mid = {
+        name: {row["qid"]: row for row in read_jsonl(tmp_path / "samples" / f"{name}.jsonl")}
+        for name in names
+    }
+    for name in names:
+        assert len(mid[name]) == 1200
+        assert set(mid[name]) < set(original[name])
+        for qid, row in mid[name].items():
+            assert row == original[name][qid]
+        assert read_jsonl(tmp_path / "samples" / f"{name}.passages.jsonl") == passages[name]
+
+    third = data_mod.build_sample(cfg, tmp_path, 1100, 0, names)
+    assert third["n_per_dataset"] == 1100
+    assert third["sampling"]["prefix_of_n"] == {"squad": 1200, "hotpot": 1200, "nq": 1200}
+    assert third["datasets"]["nq"]["rows_kept_from_previous_sample"] is True
+    final = {
+        name: {row["qid"]: row for row in read_jsonl(tmp_path / "samples" / f"{name}.jsonl")}
+        for name in names
+    }
+    for name in names:
+        assert len(final[name]) == 1100
+        assert set(final[name]) < set(mid[name])
+        for qid, row in final[name].items():
+            assert row == original[name][qid]
+            assert "pool" not in row
+        assert read_jsonl(tmp_path / "samples" / f"{name}.passages.jsonl") == passages[name]
+    nq_order = [row["qid"] for row in seeded_order(bundles["nq"][0], 0, "nq")]
+    assert sorted(final["nq"]) == sorted(nq_order[:1100])
+    with pytest.raises(ProtocolError, match="question ids changed"):
+        data_mod.build_sample(cfg, tmp_path, 1200, 0, names)
+    still = [row["qid"] for row in read_jsonl(tmp_path / "samples" / "nq.jsonl")]
+    assert still == sorted(final["nq"])
+
+
+def test_generation_and_judge_record_usd_at_the_config_price(tmp_path: Path):
+    """New paid rows bill the token counts at the price in the config."""
+    from experiments.common import cost_usd, read_jsonl
+    from experiments.ledger import Budget
+
+    cfg = load_config()
+    passages = [{"title": "", "text": "Paris is the capital."}]
+    retrieval = [{
+        "qid": "q1", "dataset": "squad", "arm": "semantic_search", "question_type": "answerable",
+        "question": "Where?", "passages": passages,
+        "unanswerable": False, "source_retrieved": True,
+    }]
+
+    class GenClient:
+        def converse(self, **kwargs):
+            return {
+                "stopReason": "end_turn",
+                "output": {"message": {"content": [{"text": '{"answer": "Paris", "confidence": 0.4}'}]}},
+                "usage": {"inputTokens": 1000, "outputTokens": 50},
+            }
+
+    gen_budget = Budget(tmp_path / "gen", "generate", max_usd=10, total_usd_cap=30)
+    summary = generate_rows(
+        cfg, retrieval, tmp_path / "gen" / "g.jsonl", gen_budget,
+        model_id=cfg["generator_model_id"], client=GenClient(), sleep=lambda _s: None,
+    )
+    assert summary["written"] == 1
+    expected_gen = cost_usd(cfg, cfg["generator_model_id"], 1000, 50)
+    written = json.loads((tmp_path / "gen" / "g.jsonl").read_text().splitlines()[0])
+    assert written["usd"] == pytest.approx(expected_gen)
+    assert written["input_tokens"] == 1000 and written["output_tokens"] == 50
+    gen_ledger = read_jsonl(tmp_path / "gen" / "cost_ledger.jsonl")
+    assert gen_ledger[0]["usd"] == pytest.approx(expected_gen)
+    assert gen_budget.global_spent == pytest.approx(expected_gen)
+
+    _mini_squad(tmp_path / "judge")
+    signals = _script("signals")
+
+    class JudgeClient:
+        def converse(self, **kwargs):
+            return {
+                "stopReason": "end_turn",
+                "output": {"message": {"content": [{"text": '{"score": 0.5}'}]}},
+                "usage": {"inputTokens": 80, "outputTokens": 12},
+            }
+
+    signals.make_client = lambda region: JudgeClient()
+    import yaml
+    priced = load_config()
+    priced["judge_sample_rate"] = 1
+    config_path = tmp_path / "judge-config.yaml"
+    config_path.write_text(yaml.safe_dump(priced))
+    code = signals.main([
+        "judge", "--results", str(tmp_path / "judge"), "--datasets", "squad", "--seed", "0",
+        "--config", str(config_path), "--max-usd", "3", "--total-usd-cap", "30",
+        "--inference-mode", "on_demand",
+    ])
+    assert code == 0
+    expected_judge = cost_usd(priced, priced["judge_model_id"], 80, 12)
+    judge_ledger = read_jsonl(tmp_path / "judge" / "cost_ledger.jsonl")
+    assert len(judge_ledger) == 4
+    assert all(row["stage"] == "judge" for row in judge_ledger)
+    assert all(row["usd"] == pytest.approx(expected_judge) for row in judge_ledger)
+    assert all(row["input_tokens"] == 80 and row["output_tokens"] == 12 for row in judge_ledger)
+
+
+def test_reprice_ledger_rewrites_usd_and_the_cap_reads_it(tmp_path: Path, capsys):
+    from experiments.common import cost_usd
+    from experiments.ledger import spent_usd
+
+    cfg = load_config()
+    haiku = cfg["generator_model_id"]
+    llama = cfg["judge_model_id"]
+    rows = [
+        {
+            "stage": "generate", "qid": "q1", "model_id": haiku,
+            "input_tokens": 1_000_000, "output_tokens": 1_000_000, "usd": 6.0,
+        },
+        {
+            "stage": "judge", "qid": "q2", "model_id": llama,
+            "input_tokens": 1_000_000, "output_tokens": 0, "usd": 0.72,
+        },
+        {
+            "stage": "generate", "qid": "q3", "model_id": haiku,
+            "input_tokens": 0, "output_tokens": 0, "usd": 0.5,
+        },
+    ]
+    path = tmp_path / "cost_ledger.jsonl.gz"
+    _write_gzip_jsonl(path, rows)
+    mod = _script("reprice_ledger")
+    mod.now_iso = lambda: "2026-10-07T12:00:00+00:00"
+    assert mod.DEFAULT_LEDGER.name == "cost_ledger.jsonl.gz"
+    assert mod.main(["--ledger", str(path)]) == 0
+    printed = capsys.readouterr().out
+    assert "old total USD: 7.220000" in printed
+    assert "new total USD: 7.320000" in printed
+    assert f"wrote {path}" in printed
+    assert not list(tmp_path.glob(".*.tmp"))
+    from experiments.common import read_jsonl
+    rewritten = read_jsonl(path)
+    haiku_price = {"input": pytest.approx(1.10), "output": pytest.approx(5.50)}
+    assert rewritten[0]["usd_at_logged_price"] == 6.0
+    assert rewritten[0]["usd"] == pytest.approx(cost_usd(cfg, haiku, 1_000_000, 1_000_000))
+    assert rewritten[0]["usd"] == pytest.approx(6.60)
+    assert rewritten[0]["price_usd_per_million"]["input"] == haiku_price["input"]
+    assert rewritten[0]["price_usd_per_million"]["output"] == haiku_price["output"]
+    assert rewritten[0]["repriced_at"] == "2026-10-07T12:00:00+00:00"
+    assert rewritten[0]["stage"] == "generate"
+    assert rewritten[1]["usd"] == pytest.approx(0.72)
+    assert rewritten[1]["usd_at_logged_price"] == 0.72
+    assert rewritten[1]["price_usd_per_million"]["input"] == pytest.approx(0.72)
+    assert rewritten[2]["usd"] == 0.0
+    assert rewritten[2]["usd_at_logged_price"] == 0.5
+    assert spent_usd(tmp_path) == pytest.approx(7.32)
+
+    mod.now_iso = lambda: "2026-10-08T00:00:00+00:00"
+    assert mod.main(["--ledger", str(path)]) == 0
+    again = read_jsonl(path)
+    assert again[0]["usd_at_logged_price"] == 6.0
+    assert again[0]["usd"] == pytest.approx(6.60)
+    assert again[0]["repriced_at"] == "2026-10-08T00:00:00+00:00"
+    assert again[2]["usd_at_logged_price"] == 0.5
+
+    plain = tmp_path / "plain.jsonl"
+    _write_jsonl(plain, [rows[1]])
+    assert mod.main(["--ledger", str(plain)]) == 0
+    assert json.loads(plain.read_text().splitlines()[0])["usd"] == pytest.approx(0.72)
+
+    broken = tmp_path / "broken.jsonl.gz"
+    before = _write_gzip_jsonl(broken, [
+        rows[0],
+        {"stage": "generate", "qid": "q9", "model_id": haiku, "input_tokens": 10, "usd": 1.0},
+    ])
+    code = mod.main(["--ledger", str(broken)])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "output_tokens" in err
+    assert broken.read_bytes() == before
+    assert not list(tmp_path.glob(".*.tmp"))
+    assert mod.main(["--ledger", str(tmp_path / "missing.jsonl.gz")]) == 2
+
+
+def _write_gzip_jsonl(path: Path, rows: list[dict]) -> bytes:
+    import gzip
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = "".join(json.dumps(row) + "\n" for row in rows).encode()
+    with gzip.open(path, "wb") as fh:
+        fh.write(payload)
+    return path.read_bytes()
 
 
 def test_stages_ignore_retrieval_rows_outside_the_sample(tmp_path):
@@ -1114,11 +1367,9 @@ def test_stages_ignore_retrieval_rows_outside_the_sample(tmp_path):
     assert {row["qid"] for row in joined} == {"q1"}
     assert len(joined) == 4
 
-    sample = read_jsonl(tmp_path / "samples" / "squad.jsonl")
-    sample[0]["pool"] = [{"id": "p", "text": "Paris is the capital of France."}]
-    _write_jsonl(tmp_path / "samples" / "squad.jsonl", sample)
     retrieve = _script("retrieve")
     retrieve.load_embedder = lambda model: (lambda texts: [[0.0] for _ in texts], {"revision": "test"})
+    retrieve.load_entities = lambda model: (lambda text: [], {"spacy_model": model})
     assert retrieve.main(["--results", str(tmp_path), "--datasets", "squad", "--seed", "0"]) == 0
     stats = json.loads((tmp_path / "retrieval" / "retrieval_stats.json").read_text())
     assert stats["datasets"]["squad"]["n_questions"] == 1

@@ -45,7 +45,11 @@ def main(argv: list[str] | None = None) -> int:
             cfg, seed, stage="analyses", bootstrap_samples=n_boot,
             assumed_simulation=assumed_slopes(),
             unavailable_signals={"judge": blocked} if blocked else {},
-            **analyse(rows, seed, n_boot),
+            **analyse(
+                rows, seed, n_boot,
+                f1_low=float(cfg["v2"]["adjudication_f1_low"]),
+                f1_high=float(cfg["v2"]["adjudication_f1_high"]),
+            ),
         )
         path = args.results / "analyses" / "analyses.json"
         write_json(path, body)
