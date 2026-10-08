@@ -26,13 +26,19 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from experiments.bedrock_batch import (
+    TERMINAL_BAD, download_output_lines, load_state, model_family, model_input,
+    parsed_output_rows, poll_job, record_id_for, run_job,
+)
 from experiments.common import (
-    ProtocolError, append_jsonl, artifact_meta, cost_usd, done_keys,
-    estimate_tokens, price_for, read_jsonl, validate_rows, write_json,
+    GENERATION_SCHEMA_VERSION, ProtocolError, append_jsonl, artifact_meta, cost_usd,
+    done_keys, estimate_tokens, price_for, read_jsonl, validate_rows, write_json,
     RETRIEVAL_FIELDS,
 )
 from experiments.confidence import parse_self_confidence
+from experiments.labels import abstention_outcome
 from experiments.ledger import SPEND_CAP_REASON, Budget
+from experiments.metrics import is_abstention
 
 PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "generator_system.txt"
 THROTTLE_CODES = {
@@ -81,16 +87,22 @@ def dry_run(cfg: dict[str, Any], retrieval_rows: list[dict[str, Any]], model_id:
         n += 1
     max_out = int(cfg["generator_max_output_tokens"])
     output_tokens = n * max_out
-    usd = cost_usd(cfg, model_id, input_tokens, output_tokens)
+    on_demand = cost_usd(cfg, model_id, input_tokens, output_tokens, "on_demand")
+    batch = cost_usd(cfg, model_id, input_tokens, output_tokens, "batch")
+    pricing = cfg.get("inference_mode") or "on_demand"
+    usd = batch if pricing == "batch" else on_demand
     return {
         "model_id": model_id,
         "region": cfg["region"],
         "temperature": cfg["temperature"],
+        "pricing": pricing,
         "n_calls": n,
         "input_tokens_estimate": input_tokens,
         "output_tokens_upper_bound": output_tokens,
         "generator_max_output_tokens": max_out,
         "usd_upper_bound": usd,
+        "on_demand_usd_upper_bound": on_demand,
+        "batch_usd_upper_bound": batch,
         "estimator": "ceil(utf-8 bytes / 4) summed over the system prompt and the user message",
         "output_policy": "upper bound charges generator_max_output_tokens on every call",
         "called_model": False,
@@ -151,6 +163,103 @@ def _stop_summary(reason: str, pending: list[dict[str, Any]], n_written: int, n_
     }
 
 
+def _refuse_foreign_generation(path: Path) -> None:
+    """v1 generation rows have no schema_version 2 and are not resumed."""
+    try:
+        rows = read_jsonl(path)
+    except ProtocolError:
+        return
+    for i, row in enumerate(rows, 1):
+        if row.get("schema_version") != GENERATION_SCHEMA_VERSION:
+            raise ProtocolError(
+                f"{path}:{i}: generation row is not schema_version {GENERATION_SCHEMA_VERSION}. "
+                "v1 generation rows are not reused. Move the file aside and rerun."
+            )
+
+
+def _abstention_fields(row: dict[str, Any], parsed: dict[str, Any], call_failed: bool) -> dict[str, Any]:
+    missing = [key for key in ("unanswerable", "source_retrieved") if key not in row]
+    if missing:
+        raise ProtocolError(
+            f"qid={row.get('qid')} arm={row.get('arm')}: retrieval row is missing {missing}. "
+            "Abstention labels need source_retrieved and unanswerable. Refusing to guess."
+        )
+    abstained = (
+        not call_failed
+        and parsed["status"] in ("ok", "omitted")
+        and is_abstention(parsed["answer"])
+    )
+    return abstention_outcome(
+        abstained=abstained,
+        unanswerable=bool(row["unanswerable"]),
+        source_retrieved=bool(row["source_retrieved"]),
+    )
+
+
+def _price_fields(cfg: dict[str, Any], model_id: str, pricing: str) -> dict[str, Any]:
+    price = price_for(cfg, model_id, pricing)
+    return {
+        "pricing": pricing,
+        "price_usd_per_million": {"input": float(price["input"]), "output": float(price["output"])},
+    }
+
+
+def _generation_record(
+    cfg: dict[str, Any],
+    row: dict[str, Any],
+    parsed: dict[str, Any],
+    *,
+    model_id: str,
+    temperature: float,
+    raw: str,
+    stop_reason: str | None,
+    in_tok: int,
+    out_tok: int,
+    usd: float,
+    error: dict[str, Any] | None,
+    pricing: str,
+    usage_observed: bool,
+) -> dict[str, Any]:
+    return {
+        "qid": row["qid"],
+        "dataset": row["dataset"],
+        "arm": row["arm"],
+        "question_type": row["question_type"],
+        "answer": parsed["answer"],
+        "claim": parsed["claim"],
+        "raw_response": raw,
+        "self_confidence": parsed["value"],
+        "self_reported": parsed["reported"],
+        "self_status": parsed["status"],
+        "deployed_self_confidence": parsed["deployed_value"],
+        "deployed_self_reported": parsed["deployed_reported"],
+        "deployed_self_status": parsed["deployed_status"],
+        "trailing_truncated": bool(parsed["trailing_truncated"]),
+        "stop_reason": stop_reason,
+        "input_tokens": int(in_tok),
+        "output_tokens": int(out_tok),
+        "usage_observed": usage_observed,
+        "usd": usd,
+        "model_id": model_id,
+        "temperature": temperature,
+        "region": cfg["region"],
+        "error": error,
+        "schema_version": GENERATION_SCHEMA_VERSION,
+        **_abstention_fields(row, parsed, call_failed=parsed["status"] == "failed"),
+        **_price_fields(cfg, model_id, pricing),
+    }
+
+
+def _ledger_row(row: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "qid": row["qid"], "arm": row["arm"], "dataset": row.get("dataset"),
+        "usd": record["usd"], "input_tokens": record["input_tokens"],
+        "output_tokens": record["output_tokens"], "model_id": record["model_id"],
+        "pricing": record["pricing"],
+        "price_usd_per_million": record["price_usd_per_million"],
+    }
+
+
 def generate_rows(
     cfg: dict[str, Any],
     retrieval_rows: list[dict[str, Any]],
@@ -161,8 +270,10 @@ def generate_rows(
     client: Any,
     sleep: Callable[[float], None] = time.sleep,
     max_attempts: int = 6,
+    pricing: str = "on_demand",
 ) -> dict[str, Any]:
-    price_for(cfg, model_id)
+    price_for(cfg, model_id, pricing)
+    _refuse_foreign_generation(out_path)
     system = system_prompt()
     done = done_keys(out_path, ("qid", "arm"))
     max_out = int(cfg["generator_max_output_tokens"])
@@ -177,7 +288,7 @@ def generate_rows(
             continue
         user = build_user_message(row["question"], row["passages"])
         est_in = prompt_token_estimate(system, user)
-        est_cost = cost_usd(cfg, model_id, est_in, max_out)
+        est_cost = cost_usd(cfg, model_id, est_in, max_out, pricing)
         reason = budget.blocking_reason(est_cost)
         if reason:
             pending = [
@@ -237,39 +348,17 @@ def generate_rows(
                     "Refusing to invent a cost."
                 )
             in_tok, out_tok = 0, 0
-        usd = cost_usd(cfg, model_id, int(in_tok), int(out_tok))
+        usd = cost_usd(cfg, model_id, int(in_tok), int(out_tok), pricing)
         truncated = stop_reason == "max_tokens"
         parsed = parse_self_confidence(raw, call_failed=call_failed, truncated=truncated)
-        record = {
-            "qid": row["qid"],
-            "dataset": row["dataset"],
-            "arm": row["arm"],
-            "question_type": row["question_type"],
-            "answer": parsed["answer"],
-            "raw_response": raw,
-            "self_confidence": parsed["value"],
-            "self_reported": parsed["reported"],
-            "self_status": parsed["status"],
-            "deployed_self_confidence": parsed["deployed_value"],
-            "deployed_self_reported": parsed["deployed_reported"],
-            "deployed_self_status": parsed["deployed_status"],
-            "trailing_truncated": bool(parsed["trailing_truncated"]),
-            "stop_reason": stop_reason,
-            "input_tokens": int(in_tok),
-            "output_tokens": int(out_tok),
-            "usd": usd,
-            "model_id": model_id,
-            "temperature": temperature,
-            "region": cfg["region"],
-            "error": error,
-        }
+        record = _generation_record(
+            cfg, row, parsed, model_id=model_id, temperature=temperature,
+            raw=raw, stop_reason=stop_reason, in_tok=int(in_tok), out_tok=int(out_tok),
+            usd=usd, error=error, pricing=pricing, usage_observed=error is None,
+        )
         append_jsonl(out_path, record)
         done.add(key)
-        budget.record({
-            "qid": row["qid"], "arm": row["arm"], "dataset": row.get("dataset"),
-            "usd": usd, "input_tokens": int(in_tok), "output_tokens": int(out_tok),
-            "model_id": model_id,
-        })
+        budget.record(_ledger_row(row, record))
         n_written += 1
         overrun = budget.blocking_reason(0.0)
         if overrun and budget.global_spent > budget.total_usd_cap + 1e-12:
@@ -293,6 +382,224 @@ def generate_rows(
         "stop_reason": None,
         "pending": [],
     }
+
+
+def _append_from_output(
+    cfg: dict[str, Any],
+    row: dict[str, Any],
+    parsed_out: dict[str, Any],
+    *,
+    model_id: str,
+    temperature: float,
+    out_path: Path,
+    done: set[tuple],
+    budget: Budget,
+) -> None:
+    call_failed = parsed_out["error"] is not None
+    stop = parsed_out["stop_reason"]
+    truncated = isinstance(stop, str) and stop in {"max_tokens", "max_gen_len"}
+    parsed = parse_self_confidence(
+        parsed_out["text"], call_failed=call_failed, truncated=truncated and not call_failed,
+    )
+    record = _generation_record(
+        cfg, row, parsed, model_id=model_id, temperature=temperature,
+        raw=parsed_out["text"], stop_reason=stop if isinstance(stop, str) else None,
+        in_tok=int(parsed_out["input_tokens"]), out_tok=int(parsed_out["output_tokens"]),
+        usd=cost_usd(
+            cfg, model_id, int(parsed_out["input_tokens"]), int(parsed_out["output_tokens"]), "batch",
+        ),
+        error=parsed_out["error"], pricing="batch",
+        usage_observed=bool(parsed_out["usage_observed"]),
+    )
+    append_jsonl(out_path, record)
+    done.add((row["qid"], row["arm"]))
+    budget.record(_ledger_row(row, record))
+
+
+def _recover_batch_states(
+    cfg: dict[str, Any],
+    retrieval_rows: list[dict[str, Any]],
+    out_path: Path,
+    budget: Budget,
+    *,
+    model_id: str,
+    temperature: float,
+    done: set[tuple],
+    s3: Any,
+    bedrock: Any,
+    sleep: Callable[[float], None],
+    state_dir: Path,
+) -> int:
+    """Finish jobs whose ARN is already stored and whose rows are not on disk."""
+    if not state_dir.is_dir():
+        return 0
+    index = {(row["qid"], row["arm"]): row for row in retrieval_rows}
+    poll_seconds = float(cfg["batch"]["poll_seconds"])
+    max_polls = max(1, int(float(cfg["batch"]["timeout_hours"]) * 3600.0 / poll_seconds) + 1)
+    written = 0
+    for path in sorted(state_dir.glob("cw*.json")):
+        state = load_state(path)
+        if not state or state.get("model_id") != model_id or not state.get("job_arn"):
+            continue
+        missing = []
+        for rid, meta in (state.get("records") or {}).items():
+            key = (meta.get("qid"), meta.get("arm"))
+            if key not in done:
+                missing.append((str(rid), key))
+        if not missing:
+            continue
+        job = poll_job(bedrock, state["job_arn"], sleep, poll_seconds, max_polls)
+        status = str(job.get("status") or "")
+        if status in TERMINAL_BAD:
+            message = job.get("message") or status
+            raise ProtocolError(f"batch job {state['job_arn']} ended {status}: {message}")
+        lines = download_output_lines(s3, state["bucket"], state["s3_output_prefix"])
+        parsed = parsed_output_rows(state["family"], lines)
+        for rid, key in missing:
+            if rid not in parsed:
+                raise ProtocolError(
+                    f"batch job {state['job_arn']} returned no output for recordId {rid}. "
+                    "Refusing to invent that row."
+                )
+            row = index.get(key)
+            if row is None:
+                raise ProtocolError(
+                    f"batch state {path.name} names qid={key[0]} arm={key[1]}, "
+                    "which is not in this retrieval file"
+                )
+            _append_from_output(
+                cfg, row, parsed[rid], model_id=model_id, temperature=temperature,
+                out_path=out_path, done=done, budget=budget,
+            )
+            written += 1
+    return written
+
+
+def generate_rows_batch(
+    cfg: dict[str, Any],
+    retrieval_rows: list[dict[str, Any]],
+    out_path: Path,
+    budget: Budget,
+    *,
+    model_id: str,
+    s3: Any,
+    bedrock: Any,
+    seed: int,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
+    """One or more batch jobs for the rows not already on disk.
+
+    The projected batch cost of a job is checked against the spend cap before
+    the job is created. A job smaller than ``batch.min_records`` is not
+    submitted and is not padded.
+    """
+    price_for(cfg, model_id, "batch")
+    _refuse_foreign_generation(out_path)
+    system = system_prompt()
+    family = model_family(model_id)
+    done = done_keys(out_path, ("qid", "arm"))
+    n_skipped = sum(1 for row in retrieval_rows if (row["qid"], row["arm"]) in done)
+    max_out = int(cfg["generator_max_output_tokens"])
+    temperature = float(cfg["temperature"])
+    min_records = int(cfg["batch"]["min_records"])
+    state_dir = out_path.parent / "batch"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    n_written = _recover_batch_states(
+        cfg, retrieval_rows, out_path, budget, model_id=model_id, temperature=temperature,
+        done=done, s3=s3, bedrock=bedrock, sleep=sleep, state_dir=state_dir,
+    )
+    pending = [row for row in retrieval_rows if (row["qid"], row["arm"]) not in done]
+
+    def upper_bound(row: dict[str, Any]) -> tuple[float, str]:
+        user = build_user_message(row["question"], row["passages"])
+        est_in = prompt_token_estimate(system, user)
+        return cost_usd(cfg, model_id, est_in, max_out, "batch"), user
+
+    while pending:
+        chosen: list[dict[str, Any]] = []
+        users: list[str] = []
+        projected = 0.0
+        for row in pending:
+            cost, user = upper_bound(row)
+            if budget.blocking_reason(projected + cost):
+                break
+            chosen.append(row)
+            users.append(user)
+            projected += cost
+        if not chosen:
+            return _stop_summary(
+                budget.blocking_reason(upper_bound(pending[0])[0]) or SPEND_CAP_REASON,
+                pending, n_written, n_skipped, budget,
+            )
+        if len(chosen) < min_records:
+            return _stop_summary(
+                f"batch job would have {len(chosen)} records and batch.min_records is {min_records}. "
+                "Refusing to pad the job or to switch to on-demand. "
+                "Pass --inference-mode on_demand for these rows.",
+                pending, n_written, n_skipped, budget,
+            )
+        blocked = budget.blocking_reason(projected)
+        if blocked:
+            return _stop_summary(blocked, pending, n_written, n_skipped, budget)
+        records = []
+        seen: dict[str, tuple] = {}
+        for row, user in zip(chosen, users):
+            rid = record_id_for(str(row["dataset"]), str(row["qid"]), str(row["arm"]), model_id)
+            key = (row["qid"], row["arm"])
+            if rid in seen:
+                raise ProtocolError(
+                    f"batch recordId {rid} collides for {seen[rid]} and {key}. "
+                    "Refusing to merge the rows."
+                )
+            seen[rid] = key
+            records.append({
+                "recordId": rid,
+                "modelInput": model_input(family, system, user, max_out, temperature),
+                "meta": {"qid": row["qid"], "arm": row["arm"], "dataset": row["dataset"]},
+            })
+        result = run_job(
+            cfg=cfg, model_id=model_id, records=records, state_dir=state_dir,
+            s3=s3, bedrock=bedrock, sleep=sleep, seed=seed,
+        )
+        by_key = {(row["qid"], row["arm"]): row for row in chosen}
+        for rid, key in seen.items():
+            _append_from_output(
+                cfg, by_key[key], result["rows"][rid], model_id=model_id,
+                temperature=temperature, out_path=out_path, done=done, budget=budget,
+            )
+            n_written += 1
+        chosen_keys = set(seen.values())
+        pending = [row for row in pending if (row["qid"], row["arm"]) not in chosen_keys]
+    return {
+        "written": n_written,
+        "skipped": n_skipped,
+        "spent_usd": budget.global_spent,
+        "stage_spent_usd": budget.stage_spent,
+        "stopped": False,
+        "stop_reason": None,
+        "pending": [],
+    }
+
+
+def make_batch_clients(region: str) -> tuple[Any, Any]:
+    """S3 and Bedrock control-plane clients. Missing credentials stop the run."""
+    try:
+        import boto3
+        from botocore.exceptions import NoCredentialsError, PartialCredentialsError
+    except ImportError as exc:
+        raise ProtocolError("boto3 is not installed; pip install -r experiments/requirements.txt") from exc
+    try:
+        session = boto3.Session(region_name=region)
+        if session.get_credentials() is None:
+            raise ProtocolError(
+                f"no AWS credentials for region {region}. Batch generation was not started."
+            )
+        return (
+            session.client("s3", region_name=region),
+            session.client("bedrock", region_name=region),
+        )
+    except (NoCredentialsError, PartialCredentialsError) as exc:
+        raise ProtocolError(f"no AWS credentials: {exc}") from exc
 
 
 def make_client(region: str) -> Any:

@@ -23,32 +23,38 @@ artifacts; a missing artifact is an empty cell marked pending.
 
 Commands, in order, are in `RUNBOOK.md`.
 
-## Datasets and the candidate pool
+## Datasets and the shared passage collection
 
-Each question is retrieved from its own candidate pool. The gold passage is
-inside that pool. This is closed-pool retrieval, not retrieval over Wikipedia
-at large.
+Each dataset has one passage collection: every context paragraph in the dev
+split. Every question and every retrieval arm ranks that same collection.
+The collection is the full split. It does not shrink when the question sample
+does. Sampling writes `results/samples/{dataset}.jsonl` (questions) and
+`results/samples/{dataset}.passages.jsonl` (`id`, `title`, `text`). A
+manifest that is not schema version 2 is refused. v1 per-question pools and
+v1 generation rows are not reused.
 
-* **SQuAD 2.0** validation (`rajpurkar/squad_v2`). The pool is every distinct
-  context paragraph in the validation split that shares the question's article
-  title. Paragraphs that are never a question context are not in the split.
-  Question type is `answerable` or `unanswerable`. An unanswerable question
-  has an empty gold-answer list.
+Question type is the dataset name (`squad`, `hotpot`, `nq`). That removes the
+answerable/unanswerable split from the routing type.
+
+* **SQuAD 2.0** validation (`rajpurkar/squad_v2`). One passage per distinct
+  `(title, context)`. The question's source passage is that context paragraph.
+  An empty gold-answer list is unanswerable.
 * **HotpotQA** distractor validation (`hotpotqa/hotpot_qa`, config
-  `distractor`). The pool is the ten paragraphs shipped with the question.
-  `bridge` and `comparison` are kept as question types.
+  `distractor`). One passage per distinct paragraph text. The source passages
+  are the supporting-fact paragraphs. `bridge` and `comparison` stay on
+  `hotpot_type`. A gold answer of yes or no sets `yes_no`. The sample
+  manifest reports `n_yes_no` for the drawn questions. Yes/no questions stay
+  in the sample.
 * **Natural Questions**, tractable form: the MRQA 2019 in-domain dev file
   `NaturalQuestionsShort.jsonl.gz` (md5 `c0347eebbca02d10d1b07b9a64efe61d`).
   Each row has gold short-answer strings and a Wikipedia context that MRQA
   truncated to the first 800 tokens, kept only when the short answer occurs
   in that window. The context is split into overlapping character windows
-  (`nq_window_chars` / `nq_overlap_chars`). The file has no more of the
-  Wikipedia page, and most contexts are one or two windows, so each pool is
-  filled to `nq_pool_size` (10) with hard-negative windows. Those negatives
-  are the top BM25 hits among windows from other documents in the same seeded
-  sample. Ties break by passage id, so the pools are a function of the sample
-  seed. Every gold window stays in the pool; a context that is already longer
-  than `nq_pool_size` is not trimmed. Question type is `nq`.
+  (`nq_window_chars` / `nq_overlap_chars`), and every window in the file is
+  in the collection. The source passages are the windows that contain a gold
+  answer string (case-sensitive containment). An empty gold list, or a gold
+  string that appears in no window, stops the sample. `nq_pool_size` is
+  unused by this collection.
 
 The sample is a seeded shuffle. Questions are sorted by qid, then
 `random.Random(seed)` shuffles those positions, and the sample is the first
@@ -56,39 +62,60 @@ The sample is a seeded shuffle. Questions are sorted by qid, then
 sorted by qid, so file order is not shuffle order. A smaller n with the same
 seed is that prefix: 1100 is the first 1100 of the 1200 draw, and 1200 is
 the first 1200 of the 1500 draw. Re-running
-`sample_datasets.py` at that smaller n, over a sample already on disk, keeps
-the previously written rows for the prefix, including NQ hard-negative pools,
-so retrieval already stored for those questions still matches.
+`sample_datasets.py` at that smaller n, over a schema-version-2 sample
+already on disk, keeps the previously written question rows for the prefix
+and keeps the passage file when it matches the collection just built.
 `retrieve.py` skips `(qid, arm)` rows it has already written. The seed is
 stored on `results/samples/sample_manifest.json` (`seed`, and again under
 `sampling`). Fewer questions than requested is an error. The script does not
 pad. A same-seed run replaces a committed sample only when the question ids
-are unchanged or are this prefix. Generation, signals, calibration, replay,
-analyses, and retrieval stats read only question ids in `results/samples/`.
+are unchanged or are this prefix, and only when the shared passage file is
+present and unchanged. Generation, signals, calibration, replay, analyses,
+and retrieval stats read only question ids in `results/samples/`.
 
 ## Retrieval arms
 
-All four arms rank the same pool. `top_k` (default 5) passages are stored with
-id, text, and score.
+All four arms rank the shared collection. `top_k` (default 5) passages are
+stored with id, text, `score`, and `raw_score`.
+
+`score` is a per-query min-max of that arm's raw scores over the collection,
+so each arm's stored scores sit on [0, 1]. Equal raw scores store 0.5. Rank
+order follows the raw score, then passage id. Min-max does not reorder an
+arm. The row records `score_normalization: per_query_minmax`.
 
 * `semantic_search`: cosine similarity with
   `sentence-transformers/all-MiniLM-L6-v2` on CPU. The artifact records the
   snapshot revision: `config._commit_hash` when the library sets it, otherwise
   the commit id in the local tokenizer path (`snapshots/<commit>/`).
-* `graph_first`: an entity/co-occurrence graph built on that question's pool.
-  Entities are maximal capitalised phrases that are not a single stopword,
-  plus numeric tokens. A query term matches an entity when it casefolds equal
-  to a word in the entity (these questions are mostly lowercase). An undirected
-  edge joins entities that share a passage. A passage scores the count of
-  query entities it contains, plus half the count of their graph neighbours it
-  contains. Ties break by passage id. A pool with no entities ranks passages
-  by id.
+* `graph_first`: one bipartite graph on the shared collection. Passage
+  entities come from spaCy NER (`spacy_model`, default `en_core_web_sm`). A
+  missing install or a missing model stops retrieval. An entity key is the
+  surface form, casefolded, with whitespace collapsed. Document frequency is
+  the number of passages that contain the key. An undirected edge joins a
+  passage node and an entity node with weight `1/df`. A query seed is a spaCy
+  entity in the question whose key is in the graph, or a content token of the
+  question that equals an entity key. Seeds split the personalization mass
+  evenly. The passage score is personalized PageRank (power iteration,
+  damping `graph_damping`, iteration cap `graph_max_iter`, tolerance
+  `graph_tol`). The iteration is deterministic and the retrieval artifact
+  records `seed: null` for it. When the question matches no entity, the graph
+  has no edges, or every passage mass is zero, the arm's raw scores are the
+  vector cosines and the row records `graph_score_source: vector_fallback`.
+  Otherwise it records `pagerank`.
 * `keyword_boosted`: Okapi BM25 (`k1=1.5`, `b=0.75`), then the deployed blend
   from `retriever._keyword_boost_rerank`: keyword weight 0.25 and vector
-  weight 0.75, after min-max normalising both scores inside the pool.
-* `hybrid`: the mean of the min-max normalised vector, graph, and BM25 scores.
-  This is the local stand-in for the deployed hybrid arm, which mixes vector
-  search, the graph, and a keyword boost.
+  weight 0.75, after min-max normalising both component scores. The stored
+  score is a second min-max of that blend.
+* `hybrid`: the mean of the min-max normalised vector, graph, and BM25
+  scores, then a second min-max for storage. This is the local stand-in for
+  the deployed hybrid arm, which mixes vector search, the graph, and a
+  keyword boost.
+
+Each arm row also stores the retrieval labels in `experiments/labels.py`.
+`gold_in_top_k` is true when at least one source passage id is in the top-k
+given to the generator. `source_retrieved` is true when every source passage
+id is in that top-k. SQuAD has one source paragraph, so the two flags agree.
+Hotpot supporting-fact paragraphs and a multi-window NQ context can differ.
 
 ## Correctness
 
@@ -98,24 +125,61 @@ unanswerable question is correct exactly when the answer abstains. Abstention
 is `verified_reward_bench.is_abstention`: the normalised answer is empty, or
 it matches `verified_reward._ABSTAIN_RE` (phrases such as "insufficient
 evidence", "do not contain", "no information", "not mentioned", and
-"cannot answer" that the claim splitter already drops).
+"cannot answer" that the claim splitter already drops). Replay, calibration,
+and the joined `correct` field still use this token-F1 rule. The abstention
+labels below are stored on the generation row for later analysis.
 
-A second rate is stored beside that label: whether the normalised gold string
-is contained in the normalised answer. It is for answers that quote the span
-and then keep writing. It is not a correctness label. Replay, calibration,
-and rankings use token F1 only. The prompt asks for a short extractive span
-(`yes` or `no` on a yes/no question) and, when the passages do not contain
-the answer, for the object `{"answer": "insufficient evidence", "confidence": <0-1>}`.
+A second rate is stored beside the token-F1 label: whether the normalised
+gold string is contained in the normalised answer. It is for answers that
+quote the span and then keep writing. It is not a correctness label. The
+prompt asks for a short extractive span (`yes` or `no` on a yes/no question)
+and, when the passages do not contain the answer, for the object
+`{"answer": "insufficient evidence", "claim": "The passages do not contain the answer.", "confidence": <0-1>}`.
+
+### Abstention labels
+
+`experiments/labels.py` labels an abstention on the generation row
+(`abstention_label`, `abstention_counts_correct`). Only a call whose parse
+status is `ok` or `omitted`, and whose answer is an abstention, is labeled.
+A failed call and a truncated call leave both fields null.
+
+An abstention counts as correct only when two things are both true: every
+source passage was in the top-k given to the generator (`source_retrieved`),
+and the question is unanswerable from those passages. The label is
+`abstain_correct` and `abstention_counts_correct` is true. For SQuAD the
+source is the one context paragraph. For Hotpot it is every supporting-fact
+paragraph. For Natural Questions it is every window that contains a gold
+answer string.
+
+When any source passage is absent from that top-k, the label is
+`abstain_retrieval_miss` and `abstention_counts_correct` is false. The
+generator did not see the paragraph the question was asked against, so the
+refusal is a retrieval miss. Analysis reports this label on its own. It is
+not credited as a correct abstention.
+
+When every source passage is in the top-k and the question is answerable, the
+label is `abstain_incorrect` and `abstention_counts_correct` is false. The
+answer was in the passages the generator saw.
+
+A non-abstention has a null abstention label. Token F1, and a later
+adjudication of F1 in [0.2, 0.8], decide those rows. `gold_in_top_k` (at
+least one source id in the top-k) is stored beside `source_retrieved` so a
+partial Hotpot or NQ hit can be counted separately from the full source set
+the abstention rule uses.
 
 ## Self-confidence
 
-The generator is asked for JSON `{"answer", "confidence"}`. The prompt is
-`experiments/prompts/generator_system.txt` and is copied into the generation
-artifact. The saved answer is the `answer` field of the first JSON object in
-the reply. It is never the raw reply. The confidence sentence asks for the
-model's own probability and leaves the number unassigned, so the logged self
-signal stays unshaped, as the deployed synthesizer does when it asks for a
-confidence in [0, 1].
+The generator is asked for JSON `{"answer", "claim", "confidence"}`. The
+prompt is `experiments/prompts/generator_system.txt` and is copied into the
+generation artifact. The saved answer is the `answer` field of the first JSON
+object in the reply. It is never the raw reply. `claim` is the `claim` field
+of that object: one sentence the model asserts, stored so a later grounding
+check can score it. A missing `claim` field is null. An empty string is an
+empty claim. The answer is not copied into the claim. Lexical grounding in
+the current signals stage still scores the answer text. The confidence
+sentence asks for the model's own probability and leaves the number
+unassigned, so the logged self signal stays unshaped, as the deployed
+synthesizer does when it asks for a confidence in [0, 1].
 
 The robust reading (the `self` signal) is that first JSON object. Prose
 before or after it is ignored. A number in [0, 1] is an observation. Anything
@@ -235,17 +299,38 @@ Slopes are `c0 = E[R | Y=0, R observed]`, `c1 = E[R | Y=1, R observed]`,
 ## Cost
 
 Prices are USD per million tokens in `config.yaml`, with the source they were
-read from. A model id that is not in the table stops the run. Generation and
-the judge write each new ledger row's `usd` from that price and the call's
-token counts. `scripts/experiments/reprice_ledger.py` rewrites an existing
-ledger the same way (default `results/cost_ledger.jsonl.gz`, or `--ledger`).
-It keeps the previous `usd` as `usd_at_logged_price`, records the config
-price and a timestamp, and replaces the file by rename. A row without token
-counts is an error. The spend cap sums `usd`, so it tracks the repriced bill.
+read from. On-demand rates live in `prices_usd_per_million_tokens`. Batch
+rates live in `batch_prices_usd_per_million_tokens`. A model id that is not
+in the table for the row's pricing stops the run. Generation and the judge
+write each new ledger row's `usd` from that price and the call's token
+counts, and the row records `pricing` (`on_demand` or `batch`) and
+`price_usd_per_million`. A row with no `pricing` field is on-demand.
+`scripts/experiments/reprice_ledger.py` rewrites an existing ledger the same
+way (default `results/cost_ledger.jsonl.gz`, or `--ledger`). It keeps the
+previous `usd` as `usd_at_logged_price`, records the config price and a
+timestamp, and replaces the file by rename. A row without token counts is an
+error. The spend cap sums `usd`, so it tracks the repriced bill.
 `--dry-run` estimates input tokens as `ceil(utf-8 bytes / 4)` of the system
 prompt plus the user message, and charges `generator_max_output_tokens` on
-every call as an upper bound. It does not call the model. A real run requires
-`--max-usd` and stops before a call whose estimate would cross the cap.
+every call as an upper bound. It does not call the model. `usd_upper_bound`
+follows `inference_mode`. The artifact also stores
+`on_demand_usd_upper_bound` and `batch_usd_upper_bound`. A real run requires
+`--max-usd` and stops before a call, or before a batch job, whose estimate
+would cross the cap.
+
+`--inference-mode on_demand` (the config default) calls Bedrock Converse once
+per row. `--inference-mode batch` writes Bedrock batch JSONL (`recordId` and
+`modelInput` in that model's InvokeModel body), uploads it, and calls
+`create_model_invocation_job`. The role ARN and bucket come from
+`batch.role_arn` / `batch.bucket` or from the environment variables named in
+the config. A missing one stops the run. The projected batch cost is checked
+against the cap before the job is created. A job with fewer than
+`batch.min_records` rows is not submitted and is not padded, and the run does
+not switch to on-demand on its own. The state file under
+`results/generation/batch/` is written before upload. A later run with the
+same input polls the stored job ARN. A successful output line with no token
+counts stops the run. An error line with no usage stores zero tokens and
+`usage_observed: false`.
 Throttling is retried with backoff. `ValidationException` is stored on that
 row. `AccessDenied` stops the process. Five identical validation messages in
 a row also stop the process.

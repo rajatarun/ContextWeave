@@ -19,15 +19,18 @@ RESULTS = ROOT / "results"
 ARMS = ("semantic_search", "graph_first", "keyword_boosted", "hybrid")
 DATASETS = ("squad", "hotpot", "nq")
 
+SAMPLE_SCHEMA_VERSION = 2
+GENERATION_SCHEMA_VERSION = 2
+
 SAMPLE_FIELDS = (
     "qid", "dataset", "question", "question_type", "gold_answers",
-    "unanswerable", "pool",
+    "unanswerable", "source_passage_ids", "yes_no", "schema_version",
 )
 RETRIEVAL_FIELDS = ("qid", "dataset", "arm", "question_type", "passages")
 GENERATION_FIELDS = (
-    "qid", "dataset", "arm", "question_type", "answer", "raw_response",
+    "qid", "dataset", "arm", "question_type", "answer", "claim", "raw_response",
     "self_confidence", "self_reported", "self_status", "input_tokens",
-    "output_tokens", "model_id", "error",
+    "output_tokens", "model_id", "error", "schema_version", "pricing",
 )
 SIGNAL_FIELDS = ("qid", "dataset", "arm", "value", "reason")
 
@@ -47,6 +50,7 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
         "seed", "n_per_dataset", "top_k", "embedding_model", "nli_model",
         "grounding_threshold", "judge_sample_rate", "grounding_weight",
         "judge_weight", "self_weight", "generator_model_id", "judge_model_id",
+        "subset_generator_model_id", "adjudicator_model_id",
         "region", "temperature", "generator_max_output_tokens",
         "judge_max_output_tokens", "prices_usd_per_million_tokens",
         "fallback_omitted", "fallback_unparseable", "fallback_failed",
@@ -54,27 +58,76 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
         "replay_seeds", "high_coverage", "low_auroc_max",
         "nq_window_chars", "nq_overlap_chars", "nq_pool_size",
         "normalized_self_gap_fraction", "total_usd_cap",
+        "batch_prices_usd_per_million_tokens", "inference_mode", "batch",
+        "spacy_model", "graph_damping", "graph_max_iter", "graph_tol",
+        "schema_version", "v2",
     )
     missing = [k for k in required if k not in data]
     if missing:
         raise ProtocolError(f"config {path} is missing keys: {missing}")
-    prices = data["prices_usd_per_million_tokens"]
-    if not isinstance(prices, dict) or not prices:
-        raise ProtocolError("prices_usd_per_million_tokens is empty")
-    for model_id, row in prices.items():
-        if not isinstance(row, dict) or "input" not in row or "output" not in row:
-            raise ProtocolError(f"price row for {model_id} needs input and output")
-        if row["input"] is None or row["output"] is None:
-            raise ProtocolError(f"price row for {model_id} has a null price")
+    if data["schema_version"] != SAMPLE_SCHEMA_VERSION:
+        raise ProtocolError(
+            f"config schema_version must be {SAMPLE_SCHEMA_VERSION}, got {data['schema_version']!r}"
+        )
+    if data["inference_mode"] not in ("on_demand", "batch"):
+        raise ProtocolError(
+            f"inference_mode must be on_demand or batch, got {data['inference_mode']!r}"
+        )
+    batch = data["batch"]
+    if not isinstance(batch, dict):
+        raise ProtocolError("config batch must be a mapping")
+    for key in ("role_arn_env", "bucket_env", "prefix", "min_records", "poll_seconds", "timeout_hours"):
+        if key not in batch:
+            raise ProtocolError(f"config batch is missing {key}")
+    if int(batch["min_records"]) < 1:
+        raise ProtocolError("batch.min_records must be at least 1")
+    v2 = data["v2"]
+    if not isinstance(v2, dict):
+        raise ProtocolError("config v2 must be a mapping")
+    for key in (
+        "judge_sample_rate", "held_out_fraction", "subset_questions",
+        "subset_haiku_samples", "subset_temperature", "replay_seeds",
+        "replay_rounds", "judge_coverage", "drift_discounts",
+        "adjudication_f1_low", "adjudication_f1_high",
+    ):
+        if key not in v2:
+            raise ProtocolError(f"config v2 is missing {key}")
+    _validate_price_table(data["prices_usd_per_million_tokens"], "prices_usd_per_million_tokens")
+    _validate_price_table(
+        data["batch_prices_usd_per_million_tokens"], "batch_prices_usd_per_million_tokens",
+    )
     return data
 
 
-def price_for(cfg: dict[str, Any], model_id: str) -> dict[str, Any]:
-    table = cfg["prices_usd_per_million_tokens"]
+def _validate_price_table(prices: Any, name: str) -> None:
+    if not isinstance(prices, dict) or not prices:
+        raise ProtocolError(f"{name} is empty")
+    for model_id, row in prices.items():
+        if not isinstance(row, dict) or "input" not in row or "output" not in row:
+            raise ProtocolError(f"price row for {model_id} in {name} needs input and output")
+        if row["input"] is None or row["output"] is None:
+            raise ProtocolError(f"price row for {model_id} in {name} has a null price")
+
+
+def price_table(cfg: dict[str, Any], pricing: str = "on_demand") -> dict[str, Any]:
+    if pricing == "on_demand":
+        return cfg["prices_usd_per_million_tokens"]
+    if pricing == "batch":
+        table = cfg.get("batch_prices_usd_per_million_tokens")
+        if not isinstance(table, dict) or not table:
+            raise ProtocolError(
+                "batch_prices_usd_per_million_tokens is missing. Refusing to guess a batch price."
+            )
+        return table
+    raise ProtocolError(f"unknown pricing mode {pricing!r}. Expected on_demand or batch.")
+
+
+def price_for(cfg: dict[str, Any], model_id: str, pricing: str = "on_demand") -> dict[str, Any]:
+    table = price_table(cfg, pricing)
     if model_id not in table:
         known = ", ".join(sorted(table))
         raise ProtocolError(
-            f"no price for model {model_id!r}. The price table has: {known}. "
+            f"no {pricing} price for model {model_id!r}. The price table has: {known}. "
             "Refusing to guess a price."
         )
     return table[model_id]
@@ -113,8 +166,11 @@ def estimate_tokens(text: str) -> int:
     return (n + 3) // 4
 
 
-def cost_usd(cfg: dict[str, Any], model_id: str, input_tokens: int, output_tokens: int) -> float:
-    row = price_for(cfg, model_id)
+def cost_usd(
+    cfg: dict[str, Any], model_id: str, input_tokens: int, output_tokens: int,
+    pricing: str = "on_demand",
+) -> float:
+    row = price_for(cfg, model_id, pricing)
     return (input_tokens * float(row["input"]) + output_tokens * float(row["output"])) / 1_000_000
 
 

@@ -1,27 +1,21 @@
-"""Four retrieval arms over each question's own candidate pool.
+"""Four retrieval arms over one shared passage collection per dataset.
 
 * ``semantic_search``: cosine similarity of a pinned local sentence-transformer.
-* ``graph_first``: entity/co-occurrence graph built on the pool (below).
-* ``keyword_boosted``: Okapi BM25, reranked by the same blend the deployed
-  retriever uses (keyword weight 0.25, the rest the vector score).
-* ``hybrid``: mean of min-max normalised vector, graph, and BM25 scores.
+* ``graph_first``: spaCy entities, ``1/df`` bipartite edges, personalized
+  PageRank (``experiments.graph_rank``). No query entity, or zero mass on
+  every passage, uses the vector scores and records ``vector_fallback``.
+* ``keyword_boosted``: Okapi BM25, reranked by the deployed blend (keyword
+  weight 0.25, the rest the vector score) after min-max normalising both.
+* ``hybrid``: mean of the min-max normalised vector, graph, and BM25 scores.
 
-Graph construction, per question, over that question's pool only:
+Each arm's stored ``score`` is that arm's raw score after a per-query
+min-max over the shared collection, so the four arms sit on one scale.
+``raw_score`` keeps the value from before that step. Min-max does not
+reorder an arm. Ties break by passage id.
 
-1. Entities in a passage are maximal capitalised phrases that are not a single
-   stopword, plus numeric tokens. Questions in these datasets are usually
-   lowercase, so a query term (a content token) matches an entity when the
-   term casefolds equal to a word inside the entity.
-2. An undirected edge joins two entities that occur in the same passage.
-   Edge weight is the number of pool passages they share.
-3. Query entities are the entities matched by at least one query term.
-   Expanded entities are the query entities plus their graph neighbours.
-4. A passage scores ``|E(passage) ∩ query entities| + 0.5 * |E(passage) ∩ neighbours|``.
-   Ties break by passage id. A pool with no entities scores every passage 0
-   and the ranking is the passage-id order.
-
-The graph is not a corpus knowledge graph. It exists only inside one question's
-candidate pool.
+The collection is the dev-split passages, the same pool for every question
+and every arm. ``gold_in_top_k`` and ``source_retrieved`` are written on
+each arm row from ``source_passage_ids``.
 """
 from __future__ import annotations
 
@@ -31,10 +25,10 @@ from collections import Counter, defaultdict
 from typing import Any, Callable, Sequence
 
 from experiments.common import ARMS, ProtocolError, snapshot_revision
+from experiments.graph_rank import build_graph, graph_or_fallback
+from experiments.labels import retrieval_label
 
 _TOKEN = re.compile(r"[a-z0-9]+(?:\.[0-9]+)?", re.IGNORECASE)
-_ENTITY = re.compile(r"\b[A-Z][a-zA-Z0-9]+(?:\s+[A-Z][a-zA-Z0-9]+)*\b")
-_NUMBER = re.compile(r"\b\d+(?:\.\d+)?\b")
 _STOP = frozenset("""
 a an the and or but if then than so of in on at to for from by with without into onto
 over under about as is are was were be been being has have had do does did done can could
@@ -50,43 +44,27 @@ def tokenize(text: str) -> list[str]:
     return [t.lower() for t in _TOKEN.findall(text or "") if t.lower() not in _STOP and len(t) > 1]
 
 
-def entities_in(text: str) -> set[str]:
-    found: set[str] = set()
-    for match in _ENTITY.findall(text or ""):
-        parts = match.split()
-        if len(parts) == 1 and parts[0].lower() in _STOP:
-            continue
-        found.add(match)
-    found.update(_NUMBER.findall(text or ""))
-    return found
+def graph_scores(
+    question: str,
+    passages: Sequence[dict[str, str]],
+    entity_fn: Callable[[str], Sequence[str]],
+    vector_scores: Sequence[float] | None = None,
+    *,
+    damping: float = 0.85,
+    max_iter: int = 40,
+    tol: float = 1e-10,
+) -> list[float]:
+    """PageRank scores for ``passages``. Tests pass ``entity_fn`` explicitly.
 
-
-def _words(entity: str) -> set[str]:
-    return {w.lower() for w in re.findall(r"[A-Za-z0-9]+", entity)}
-
-
-def graph_scores(question: str, passages: Sequence[dict[str, str]]) -> list[float]:
-    ent_of = [entities_in(p["text"]) for p in passages]
-    # co-occurrence: entity -> set of neighbour entities
-    neighbours: dict[str, set[str]] = defaultdict(set)
-    for ents in ent_of:
-        items = sorted(ents)
-        for i, a in enumerate(items):
-            for b in items[i + 1:]:
-                neighbours[a].add(b)
-                neighbours[b].add(a)
-    q_terms = set(tokenize(question))
-    all_entities = set().union(*ent_of) if ent_of else set()
-    query_entities = {e for e in all_entities if _words(e) & q_terms or e in q_terms}
-    expanded_extra: set[str] = set()
-    for e in query_entities:
-        expanded_extra |= neighbours.get(e, set())
-    expanded_extra -= query_entities
-    scores = []
-    for ents in ent_of:
-        direct = len(ents & query_entities)
-        hop = len(ents & expanded_extra)
-        scores.append(float(direct) + 0.5 * float(hop))
+    The retrieval script uses spaCy. This function does not pick an extractor.
+    """
+    if vector_scores is None:
+        vector_scores = [0.0] * len(passages)
+    graph = build_graph(passages, entity_fn)
+    scores, _source = graph_or_fallback(
+        question, passages, entity_fn, vector_scores, graph, tokenize,
+        damping=damping, max_iter=max_iter, tol=tol,
+    )
     return scores
 
 
@@ -158,8 +136,14 @@ def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
     return dot / math.sqrt(na * nb)
 
 
-def _rank(passages: Sequence[dict[str, str]], scores: Sequence[float], top_k: int) -> list[dict[str, Any]]:
-    order = sorted(range(len(passages)), key=lambda i: (-scores[i], passages[i]["id"]))
+def _rank(
+    passages: Sequence[dict[str, str]],
+    raw_scores: Sequence[float],
+    norm_scores: Sequence[float],
+    top_k: int,
+) -> list[dict[str, Any]]:
+    # Min-max is monotonic, so rank follows the raw score. Passage id breaks ties.
+    order = sorted(range(len(passages)), key=lambda i: (-raw_scores[i], passages[i]["id"]))
     chosen = order[:top_k]
     out = []
     for rank, i in enumerate(chosen, start=1):
@@ -168,7 +152,8 @@ def _rank(passages: Sequence[dict[str, str]], scores: Sequence[float], top_k: in
             "id": src["id"],
             "title": src.get("title", ""),
             "text": src["text"],
-            "score": scores[i],
+            "score": norm_scores[i],
+            "raw_score": raw_scores[i],
             "rank": rank,
         })
     return out
@@ -180,35 +165,64 @@ def rank_pool(
     embed: EmbedFn,
     top_k: int,
     *,
+    entity_fn: Callable[[str], Sequence[str]],
     keyword_weight: float = 0.25,
     bm25_k1: float = 1.5,
     bm25_b: float = 0.75,
-) -> dict[str, list[dict[str, Any]]]:
+    damping: float = 0.85,
+    max_iter: int = 40,
+    tol: float = 1e-10,
+    graph: dict[str, Any] | None = None,
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Any]]:
+    if entity_fn is None:
+        raise ProtocolError("rank_pool requires an entity extractor. Refusing to guess one.")
     if top_k < 1:
         raise ProtocolError("top_k must be at least 1")
     if not passages:
-        raise ProtocolError("candidate pool is empty")
+        raise ProtocolError("shared passage collection is empty")
     texts = [p["text"] for p in passages]
     vectors = embed([question, *texts])
     if len(vectors) != len(texts) + 1:
         raise ProtocolError("embedder returned the wrong number of vectors")
     qv, pvs = vectors[0], vectors[1:]
     cosine = [_cosine(qv, pv) for pv in pvs]
-    graph = graph_scores(question, passages)
+    built = graph if graph is not None else build_graph(passages, entity_fn)
+    graph_raw, source = graph_or_fallback(
+        question, passages, entity_fn, cosine, built, tokenize,
+        damping=damping, max_iter=max_iter, tol=tol,
+    )
     bm25 = bm25_scores(question, passages, bm25_k1, bm25_b)
     bm25_n = _minmax(bm25)
     cos_n = _minmax(cosine)
-    graph_n = _minmax(graph)
+    graph_n = _minmax(graph_raw)
     kw = keyword_weight
     keyword = [(1.0 - kw) * c + kw * b for c, b in zip(cos_n, bm25_n)]
     hybrid = [(c + g + b) / 3.0 for c, g, b in zip(cos_n, graph_n, bm25_n)]
-    by_arm = {
+    raw_by_arm = {
         "semantic_search": cosine,
-        "graph_first": graph,
+        "graph_first": graph_raw,
         "keyword_boosted": keyword,
         "hybrid": hybrid,
     }
-    return {arm: _rank(passages, by_arm[arm], top_k) for arm in ARMS}
+    # The blend inputs are already min-maxed. The stored score is a second
+    # min-max of each arm so a raw cosine and a raw PageRank mass both land
+    # on [0, 1] for that query.
+    ranked = {
+        arm: _rank(passages, raw_by_arm[arm], _minmax(raw_by_arm[arm]), top_k)
+        for arm in ARMS
+    }
+    meta = {
+        "graph_score_source": source,
+        "score_normalization": "per_query_minmax",
+        "pagerank": {
+            "damping": damping,
+            "max_iter": max_iter,
+            "tol": tol,
+            "deterministic": True,
+            "seed": None,
+        },
+    }
+    return ranked, meta
 
 
 def load_embedder(model_name: str) -> tuple[EmbedFn, dict[str, Any]]:
@@ -244,28 +258,58 @@ def load_embedder(model_name: str) -> tuple[EmbedFn, dict[str, Any]]:
 
 def retrieve_dataset(
     questions: Sequence[dict[str, Any]],
+    passages: Sequence[dict[str, str]],
     embed: EmbedFn,
+    entity_fn: Callable[[str], Sequence[str]],
     top_k: int,
     cfg: dict[str, Any],
 ) -> list[dict[str, Any]]:
+    """Rank ``passages`` for every question. The collection is shared."""
+    if not passages:
+        raise ProtocolError("shared passage collection is empty")
+    known = {p["id"] for p in passages}
+    if len(known) != len(passages):
+        raise ProtocolError("shared passage collection has a duplicate passage id")
+    graph = build_graph(passages, entity_fn)
     rows = []
     kw = float(cfg["keyword_weight"])
     k1 = float(cfg["bm25_k1"])
     b = float(cfg["bm25_b"])
+    damping = float(cfg["graph_damping"])
+    max_iter = int(cfg["graph_max_iter"])
+    tol = float(cfg["graph_tol"])
     for q in questions:
-        ranked = rank_pool(
-            q["question"], q["pool"], embed, top_k,
-            keyword_weight=kw, bm25_k1=k1, bm25_b=b,
+        source_ids = q.get("source_passage_ids")
+        if not source_ids:
+            raise ProtocolError(f"{q.get('dataset')}:{q.get('qid')}: source_passage_ids is empty")
+        missing = [pid for pid in source_ids if pid not in known]
+        if missing:
+            raise ProtocolError(
+                f"{q.get('dataset')}:{q.get('qid')}: source passage {missing[0]} "
+                "is not in the shared collection"
+            )
+        ranked, meta = rank_pool(
+            q["question"], passages, embed, top_k,
+            entity_fn=entity_fn, keyword_weight=kw, bm25_k1=k1, bm25_b=b,
+            damping=damping, max_iter=max_iter, tol=tol, graph=graph,
         )
-        for arm, passages in ranked.items():
+        for arm, arm_passages in ranked.items():
+            label = retrieval_label(source_ids, [p["id"] for p in arm_passages])
             rows.append({
                 "qid": q["qid"],
                 "dataset": q["dataset"],
                 "arm": arm,
                 "question_type": q["question_type"],
                 "question": q["question"],
-                "pool_size": len(q["pool"]),
-                "passages": passages,
+                "pool_size": len(passages),
+                "collection": "shared",
+                "passages": arm_passages,
+                "source_passage_ids": list(source_ids),
+                "unanswerable": bool(q["unanswerable"]),
+                "yes_no": bool(q.get("yes_no")),
+                "graph_score_source": meta["graph_score_source"],
+                "score_normalization": meta["score_normalization"],
+                **label,
             })
     return rows
 
