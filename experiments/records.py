@@ -22,8 +22,8 @@ import verified_reward as V  # noqa: E402
 from experiments.common import ProtocolError, in_sample, read_json, read_jsonl, validate_rows
 from experiments.confidence import FAILED, OMITTED, UNPARSEABLE
 from experiments.judge_access import JUDGE_ACCESS_REASON, access_reason
+from experiments.labels import decide_correctness
 from experiments.ledger import SPEND_CAP_REASON
-from experiments.metrics import score_answer
 
 _FALLBACK = {"omitted": OMITTED, "unparseable": UNPARSEABLE, "failed": FAILED}
 
@@ -210,6 +210,23 @@ def load_joined(results: Path, cfg: dict[str, Any], datasets: Sequence[str] | No
         rows = [row for row in rows if in_sample(row, allowed)]
         validate_rows(rows, ("qid", "arm", "value", "reason"), path)
         signals[kind] = _index(rows, path)
+    low = float(cfg["v2"]["adjudication_f1_low"])
+    high = float(cfg["v2"]["adjudication_f1_high"])
+    adjudication: dict[tuple[str, str], dict[str, Any]] | None = None
+    adj_pending: dict[tuple[str, str], str] | None = None
+
+    def _adjudication() -> tuple[dict[tuple[str, str], dict[str, Any]], dict[tuple[str, str], str]]:
+        nonlocal adjudication, adj_pending
+        if adjudication is None:
+            adj_pending = _pending_keys(results / "adjudication" / "pending.json")
+            path = results / "adjudication" / "adjudication.jsonl"
+            try:
+                rows = read_jsonl(path)
+            except ProtocolError:
+                rows = []
+            adjudication = _index(rows, path) if rows else {}
+        return adjudication, adj_pending or {}
+
     joined = []
     arms = ("semantic_search", "graph_first", "keyword_boosted", "hybrid")
     for q in questions:
@@ -222,10 +239,71 @@ def load_joined(results: Path, cfg: dict[str, Any], datasets: Sequence[str] | No
             if all(key in gen_pending for key in absent):
                 continue
             raise ProtocolError(f"missing generation for {absent[0]}")
+        if "yes_no" not in q:
+            raise ProtocolError(f"sample row {q['qid']} has no yes_no")
+        decisions = []
+        skip_question = False
         for arm in arms:
             key = (q["qid"], arm)
             gen = generation[key]
-            scored = score_answer(gen["answer"], q["gold_answers"], bool(q["unanswerable"]))
+            ret = retrieval[key]
+            for flag in ("gold_in_top_k", "source_retrieved"):
+                if flag not in ret:
+                    raise ProtocolError(f"retrieval row {key} has no {flag}")
+            decision = decide_correctness(
+                answer=gen["answer"],
+                gold_answers=q["gold_answers"],
+                unanswerable=bool(q["unanswerable"]),
+                self_status=gen["self_status"],
+                source_retrieved=bool(ret["source_retrieved"]),
+                gold_in_top_k=bool(ret["gold_in_top_k"]),
+                yes_no=bool(q["yes_no"]),
+                f1_low=low,
+                f1_high=high,
+                stored_label=gen.get("abstention_label"),
+                stored_counts=gen.get("abstention_counts_correct"),
+                check_stored="abstention_label" in gen,
+            )
+            if decision["in_f1_band"]:
+                table, pending = _adjudication()
+                if key in pending:
+                    skip_question = True
+                    break
+                if key not in table:
+                    raise ProtocolError(
+                        f"token F1 for {key} is {decision['f1']} inside [{low}, {high}]. "
+                        "Run scripts/experiments/adjudicate.py. Refusing to use the 0.5 threshold."
+                    )
+                stored = table[key]
+                if "f1" not in stored:
+                    raise ProtocolError(f"adjudication for {key} has no f1")
+                if abs(float(stored["f1"]) - float(decision["f1"])) > 1e-9:
+                    raise ProtocolError(
+                        f"adjudication for {key} stored f1 {stored.get('f1')} "
+                        f"and the answer now scores {decision['f1']}."
+                    )
+                decision = decide_correctness(
+                    answer=gen["answer"],
+                    gold_answers=q["gold_answers"],
+                    unanswerable=bool(q["unanswerable"]),
+                    self_status=gen["self_status"],
+                    source_retrieved=bool(ret["source_retrieved"]),
+                    gold_in_top_k=bool(ret["gold_in_top_k"]),
+                    yes_no=bool(q["yes_no"]),
+                    f1_low=low,
+                    f1_high=high,
+                    stored_label=gen.get("abstention_label"),
+                    stored_counts=gen.get("abstention_counts_correct"),
+                    check_stored="abstention_label" in gen,
+                    adjudication=stored,
+                )
+            decisions.append((arm, gen, ret, decision))
+        if skip_question:
+            continue
+        for arm, gen, ret, decision in decisions:
+            key = (q["qid"], arm)
+            if decision["correct"] is None:
+                raise ProtocolError(f"joined correctness for {key} is missing")
             rec = {
                 "qid": q["qid"],
                 "dataset": q["dataset"],
@@ -248,10 +326,18 @@ def load_joined(results: Path, cfg: dict[str, Any], datasets: Sequence[str] | No
                     }
                     if "deployed_self_status" in gen else {}
                 ),
-                "f1": scored["f1"],
-                "correct": scored["correct"],
-                "gold_contained": scored["gold_contained"],
-                "passages": [p["text"] for p in retrieval[key]["passages"]],
+                "f1": decision["f1"],
+                "token_f1_correct": decision["token_f1_correct"],
+                "correct": decision["correct"],
+                "correct_source": decision["correct_source"],
+                "gold_contained": decision["gold_contained"],
+                "abstention_label": decision["abstention_label"],
+                "abstention_counts_correct": decision["abstention_counts_correct"],
+                "gold_in_top_k": decision["gold_in_top_k"],
+                "source_retrieved": decision["source_retrieved"],
+                "yes_no": decision["yes_no"],
+                "in_f1_band": decision["in_f1_band"],
+                "passages": [p["text"] for p in ret["passages"]],
             }
             for kind, table in signals.items():
                 if kind == "judge" and judge_blocked:

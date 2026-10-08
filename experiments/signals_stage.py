@@ -32,7 +32,7 @@ from experiments.common import (
     ProtocolError, append_jsonl, cost_usd, done_keys, estimate_tokens, price_for,
     snapshot_revision,
 )
-from experiments.ledger import SPEND_CAP_REASON, Budget
+from experiments.ledger import SPEND_CAP_REASON, Budget, planned_output_tokens
 
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "src" / "query_api"))
@@ -292,8 +292,11 @@ def judge_rows_batch(
 ) -> dict[str, Any]:
     """Write unsampled rows, then one or more Llama batch jobs for the rest.
 
-    The projected batch cost is checked before a job is created. A job smaller
-    than ``batch.min_records`` is not submitted and is not padded.
+    The projected batch cost is checked before a job is created. Output tokens
+    in that projection are this run's observed mean for the judge model when
+    the ledger has one, otherwise ``expected_output_tokens``. The request still
+    sends ``maxTokens``. A job smaller than ``batch.min_records`` is not
+    submitted and is not padded.
     """
     price_for(cfg, model_id, "batch")
     family = model_family(model_id)
@@ -327,13 +330,16 @@ def judge_rows_batch(
             continue
         pending.append(row)
 
+    planned_out = 0.0
+
     def upper_bound(row: dict[str, Any]) -> tuple[float, str | None, dict[str, Any]]:
         built = build_judge_prompt(row["question"], row["answer"], row["passages"])
         if built["prompt"] is None:
             return 0.0, None, built
-        return cost_usd(cfg, model_id, estimate_tokens(built["prompt"]), max_out, "batch"), built["prompt"], built
+        return cost_usd(cfg, model_id, estimate_tokens(built["prompt"]), planned_out, "batch"), built["prompt"], built
 
     while pending:
+        planned_out, _source = planned_output_tokens(cfg, model_id, budget=budget)
         empty = [row for row in pending if upper_bound(row)[1] is None]
         for row in empty:
             built = upper_bound(row)[2]
@@ -467,6 +473,7 @@ def _append_judge(
         budget.record({
             "qid": row["qid"], "arm": row["arm"], "dataset": row.get("dataset"),
             "usd": usd, "input_tokens": int(in_tok), "output_tokens": int(out_tok),
+            "usage_observed": usage_observed,
             "model_id": model_id, **price_fields(cfg, model_id, pricing),
         })
 
