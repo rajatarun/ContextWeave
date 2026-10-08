@@ -12,7 +12,9 @@ fall back to the prompt template and the artifact says so.
 
 Output tokens are the mean ``output_tokens`` of a prior ledger for that
 ``model_id`` when the ledger is on disk and has at least one numeric count.
-Otherwise they are the configured maximum, and the artifact says which.
+Otherwise they are ``expected_output_tokens`` for that model, and the artifact
+says which. The request maxTokens cap is recorded and is not priced. Printed
+USD is the projected cost and is not multiplied by ``spend_safety_factor``.
 
 Adjudication calls are ``take_count(judged rows, band fraction)``. The default
 fraction is ``v2.adjudication_band_fraction`` (0.15 of judged rows). That
@@ -33,6 +35,7 @@ import verified_reward as V  # noqa: E402
 
 from experiments.adjudicate_stage import ADJUDICATOR_SYSTEM, user_prompt
 from experiments.common import ARMS, DATASETS, ProtocolError, cost_usd, estimate_tokens, locate_jsonl
+from experiments.ledger import expected_output_tokens
 from experiments.data import seeded_order
 from experiments.generate_stage import build_user_message, prompt_token_estimate, system_prompt
 from experiments.signal_score import seeded_ids, stream_seed, take_count
@@ -110,8 +113,9 @@ def ledger_output_means(path: Path | None) -> dict[str, Any]:
     """Mean numeric ``output_tokens`` by ``model_id``.
 
     A missing path, or a path that is not on disk, leaves the means empty and
-    records that output tokens stay at the configured maximum. A bool or a
-    non-numeric ``output_tokens`` is skipped and counted. The mean is not guessed.
+    records that output tokens stay at ``expected_output_tokens``. A bool, a
+    non-numeric ``output_tokens``, or ``usage_observed`` false is skipped and
+    counted. The mean is not guessed.
     """
     if path is None:
         return {
@@ -120,7 +124,7 @@ def ledger_output_means(path: Path | None) -> dict[str, Any]:
             "means": {},
             "n_rows": 0,
             "skipped_rows": 0,
-            "label": "No ledger was provided. Output tokens are the configured maximum.",
+            "label": "No ledger was provided. Output tokens are expected_output_tokens from the config.",
         }
     if not _file_present(path):
         return {
@@ -130,7 +134,7 @@ def ledger_output_means(path: Path | None) -> dict[str, Any]:
             "n_rows": 0,
             "skipped_rows": 0,
             "label": (
-                f"Ledger {path} is not on disk. Output tokens are the configured maximum."
+                f"Ledger {path} is not on disk. Output tokens are expected_output_tokens from the config."
             ),
         }
     buckets: dict[str, list[float]] = {}
@@ -140,6 +144,9 @@ def ledger_output_means(path: Path | None) -> dict[str, Any]:
         n_rows += 1
         model = row.get("model_id")
         value = row.get("output_tokens")
+        if row.get("usage_observed") is False:
+            skipped += 1
+            continue
         if not isinstance(model, str) or not model:
             skipped += 1
             continue
@@ -164,7 +171,9 @@ def ledger_output_means(path: Path | None) -> dict[str, Any]:
     }
 
 
-def _output_plan(ledger: dict[str, Any], model_id: str, cap: int, calls: int) -> dict[str, Any]:
+def _output_plan(
+    ledger: dict[str, Any], model_id: str, cap: int, calls: int, expected: float,
+) -> dict[str, Any]:
     stats = (ledger.get("means") or {}).get(model_id)
     if isinstance(stats, dict) and int(stats.get("n") or 0) >= 1:
         mean = float(stats["mean"])
@@ -188,13 +197,13 @@ def _output_plan(ledger: dict[str, Any], model_id: str, cap: int, calls: int) ->
     else:
         detail = str(ledger.get("label") or "")
     return {
-        "output_token_source": "max_tokens",
-        "output_tokens_per_call": float(cap),
-        "output_tokens_total": float(cap) * calls,
+        "output_token_source": "expected_output_tokens",
+        "output_tokens_per_call": float(expected),
+        "output_tokens_total": float(expected) * calls,
         "output_tokens_n": None,
         "output_tokens_per_call_cap": cap,
         "output_token_label": (
-            f"Output tokens are the configured maximum {cap} per call. {detail}"
+            f"Output tokens are expected_output_tokens {expected:g} per call for {model_id}. {detail}"
         ),
     }
 
@@ -623,7 +632,7 @@ def project(
     gen_source, gen_in, gen_label = _input(
         "generate", generate_calls, None if measured_tokens is None else measured_tokens["generate_input"],
     )
-    gen_plan = _output_plan(ledger, generator, gen_out, generate_calls)
+    gen_plan = _output_plan(ledger, generator, gen_out, generate_calls, expected_output_tokens(cfg, generator))
     gen_on, gen_batch = _price(cfg, generator, gen_in, gen_plan["output_tokens_total"])
     stages.append(_stage(
         "generate", generator, generate_calls,
@@ -641,7 +650,7 @@ def project(
     judge_source, judge_in, judge_label = _input(
         "judge", judge_calls, None if measured_tokens is None else measured_tokens["judge_input"],
     )
-    judge_plan = _output_plan(ledger, judge, judge_out, judge_calls)
+    judge_plan = _output_plan(ledger, judge, judge_out, judge_calls, expected_output_tokens(cfg, judge))
     judge_on, judge_batch = _price(cfg, judge, judge_in, judge_plan["output_tokens_total"])
     stages.append(_stage(
         "judge", judge, judge_calls,
@@ -677,7 +686,9 @@ def project(
             None if measured_tokens is None else measured_tokens["subset_input"],
             haiku_samples,
         )
-        haiku_plan = _output_plan(ledger, generator, gen_out, haiku_calls)
+        haiku_plan = _output_plan(
+            ledger, generator, gen_out, haiku_calls, expected_output_tokens(cfg, generator),
+        )
         haiku_on, haiku_batch = _price(cfg, generator, haiku_in, haiku_plan["output_tokens_total"])
         stages.append(_stage(
             "subset_haiku", generator, haiku_calls,
@@ -696,7 +707,7 @@ def project(
             "generate", nova_calls,
             None if measured_tokens is None else measured_tokens["subset_input"],
         )
-        nova_plan = _output_plan(ledger, nova, gen_out, nova_calls)
+        nova_plan = _output_plan(ledger, nova, gen_out, nova_calls, expected_output_tokens(cfg, nova))
         nova_on, nova_batch = _price(cfg, nova, nova_in, nova_plan["output_tokens_total"])
         stages.append(_stage(
             "subset_nova", nova, nova_calls,
@@ -736,7 +747,9 @@ def project(
     else:
         adj_source, adj_in, adj_input_label = _input("adjudicate", adj_calls, None)
         adj_input_label = adj_input_label + " The call count is an assumption."
-    adj_plan = _output_plan(ledger, adjudicator, adj_out, adj_calls)
+    adj_plan = _output_plan(
+        ledger, adjudicator, adj_out, adj_calls, expected_output_tokens(cfg, adjudicator),
+    )
     adj_on, adj_batch = _price(cfg, adjudicator, adj_in, adj_plan["output_tokens_total"])
     stages.append(_stage(
         "adjudicate", adjudicator, adj_calls,
@@ -819,6 +832,15 @@ def project(
                 for model, stats in sorted((ledger.get("means") or {}).items())
             },
         },
+        "already_spent_usd": float(cfg["already_spent_usd"]),
+        "total_usd_cap": float(cfg["total_usd_cap"]),
+        "remaining_headroom_usd": float(cfg["total_usd_cap"]) - float(cfg["already_spent_usd"]),
+        "spend_safety_factor": float(cfg["spend_safety_factor"]),
+        "cap_rule": (
+            "Refuse a job when ledger usd + already_spent_usd + projected job cost "
+            "x spend_safety_factor exceeds total_usd_cap. Printed USD is the projected "
+            "cost and is not multiplied by the safety factor."
+        ),
         "estimator": "ceil(utf-8 bytes / 4)",
         "adjudication_band_fraction": fraction,
         "adjudication_band_fraction_source": fraction_source,
@@ -892,5 +914,10 @@ def format_projection(body: dict[str, Any]) -> str:
     lines.append(f"sum_on_demand_usd: {body['sum_on_demand_usd']:.6f}")
     lines.append(f"sum_batch_usd: {body['sum_batch_usd']:.6f}")
     lines.append(body["sum_note"])
+    lines.append(f"already_spent_usd: {float(body['already_spent_usd']):.2f}")
+    lines.append(f"total_usd_cap: {float(body['total_usd_cap']):.2f}")
+    lines.append(f"remaining_before_this_ledger_usd: {float(body['remaining_headroom_usd']):.2f}")
+    lines.append(f"spend_safety_factor: {float(body['spend_safety_factor']):.2f}")
+    lines.append(str(body.get("cap_rule") or ""))
     lines.append("")
     return "\n".join(lines)

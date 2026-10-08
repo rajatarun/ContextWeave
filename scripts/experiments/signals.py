@@ -26,7 +26,7 @@ from experiments.common import (
 )
 from experiments.generate_stage import make_batch_clients, make_client
 from experiments.judge_access import clear_marker, write_marker
-from experiments.ledger import SPEND_CAP_REASON, Budget, budget_for
+from experiments.ledger import SPEND_CAP_REASON, Budget, budget_for, planned_output_tokens
 from experiments.metrics import score_answer
 from experiments.records import load_joined
 from experiments.signal_score import (
@@ -422,7 +422,8 @@ def _judge_on_demand(
             done.add(key)
             n += 1
             continue
-        est = cost_usd(cfg, model_id, estimate_tokens(built["prompt"]), max_out, max_usd_pricing)
+        planned_out, _source = planned_output_tokens(cfg, model_id, budget=budget)
+        est = cost_usd(cfg, model_id, estimate_tokens(built["prompt"]), planned_out, max_usd_pricing)
         blocked = budget.blocking_reason(est)
         if blocked:
             stop_reason = blocked

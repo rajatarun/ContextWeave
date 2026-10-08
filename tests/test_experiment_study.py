@@ -213,6 +213,11 @@ def test_haiku_temperature_is_required():
     assert cfg["inference_mode"] == "batch"
     assert cfg["total_usd_cap"] == 30
     assert cfg["already_spent_usd"] == pytest.approx(12.02)
+    assert cfg["spend_safety_factor"] == pytest.approx(1.10)
+    assert cfg["expected_output_tokens"][cfg["generator_model_id"]] == 70
+    assert cfg["expected_output_tokens"][cfg["judge_model_id"]] == 20
+    assert cfg["expected_output_tokens"][cfg["subset_generator_model_id"]] == 70
+    assert cfg["expected_output_tokens"][cfg["adjudicator_model_id"]] == 64
     n, temperature = require_haiku_settings(cfg)
     assert n == 4 and temperature == 1.0
     cfg["v2"]["subset_samples"] = 1
@@ -239,6 +244,44 @@ def test_cap_adds_billed_spend_before_the_thirty_dollar_ceiling(tmp_path):
     assert budget.ledger_spent == pytest.approx(18.0)
     assert budget.global_spent == pytest.approx(30.02)
     assert budget.blocking_reason(0.0) is not None
+
+
+def test_cap_prices_expected_tokens_then_the_ledger_mean_with_a_safety_margin(tmp_path):
+    from experiments.ledger import Budget, budget_for, planned_output_tokens
+    cfg = load_config()
+    model = cfg["generator_model_id"]
+    empty = budget_for(tmp_path / "empty", "generate", 30, cfg)
+    assert empty.spend_safety_factor == pytest.approx(1.10)
+    tokens, source = planned_output_tokens(cfg, model, budget=empty)
+    assert source == "expected_output_tokens" and tokens == pytest.approx(70)
+    assert empty.blocking_reason(16.30) is None
+    blocked = empty.blocking_reason(16.40)
+    assert blocked is not None and "1.10" in blocked and "already billed" in blocked
+    stage = Budget(tmp_path / "stage", "generate", max_usd=1.0, total_usd_cap=30, spend_safety_factor=1.10)
+    stage_reason = stage.blocking_reason(1.01)
+    assert stage_reason is not None and "stage cap" in stage_reason
+    first = budget_for(tmp_path / "run", "generate", 30, cfg)
+    for output_tokens, observed in ((40, True), (60, True), (999, False)):
+        first.record({
+            "qid": "q", "arm": "semantic_search", "dataset": "squad",
+            "usd": 0.001, "input_tokens": 100, "output_tokens": output_tokens,
+            "model_id": model, "usage_observed": observed,
+        })
+    first.record({
+        "qid": "q", "arm": "hybrid", "dataset": "squad",
+        "usd": 0.0, "input_tokens": 0, "output_tokens": True, "model_id": model,
+    })
+    live, live_source = planned_output_tokens(cfg, model, budget=first)
+    assert live_source == "ledger_mean" and live == pytest.approx(50)
+    later = budget_for(tmp_path / "run", "subset_haiku", 30, cfg)
+    again, again_source = planned_output_tokens(cfg, model, budget=later)
+    assert again_source == "ledger_mean" and again == pytest.approx(50)
+    judge_tokens, judge_source = planned_output_tokens(cfg, cfg["judge_model_id"], budget=later)
+    assert judge_source == "expected_output_tokens" and judge_tokens == pytest.approx(20)
+    broken = copy.deepcopy(cfg)
+    del broken["expected_output_tokens"][cfg["judge_model_id"]]
+    with pytest.raises(ProtocolError, match="expected_output_tokens"):
+        planned_output_tokens(broken, cfg["judge_model_id"], results=tmp_path / "none")
 
 
 def test_haiku_on_demand_samples_are_separate_files(tmp_path, monkeypatch):
@@ -398,7 +441,11 @@ def test_projection_for_1100_and_judge_60_percent():
     assert by_name["adjudicate"]["calls"] == 1188
     assert by_name["adjudicate"]["on_demand_usd"] > by_name["adjudicate"]["batch_usd"] > 0
     assert "assumption" in by_name["adjudicate"]["note"].lower()
-    assert by_name["generate"]["output_token_source"] == "max_tokens"
+    assert by_name["generate"]["output_token_source"] == "expected_output_tokens"
+    assert by_name["generate"]["output_tokens_per_call"] == pytest.approx(70)
+    assert by_name["judge"]["output_tokens_per_call"] == pytest.approx(20)
+    assert by_name["subset_nova"]["output_tokens_per_call"] == pytest.approx(70)
+    assert by_name["adjudicate"]["output_tokens_per_call"] == pytest.approx(64)
     assert by_name["generate"]["input_token_source"] == "template"
     assert by_name["lexical"]["calls"] == 0
     assert by_name["generate"]["on_demand_usd"] > by_name["generate"]["batch_usd"] > 0
@@ -410,7 +457,9 @@ def test_projection_for_1100_and_judge_60_percent():
     assert "calls=1000" in text
     assert "calls=1188" in text
     assert "assumption" in text.lower()
-    assert "configured maximum" in text
+    assert "expected_output_tokens" in text
+    assert "spend_safety_factor: 1.10" in text
+    assert "remaining_before_this_ledger_usd: 17.98" in text
     assert "239571291755" not in text
     assert "called_model: false" in text
     assert body["kind"] == "projection"
@@ -457,7 +506,7 @@ def test_projection_prices_retrieved_passages_and_labels_a_missing_ledger(tmp_pa
     missing = project(cfg, 1, 1.0, ledger_path=tmp_path / "cost_ledger.jsonl.gz")
     assert missing["ledger"]["present"] is False
     assert "not on disk" in missing["output_scope"]
-    assert {stage["stage"]: stage for stage in missing["stages"]}["generate"]["output_token_source"] == "max_tokens"
+    assert {stage["stage"]: stage for stage in missing["stages"]}["generate"]["output_token_source"] == "expected_output_tokens"
     with pytest.raises(ProtocolError, match="missing"):
         project(cfg, 1, 1.0, results=tmp_path / "empty", require_results=True)
     partial = tmp_path / "partial"
@@ -467,7 +516,7 @@ def test_projection_prices_retrieved_passages_and_labels_a_missing_ledger(tmp_pa
         project(cfg, 1, 1.0, results=partial)
 
 
-def test_projection_uses_a_ledger_mean_and_keeps_max_tokens_for_other_models(tmp_path):
+def test_projection_uses_a_ledger_mean_and_expected_tokens_for_other_models(tmp_path):
     cfg = load_config()
     cfg["v2"]["subset_questions"] = 3
     model = cfg["generator_model_id"]
@@ -482,10 +531,13 @@ def test_projection_uses_a_ledger_mean_and_keeps_max_tokens_for_other_models(tmp
     assert by_name["generate"]["output_tokens_per_call"] == pytest.approx(20.0)
     assert by_name["generate"]["output_tokens_n"] == 2
     assert by_name["subset_haiku"]["output_token_source"] == "ledger_mean"
-    assert by_name["subset_nova"]["output_token_source"] == "max_tokens"
-    assert by_name["judge"]["output_token_source"] == "max_tokens"
-    assert by_name["adjudicate"]["output_token_source"] == "max_tokens"
-    assert "configured maximum" in by_name["subset_nova"]["output_token_label"]
+    assert by_name["subset_nova"]["output_token_source"] == "expected_output_tokens"
+    assert by_name["subset_nova"]["output_tokens_per_call"] == pytest.approx(70)
+    assert by_name["judge"]["output_token_source"] == "expected_output_tokens"
+    assert by_name["judge"]["output_tokens_per_call"] == pytest.approx(20)
+    assert by_name["adjudicate"]["output_token_source"] == "expected_output_tokens"
+    assert by_name["adjudicate"]["output_tokens_per_call"] == pytest.approx(64)
+    assert "expected_output_tokens" in by_name["subset_nova"]["output_token_label"]
     capped = project(cfg, 2, 0.5)
     capped_generate = {stage["stage"]: stage for stage in capped["stages"]}["generate"]
     assert by_name["generate"]["on_demand_usd"] < capped_generate["on_demand_usd"]

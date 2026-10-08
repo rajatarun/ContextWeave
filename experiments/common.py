@@ -60,6 +60,7 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
         "nq_window_chars", "nq_overlap_chars", "nq_pool_size",
         "nli_max_tokens", "nli_special_tokens",
         "normalized_self_gap_fraction", "total_usd_cap", "already_spent_usd",
+        "spend_safety_factor", "expected_output_tokens",
         "batch_prices_usd_per_million_tokens", "inference_mode", "batch",
         "spacy_model", "graph_damping", "graph_max_iter", "graph_tol",
         "schema_version", "v2",
@@ -89,6 +90,12 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
             f"already_spent_usd is {billed!r}. It is the billed spend from the AWS bill "
             "and must be a number >= 0."
         )
+    factor = data["spend_safety_factor"]
+    if isinstance(factor, bool) or not isinstance(factor, (int, float)) or factor <= 0:
+        raise ProtocolError(
+            f"spend_safety_factor is {factor!r}. It must be a number > 0."
+        )
+    _validate_expected_output_tokens(data)
     v2 = data["v2"]
     if not isinstance(v2, dict):
         raise ProtocolError("config v2 must be a mapping")
@@ -106,6 +113,28 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
         data["batch_prices_usd_per_million_tokens"], "batch_prices_usd_per_million_tokens",
     )
     return data
+
+
+def _validate_expected_output_tokens(data: dict[str, Any]) -> None:
+    expected = data["expected_output_tokens"]
+    if not isinstance(expected, dict) or not expected:
+        raise ProtocolError("expected_output_tokens must be a mapping of model id to tokens")
+    for model_key in (
+        "generator_model_id", "judge_model_id",
+        "subset_generator_model_id", "adjudicator_model_id",
+    ):
+        model_id = data[model_key]
+        if model_id not in expected:
+            known = ", ".join(sorted(expected))
+            raise ProtocolError(
+                f"expected_output_tokens is missing {model_id}. Known: {known}. "
+                "Refusing to price the request maximum."
+            )
+        value = expected[model_id]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            raise ProtocolError(
+                f"expected_output_tokens for {model_id} is {value!r}. It must be a number > 0."
+            )
 
 
 def _validate_price_table(prices: Any, name: str) -> None:

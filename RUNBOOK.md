@@ -62,10 +62,11 @@ datasets' stat blocks.
 python3 scripts/experiments/generate.py --dry-run --seed 0
 ```
 
-Writes `results/generation/dry_run_cost.json`. The upper bound charges
-`generator_max_output_tokens` on every call, so it can sit above the stage
-budget below. The run still uses those caps and stops cleanly when the ledger
-reaches one.
+Writes `results/generation/dry_run_cost.json`. The estimate charges
+`expected_output_tokens` (Haiku 70) on every call, or this results ledger's
+observed output mean when one exists. `generator_max_output_tokens` (256)
+stays the request cap and is not priced. The run stops cleanly when the
+ledger reaches a cap.
 
 ```bash
 python3 scripts/experiments/generate.py --seed 0 --max-usd 27
@@ -112,10 +113,14 @@ file is new). Each new row's `usd` is the call's input and output token
 counts at the current price in `experiments/config.yaml`. `--total-usd-cap`
 defaults to 30. `already_spent_usd` is 12.02, the billed Bedrock spend on the
 AWS bill from prior ledgers that are not in this results directory. The cap
-check adds that amount to the ledger total. At an empty ledger the remaining
-headroom is 17.98. `--max-usd 27` reserves the generation stage. The ledger
-is what the judge reads, so a judge call is refused when already-billed spend
-plus the ledger plus that call would cross $30. If generation stops under
+check adds that amount to the ledger total, then adds the projected job cost
+times `spend_safety_factor` (1.10). At an empty ledger the remaining headroom
+before that margin is 17.98. The projection prices `expected_output_tokens`
+until this results ledger has an observed output mean for the model, and
+later stages then use that mean. `--max-usd 27` reserves the generation stage
+and does not apply the 1.10 factor. The ledger is what the judge reads, so a
+judge job is refused when already-billed spend plus the ledger plus that
+job's estimate times 1.10 would cross $30. If generation stops under
 $27, the unused part of the $30, after `already_spent_usd`, can be given to
 the judge by raising its `--max-usd`.
 
@@ -225,7 +230,7 @@ config (`n_per_dataset` 1100, `v2.judge_sample_rate` 0.60).
 squad, hotpot, and nq. `v2.subset_samples` is 4 temperature-1 Haiku answers
 on that subset. Bulk stages default to batch. The projection reads sample and retrieval files when
 they are present. `--ledger` supplies a prior ledger of output token counts.
-A ledger that is not on disk leaves output tokens at the configured maximum
+A ledger that is not on disk leaves output tokens at `expected_output_tokens`
 and the print says so. Adjudication is priced as
 `v2.adjudication_band_fraction` (0.15) of the judged rows, and that line is
 an assumption.

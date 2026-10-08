@@ -53,13 +53,14 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{name}: left {left_out} retrieval rows outside the sample", flush=True)
             rows.extend(kept)
         if args.dry_run:
-            estimate = dry_run(cfg, rows, model_id)
+            estimate = dry_run(cfg, rows, model_id, results=args.results)
             path = args.results / "generation" / "dry_run_cost.json"
             write_dry_run_artifact(cfg, seed, estimate, path)
             print(f"calls: {estimate['n_calls']}")
             print(f"input tokens (estimate): {estimate['input_tokens_estimate']}")
-            print(f"output tokens (upper bound): {estimate['output_tokens_upper_bound']}")
-            print(f"USD upper bound: {estimate['usd_upper_bound']:.6f}")
+            print(f"output tokens (expected): {estimate['output_tokens_estimate']}")
+            print(f"USD (expected): {estimate['usd_upper_bound']:.6f}")
+            print(estimate["output_policy"])
             print(f"estimator: {estimate['estimator']}")
             print(f"wrote {path}")
             return 0

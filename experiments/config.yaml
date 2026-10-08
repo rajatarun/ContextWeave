@@ -67,17 +67,48 @@ judge_max_output_tokens: 300
 
 # Hard ceiling for all Bedrock spend, USD. The shared cost_ledger is what
 # the stages read for spend in this results directory. A stage also has its
-# own --max-usd.
+# own --max-usd. The stage check compares this stage's ledger rows plus the
+# unscaled next estimate with --max-usd.
 # already_spent_usd is spend already on the AWS bill that is not in this
 # results ledger. Prior experiment ledgers were billed and are not replayed
-# here. 12.02 is that billed total, read from the AWS bill. The cap check is
-# ledger usd + already_spent_usd + the next estimate, compared with
-# total_usd_cap. At an empty ledger the remaining headroom is 17.98.
+# here. 12.02 is that billed total, read from the AWS bill. The total-cap
+# check refuses a job when
+# ledger usd + already_spent_usd + projected job cost * spend_safety_factor
+# exceeds total_usd_cap. At an empty ledger the remaining headroom before
+# that margin is 17.98.
 total_usd_cap: 30
 already_spent_usd: 12.02
+spend_safety_factor: 1.10
+
+# Expected output tokens for the cost projection and the pre-job cap check.
+# generator_max_output_tokens, judge_max_output_tokens, and
+# adjudicator_max_output_tokens stay the Converse maxTokens ceiling. They
+# are not the cost estimate.
+#
+# Planning allowances from ledgers on Raja's machine (v1 runs and 4 smoke
+# runs, same prompts):
+# Haiku generate was about 1,150 input tokens and about 50 output tokens per
+# call. Smoke output means were 49.3, 51.4, and 47.6. The full v1 run
+# averaged 38.0 output tokens, and that average includes an older prompt.
+# 70 leaves room for the new claim field.
+# Llama judge was about 1,340 input tokens and 16.0 output tokens per call.
+# 20 is a small allowance over 16.0.
+# Nova Pro is 70, the same generator-prompt allowance as Haiku. There is no
+# Nova ledger mean.
+# The gpt-oss adjudicator is 64, a planning allowance for one JSON object,
+# below the 128 maxTokens cap. It is not a measured mean.
+# After a stage writes numeric output_tokens for a model, later cap checks
+# in this results directory use that observed mean instead of the figure here.
+expected_output_tokens:
+  us.anthropic.claude-haiku-4-5-20251001-v1:0: 70
+  us.meta.llama3-3-70b-instruct-v1:0: 20
+  us.amazon.nova-pro-v1:0: 70
+  openai.gpt-oss-120b-1:0: 64
 
 # Token estimates use ceil(utf-8 bytes / 4). That is an approximation, not a
-# provider tokenizer. Dry-run output cost charges the max output length.
+# provider tokenizer. Projection and the pre-job cap check price
+# expected_output_tokens, or this run's observed output mean once the ledger
+# has one for that model.
 token_estimate: ceil_utf8_bytes_div_4
 
 keyword_weight: 0.25

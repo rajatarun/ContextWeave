@@ -5,8 +5,9 @@
 ``--from-results`` to price the prompts in a sample and retrieval directory.
 When that flag is omitted, files under ``--results`` are used if every dataset
 has both, and otherwise the input estimate stays on the template. ``--ledger``
-supplies output-token means. A ledger that is not on disk leaves output tokens
-at the configured maximum and the print says so. ``--band-fraction`` overrides
+supplies output-token means. A ledger that is not on disk, or a model with
+no numeric rows, leaves output tokens at ``expected_output_tokens`` and the
+print says so. ``--band-fraction`` overrides
 ``v2.adjudication_band_fraction``. Pass ``--write`` to store
 ``results/cost_projection.json``. The file is a projection.
 """
@@ -35,7 +36,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument(
         "--ledger", type=Path, default=None,
-        help="prior cost ledger with output_tokens per model. Missing file uses max tokens.",
+        help="prior cost ledger with output_tokens per model. Missing file uses expected_output_tokens.",
     )
     ap.add_argument(
         "--band-fraction", type=float, default=None,

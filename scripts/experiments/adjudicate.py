@@ -26,7 +26,7 @@ from experiments.common import (
 )
 from experiments.generate_stage import make_client
 from experiments.labels import decide_correctness
-from experiments.ledger import SPEND_CAP_REASON, budget_for
+from experiments.ledger import SPEND_CAP_REASON, budget_for, planned_output_tokens
 from experiments.records import _pending_keys
 
 
@@ -139,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
         done = done_keys(path, ("qid", "arm"))
         pending_rows = [row for row in rows if (row["qid"], row["arm"]) not in done]
         max_out = int(cfg["adjudicator_max_output_tokens"])
+        planned_out, planned_source = planned_output_tokens(cfg, model_id, results=args.results)
         if args.dry_run:
             usd = 0.0
             listed = []
@@ -146,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
                 prompt = user_prompt(row["question"], row["answer"], row["gold_answers"])
                 usd += cost_usd(
                     cfg, model_id, estimate_tokens(ADJUDICATOR_SYSTEM) + estimate_tokens(prompt),
-                    max_out, "on_demand",
+                    planned_out, "on_demand",
                 )
                 listed.append({
                     "qid": row["qid"], "arm": row["arm"], "dataset": row["dataset"], "f1": row["f1"],
@@ -155,7 +156,12 @@ def main(argv: list[str] | None = None) -> int:
                 cfg, seed, stage="adjudication_dry_run", model_id=model_id,
                 system_prompt=ADJUDICATOR_SYSTEM, called_model=False, deterministic=True,
                 temperature=0, n_calls=len(pending_rows), usd_upper_bound=usd,
-                estimator="ceil_utf8_bytes_div_4 plus adjudicator_max_output_tokens",
+                expected_output_tokens_per_call=planned_out,
+                output_token_source=planned_source,
+                estimator=(
+                    f"ceil_utf8_bytes_div_4 plus {planned_out:g} output tokens ({planned_source}). "
+                    f"adjudicator_max_output_tokens {max_out} is the request cap and is not priced."
+                ),
                 f1_low=float(cfg["v2"]["adjudication_f1_low"]),
                 f1_high=float(cfg["v2"]["adjudication_f1_high"]),
                 rows=listed,
@@ -176,9 +182,10 @@ def main(argv: list[str] | None = None) -> int:
         pending: list[dict] = []
         for index, row in enumerate(pending_rows):
             prompt = user_prompt(row["question"], row["answer"], row["gold_answers"])
+            planned_out, _source = planned_output_tokens(cfg, model_id, budget=budget)
             est = cost_usd(
                 cfg, model_id, estimate_tokens(ADJUDICATOR_SYSTEM) + estimate_tokens(prompt),
-                max_out, "on_demand",
+                planned_out, "on_demand",
             )
             blocked = budget.blocking_reason(est)
             if blocked:
@@ -209,6 +216,7 @@ def main(argv: list[str] | None = None) -> int:
             budget.record({
                 "qid": row["qid"], "arm": row["arm"], "dataset": row["dataset"],
                 "usd": usd, "input_tokens": in_tok, "output_tokens": out_tok,
+                "usage_observed": failure is None,
                 "model_id": model_id, "pricing": "on_demand",
                 "price_usd_per_million": record["price_usd_per_million"],
             })

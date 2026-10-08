@@ -12,8 +12,9 @@ status ``omitted`` and a null confidence. The saved answer is the JSON
 ``answer`` field, or that phrase, never the raw reply.
 
 ``--dry-run`` builds every prompt from the retrieval file and reports an
-input-token estimate plus an output-token upper bound (max output tokens on
-every call). It does not call the model.
+input-token estimate plus ``expected_output_tokens`` (or this run's observed
+output mean when the ledger has one). The request maxTokens cap is not priced.
+It does not call the model.
 
 A missing price, a missing credential on a real run, or ``AccessDenied`` stops
 the process. ``ValidationException`` is recorded on that row. Five identical
@@ -37,7 +38,7 @@ from experiments.common import (
 )
 from experiments.confidence import parse_self_confidence
 from experiments.labels import abstention_outcome
-from experiments.ledger import SPEND_CAP_REASON, Budget
+from experiments.ledger import SPEND_CAP_REASON, Budget, planned_output_tokens
 from experiments.metrics import is_abstention
 
 PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "generator_system.txt"
@@ -76,7 +77,12 @@ class SpendCap(Exception):
     pass
 
 
-def dry_run(cfg: dict[str, Any], retrieval_rows: list[dict[str, Any]], model_id: str) -> dict[str, Any]:
+def dry_run(
+    cfg: dict[str, Any],
+    retrieval_rows: list[dict[str, Any]],
+    model_id: str,
+    results: Path | None = None,
+) -> dict[str, Any]:
     price_for(cfg, model_id)
     system = system_prompt()
     n = 0
@@ -86,7 +92,8 @@ def dry_run(cfg: dict[str, Any], retrieval_rows: list[dict[str, Any]], model_id:
         input_tokens += prompt_token_estimate(system, user)
         n += 1
     max_out = int(cfg["generator_max_output_tokens"])
-    output_tokens = n * max_out
+    expected, source = planned_output_tokens(cfg, model_id, results=results)
+    output_tokens = n * expected
     on_demand = cost_usd(cfg, model_id, input_tokens, output_tokens, "on_demand")
     batch = cost_usd(cfg, model_id, input_tokens, output_tokens, "batch")
     pricing = cfg.get("inference_mode") or "on_demand"
@@ -99,12 +106,18 @@ def dry_run(cfg: dict[str, Any], retrieval_rows: list[dict[str, Any]], model_id:
         "n_calls": n,
         "input_tokens_estimate": input_tokens,
         "output_tokens_upper_bound": output_tokens,
+        "output_tokens_estimate": output_tokens,
+        "expected_output_tokens_per_call": expected,
+        "output_token_source": source,
         "generator_max_output_tokens": max_out,
         "usd_upper_bound": usd,
         "on_demand_usd_upper_bound": on_demand,
         "batch_usd_upper_bound": batch,
         "estimator": "ceil(utf-8 bytes / 4) summed over the system prompt and the user message",
-        "output_policy": "upper bound charges generator_max_output_tokens on every call",
+        "output_policy": (
+            f"cost charges {expected:g} output tokens per call (source {source}). "
+            f"generator_max_output_tokens {max_out} is the request cap and is not priced."
+        ),
         "called_model": False,
     }
 
@@ -255,6 +268,7 @@ def _ledger_row(row: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
         "qid": row["qid"], "arm": row["arm"], "dataset": row.get("dataset"),
         "usd": record["usd"], "input_tokens": record["input_tokens"],
         "output_tokens": record["output_tokens"], "model_id": record["model_id"],
+        "usage_observed": record["usage_observed"],
         "pricing": record["pricing"],
         "price_usd_per_million": record["price_usd_per_million"],
     }
@@ -288,7 +302,8 @@ def generate_rows(
             continue
         user = build_user_message(row["question"], row["passages"])
         est_in = prompt_token_estimate(system, user)
-        est_cost = cost_usd(cfg, model_id, est_in, max_out, pricing)
+        planned_out, _source = planned_output_tokens(cfg, model_id, budget=budget)
+        est_cost = cost_usd(cfg, model_id, est_in, planned_out, pricing)
         reason = budget.blocking_reason(est_cost)
         if reason:
             pending = [
@@ -490,8 +505,10 @@ def generate_rows_batch(
     """One or more batch jobs for the rows not already on disk.
 
     The projected batch cost of a job is checked against the spend cap before
-    the job is created. A job smaller than ``batch.min_records`` is not
-    submitted and is not padded.
+    the job is created. Output tokens in that projection are this run's
+    observed mean for the model when the ledger has one, otherwise
+    ``expected_output_tokens``. The request still sends ``maxTokens``.
+    A job smaller than ``batch.min_records`` is not submitted and is not padded.
     """
     price_for(cfg, model_id, "batch")
     _refuse_foreign_generation(out_path)
@@ -509,13 +526,15 @@ def generate_rows_batch(
         done=done, s3=s3, bedrock=bedrock, sleep=sleep, state_dir=state_dir,
     )
     pending = [row for row in retrieval_rows if (row["qid"], row["arm"]) not in done]
+    planned_out = 0.0
 
     def upper_bound(row: dict[str, Any]) -> tuple[float, str]:
         user = build_user_message(row["question"], row["passages"])
         est_in = prompt_token_estimate(system, user)
-        return cost_usd(cfg, model_id, est_in, max_out, "batch"), user
+        return cost_usd(cfg, model_id, est_in, planned_out, "batch"), user
 
     while pending:
+        planned_out, _source = planned_output_tokens(cfg, model_id, budget=budget)
         chosen: list[dict[str, Any]] = []
         users: list[str] = []
         projected = 0.0

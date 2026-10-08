@@ -189,12 +189,20 @@ def render(results: Path) -> tuple[str, str]:
             "reason": "results/generation/dry_run_cost.json is missing",
         })
     else:
-        doc.table("Generator cost upper bound", ["field", "value"], [
+        if est.get("expected_output_tokens_per_call") is None:
+            token_label = "output tokens (upper bound)"
+            token_value = est.get("output_tokens_upper_bound")
+            usd_label = "USD upper bound"
+        else:
+            token_label = "output tokens (expected)"
+            token_value = est.get("output_tokens_estimate", est.get("output_tokens_upper_bound"))
+            usd_label = "USD (expected)"
+        doc.table("Generator cost estimate", ["field", "value"], [
             ["model", _fmt(est.get("model_id"))],
             ["calls", doc.cell("dry-run", "calls", est.get("n_calls"), "n_calls null")],
             ["input tokens (estimate)", doc.cell("dry-run", "input tokens", est.get("input_tokens_estimate"), "input tokens null")],
-            ["output tokens (upper bound)", doc.cell("dry-run", "output tokens", est.get("output_tokens_upper_bound"), "output tokens null")],
-            ["USD upper bound", doc.cell("dry-run", "usd", est.get("usd_upper_bound"), "usd null")],
+            [token_label, doc.cell("dry-run", "output tokens", token_value, "output tokens null")],
+            [usd_label, doc.cell("dry-run", "usd", est.get("usd_upper_bound"), "usd null")],
         ])
         doc.p(str(est.get("estimator", "")))
         doc.p(str(est.get("output_policy", "")))
@@ -496,14 +504,17 @@ def render(results: Path) -> tuple[str, str]:
     doc.p(
         f"The Bedrock ceiling is total_usd_cap {cfg['total_usd_cap']}. "
         f"already_spent_usd {cfg['already_spent_usd']} is spend already on the AWS bill "
-        "from prior ledgers. The cap check adds it to this results ledger before applying the ceiling. "
+        "from prior ledgers. The cap check adds it to this results ledger. A job is refused "
+        f"when that sum plus the projected job cost times spend_safety_factor "
+        f"{cfg['spend_safety_factor']} exceeds the ceiling. "
         f"Bulk stages default to `{cfg['inference_mode']}`."
     )
     doc.p(
         "Projected spend is copied from `results/cost_projection.json` when that file is present. "
         "That artifact records whether input tokens were measured from the retrieved passages "
-        "or taken from the prompt template, whether output tokens are a ledger mean or the "
-        "configured maximum, and the adjudication call count, which is an assumption."
+        "or taken from the prompt template, whether output tokens are a ledger mean or "
+        "expected_output_tokens, and the adjudication call count, which is an assumption. "
+        "The printed USD is the projected cost. The safety factor is applied only in the cap check."
     )
     projection = _load(results / "cost_projection.json")
     if projection is None or projection.get("kind") != "projection":

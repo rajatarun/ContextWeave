@@ -119,11 +119,12 @@ def _run_generation(
     rows = _subset_rows(args.results, names, manifest)
     run_cfg = {**cfg, "temperature": temperature, "inference_mode": args.inference_mode or cfg["inference_mode"]}
     if args.dry_run:
-        estimate = dry_run(run_cfg, rows, model_id)
+        estimate = dry_run(run_cfg, rows, model_id, results=args.results)
         estimate["n_repeats"] = repeats
         estimate["n_calls_one_pass"] = estimate["n_calls"]
         for key in (
             "n_calls", "input_tokens_estimate", "output_tokens_upper_bound",
+            "output_tokens_estimate",
             "usd_upper_bound", "on_demand_usd_upper_bound", "batch_usd_upper_bound",
         ):
             estimate[key] = estimate[key] * repeats
@@ -135,8 +136,9 @@ def _run_generation(
             run_cfg, seed, stage=f"{stage}_dry_run", estimate=estimate, called_model=False, note=note,
         ))
         print(f"calls: {estimate['n_calls']}")
-        print(f"on-demand USD upper bound: {estimate['on_demand_usd_upper_bound']:.6f}")
-        print(f"batch USD upper bound: {estimate['batch_usd_upper_bound']:.6f}")
+        print(f"on-demand USD (expected): {estimate['on_demand_usd_upper_bound']:.6f}")
+        print(f"batch USD (expected): {estimate['batch_usd_upper_bound']:.6f}")
+        print(estimate["output_policy"])
         print(f"wrote {path}")
         return 0
     if args.max_usd is None:

@@ -395,14 +395,22 @@ timestamp, and replaces the file by rename. A row without token counts is an
 error. The spend cap sums `usd` and adds `already_spent_usd`. That config value is
 spend already on the AWS bill from prior ledgers that are not in this results
 directory. It is 12.02. `total_usd_cap` stays 30, so an empty ledger has 17.98
-of headroom. The cap tracks the repriced bill plus that billed amount.
-`--dry-run` estimates input tokens as `ceil(utf-8 bytes / 4)` of the system
-prompt plus the user message, and charges `generator_max_output_tokens` on
-every call as an upper bound. It does not call the model. `usd_upper_bound`
-follows `inference_mode`. The artifact also stores
-`on_demand_usd_upper_bound` and `batch_usd_upper_bound`. A real run requires
-`--max-usd` and stops before a call, or before a batch job, whose estimate
-would cross the cap.
+of headroom before the safety margin. A job is refused when ledger usd plus
+`already_spent_usd` plus the projected job cost times `spend_safety_factor`
+(1.10) exceeds 30. The stage `--max-usd` check does not apply that factor.
+The projected output length is `expected_output_tokens` for the model until
+this results ledger has a numeric output mean for it. Those figures are Haiku
+70, Llama judge 20, Nova Pro 70, and the gpt-oss adjudicator 64. Haiku 70
+leaves room for the claim field over smoke means 49.3, 51.4, and 47.6 and a
+v1 mean of 38.0. Llama 20 sits over a measured 16.0. Nova has no ledger mean.
+64 is a planning allowance for one adjudicator JSON object, below the 128
+request cap. The request `maxTokens` caps stay 256, 300, and 128 and are not
+priced. `--dry-run` estimates input tokens as `ceil(utf-8 bytes / 4)` of the
+system prompt plus the user message, and charges that expected output length.
+It does not call the model. `usd_upper_bound` follows `inference_mode` and is
+that expected cost. The artifact also stores `on_demand_usd_upper_bound` and
+`batch_usd_upper_bound`. A real run requires `--max-usd` and stops before a
+call, or before a batch job, whose estimate would cross the cap.
 
 `inference_mode` defaults to `batch` for the bulk stages (generation, the
 judge, and the subset Haiku and Nova draws). `--inference-mode batch` writes
@@ -467,7 +475,7 @@ another directory and stops if a file is missing. Without that flag, a
 directory that has neither file keeps the prompt-template estimate and says
 so. Output tokens are the mean `output_tokens` for that model in `--ledger`
 when the ledger is on disk. A missing ledger, or a model with no numeric
-rows, uses the configured maximum and the print says which. Adjudication
+rows, uses `expected_output_tokens` and the print says which. Adjudication
 calls are `v2.adjudication_band_fraction` (0.15) of the judged rows. That
 count is an assumption, not a measured token-F1 band.
 `--write` stores `results/cost_projection.json`.
