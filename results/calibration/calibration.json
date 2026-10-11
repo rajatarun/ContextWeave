@@ -1,0 +1,1180 @@
+{
+  "bootstrap_samples": 1000,
+  "config": {
+    "adjudicator_max_output_tokens": 1024,
+    "adjudicator_model_id": "openai.gpt-oss-120b-1:0",
+    "adjudicator_temperature": 0,
+    "already_spent_usd": 12.02,
+    "batch": {
+      "bucket": "",
+      "bucket_env": "BEDROCK_BATCH_BUCKET",
+      "min_records": 100,
+      "poll_seconds": 30,
+      "prefix": "experiments/v2",
+      "role_arn": "",
+      "role_arn_env": "BEDROCK_BATCH_ROLE_ARN",
+      "timeout_hours": 24
+    },
+    "batch_prices_usd_per_million_tokens": {
+      "openai.gpt-oss-120b-1:0": {
+        "input": 0.075,
+        "output": 0.3,
+        "source": "AWS Price List AmazonBedrock us-east-1 version 20261006144726. Batch $0.000075 per 1K input (SKU P9G2AVNMEZE36NEN) and $0.0003 per 1K output (SKU AQEZQAY2B27EKGDJ).\n"
+      },
+      "us.amazon.nova-pro-v1:0": {
+        "input": 0.4,
+        "output": 1.6,
+        "source": "AWS Price List AmazonBedrock us-east-1 version 20261006144726. Batch $0.0004 per 1K input (SKU 6FVZT3BBCSHTHQND, USE1-NovaPro-input-tokens-batch) and $0.0016 per 1K output (SKU URFXX2XGYJ66495M, USE1-NovaPro-output-tokens-batch).\n"
+      },
+      "us.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "input": 0.55,
+        "output": 2.75,
+        "source": "Half of the billed cross-region on-demand rate 1.10 / 5.50. The AmazonBedrock offer does not list Claude Haiku 4.5.\n"
+      },
+      "us.meta.llama3-3-70b-instruct-v1:0": {
+        "input": 0.36,
+        "output": 0.36,
+        "source": "AWS Price List AmazonBedrock us-east-1 version 20261006144726. Batch $0.00036 per 1K input (SKU E748GM9E4FUC8WY6) and output (SKU D96KFRU98U5RRW7F).\n"
+      }
+    },
+    "bm25_b": 0.75,
+    "bm25_k1": 1.5,
+    "bootstrap_samples": 1000,
+    "datasets": {
+      "hotpot": {
+        "config": "distractor",
+        "huggingface": "hotpotqa/hotpot_qa",
+        "id": "hotpot",
+        "split": "validation"
+      },
+      "nq": {
+        "description": "MRQA 2019 in-domain dev file NaturalQuestionsShort. Natural Questions adapted to extractive QA: gold short-answer strings and the Wikipedia context, truncated by MRQA to the first 800 tokens and kept only when the short answer occurs in that window.\n",
+        "id": "nq",
+        "md5": "c0347eebbca02d10d1b07b9a64efe61d",
+        "url": "https://s3.us-east-2.amazonaws.com/mrqa/release/v2/dev/NaturalQuestionsShort.jsonl.gz"
+      },
+      "squad": {
+        "huggingface": "rajpurkar/squad_v2",
+        "id": "squad",
+        "split": "validation"
+      }
+    },
+    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "expected_output_tokens": {
+      "openai.gpt-oss-120b-1:0": 64,
+      "us.amazon.nova-pro-v1:0": 70,
+      "us.anthropic.claude-haiku-4-5-20251001-v1:0": 70,
+      "us.meta.llama3-3-70b-instruct-v1:0": 20
+    },
+    "fallback_failed": 0.0,
+    "fallback_omitted": 0.7,
+    "fallback_unparseable": 0.5,
+    "generator_max_output_tokens": 256,
+    "generator_model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "graph_damping": 0.85,
+    "graph_max_iter": 40,
+    "graph_tol": 1e-10,
+    "grounding_threshold": 0.6,
+    "grounding_weight": 1.0,
+    "high_coverage": 0.8,
+    "inference_mode": "batch",
+    "judge_max_output_tokens": 300,
+    "judge_model_id": "us.meta.llama3-3-70b-instruct-v1:0",
+    "judge_sample_rate": 0.05,
+    "judge_weight": 2.0,
+    "keyword_weight": 0.25,
+    "low_auroc_max": 0.6,
+    "n_per_dataset": 1100,
+    "nli_max_tokens": 512,
+    "nli_model": "cross-encoder/nli-deberta-v3-small",
+    "nli_special_tokens": 3,
+    "normalized_self_gap_fraction": 0.5,
+    "nq_overlap_chars": 200,
+    "nq_pool_size": 10,
+    "nq_window_chars": 800,
+    "prices_usd_per_million_tokens": {
+      "openai.gpt-oss-120b-1:0": {
+        "input": 0.15,
+        "output": 0.6,
+        "source": "AWS Price List AmazonBedrock us-east-1 version 20261006144726, publication 2026-10-06T14:47:26Z. On-demand $0.00015 per 1K input (SKU Q2U4FFKKTW34QVFG, USE1-gpt-oss-120b-input-tokens) and $0.0006 per 1K output (SKU KGHQD8ZHB5468Z38, USE1-gpt-oss-120b-output-tokens). Applied to openai.gpt-oss-120b-1:0. No separate profile premium was in that offer.\n"
+      },
+      "us.amazon.nova-pro-v1:0": {
+        "input": 0.8,
+        "output": 3.2,
+        "source": "AWS Price List AmazonBedrock us-east-1 version 20261006144726, publication 2026-10-06T14:47:26Z. On-demand $0.0008 per 1K input (SKU 8X836UXRHN5Q5T2H, USE1-NovaPro-input-tokens) and $0.0032 per 1K output (SKU ARFVY95XGU794VBG, USE1-NovaPro-output-tokens). Applied to the configured inference-profile id. No separate profile premium was in that offer.\n"
+      },
+      "us.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "input": 1.1,
+        "output": 5.5,
+        "source": "AWS Cost Explorer 2026-10-06 for the US cross-region inference profile: list price input 1.00 / output 5.00 plus a 10% premium. USE1-MP:USE1_InputTokenCount-Units, 9.39M tokens, $10.3296. USE1-MP:USE1_OutputTokenCount-Units, 0.30M tokens, $1.6376. List price: AWS pricing page metered unit map bedrockfoundationmodels, US East (N. Virginia), publication 2026-09-30T00:19:12Z. Input rate code DY4B4Q3TRTAY8V6G.4799GE89SK.6YS6EN2CT7, output rate code XADKFYXVGBFBJSU7.4799GE89SK.6YS6EN2CT7.\n"
+      },
+      "us.meta.llama3-3-70b-instruct-v1:0": {
+        "input": 0.72,
+        "output": 0.72,
+        "source": "AWS Price List AmazonBedrock us-east-1 version 20261005210410, publication 2026-10-05T21:04:10Z. On-demand $0.00072 per 1K tokens for Llama 3.3 70B input and output.\n"
+      }
+    },
+    "region": "us-east-1",
+    "replay_seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "schema_version": 2,
+    "seed": 0,
+    "self_weight": 1.0,
+    "spacy_model": "en_core_web_sm",
+    "spend_safety_factor": 1.1,
+    "subset_generator_model_id": "us.amazon.nova-pro-v1:0",
+    "temperature": 0,
+    "token_estimate": "ceil_utf8_bytes_div_4",
+    "top_k": 5,
+    "total_usd_cap": 30,
+    "v2": {
+      "adjudication_band_fraction": 0.15,
+      "adjudication_f1_high": 0.8,
+      "adjudication_f1_low": 0.2,
+      "drift_discounts": [
+        0.99,
+        0.995,
+        0.999
+      ],
+      "held_out_fraction": 0.2,
+      "judge_coverage": [
+        0.01,
+        0.05,
+        0.2,
+        1.0
+      ],
+      "judge_sample_rate": 0.6,
+      "replay_rounds": 10000,
+      "replay_seeds": 500,
+      "subset_questions": 250,
+      "subset_samples": 4,
+      "subset_temperature": 1
+    }
+  },
+  "created_at": "2026-10-11T10:10:03.187589+00:00",
+  "datasets": {
+    "hotpot": {
+      "prediction": {
+        "checks": {
+          "grounding_coverage_lower": true,
+          "grounding_ranking_agrees": false,
+          "self_auroc_low": true,
+          "self_coverage_high": true,
+          "self_ranking_fails": true
+        },
+        "reasons": [
+          "grounding_ranking_agrees"
+        ],
+        "verdict": "contradicted"
+      },
+      "signals": {
+        "judge": {
+          "auroc": 0.49629240285770365,
+          "brier": 0.6229571051365841,
+          "ci": {
+            "auroc": {
+              "estimate": 0.49629240285770365,
+              "hi": 0.5083242848772298,
+              "lo": 0.4839746377075863,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "brier": {
+              "estimate": 0.6229571051365841,
+              "hi": 0.6492471119167457,
+              "lo": 0.5949754037494728,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "coverage": {
+              "estimate": 0.6125,
+              "hi": 0.6406818181818181,
+              "lo": 0.5831818181818181,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "ece": {
+              "estimate": 0.6442131043459032,
+              "hi": 0.6682670683725385,
+              "lo": 0.6182920235335333,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "kendall_tau": {
+              "estimate": -0.6666666666666666,
+              "hi": 0.0,
+              "lo": -1.0,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "spearman": {
+              "estimate": -0.019436920256136768,
+              "hi": 0.03696220255817709,
+              "lo": -0.08181957783316518,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            }
+          },
+          "correctness_ranking": [
+            "hybrid",
+            "keyword_boosted",
+            "semantic_search",
+            "graph_first"
+          ],
+          "coverage": 0.6125,
+          "ece": 0.6442131043459032,
+          "kendall_tau": -0.6666666666666666,
+          "n": 4400,
+          "n_observed": 2695,
+          "rank_agrees": false,
+          "signal_ranking": [
+            "graph_first",
+            "semantic_search",
+            "hybrid",
+            "keyword_boosted"
+          ],
+          "spearman": -0.019436920256136768,
+          "strategy_mean_f1": {
+            "graph_first": 0.15666263534445354,
+            "hybrid": 0.42902295293497644,
+            "keyword_boosted": 0.42871410202579835,
+            "semantic_search": 0.3319786035089368
+          },
+          "strategy_mean_signal": {
+            "graph_first": 0.9821958456973294,
+            "hybrid": 0.9518573551263002,
+            "keyword_boosted": 0.9413946587537092,
+            "semantic_search": 0.9532640949554896
+          }
+        },
+        "lexical_grounding": {
+          "auroc": 0.5155191176140139,
+          "brier": 0.19200904056328905,
+          "ci": {
+            "auroc": {
+              "estimate": 0.5155191176140139,
+              "hi": 0.5311951122921258,
+              "lo": 0.5027668153740563,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "brier": {
+              "estimate": 0.19200904056328905,
+              "hi": 0.2178420980381944,
+              "lo": 0.16543387684289354,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "coverage": {
+              "estimate": 0.44295454545454543,
+              "hi": 0.46636363636363637,
+              "lo": 0.42159090909090907,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "ece": {
+              "estimate": 0.24479836599925958,
+              "hi": 0.2727858574877746,
+              "lo": 0.21971577703008463,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "kendall_tau": {
+              "estimate": 0.6666666666666666,
+              "hi": 1.0,
+              "lo": -0.6666666666666666,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "spearman": {
+              "estimate": 0.0787941723886534,
+              "hi": 0.13706143622786499,
+              "lo": 0.012117832555359044,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            }
+          },
+          "correctness_ranking": [
+            "hybrid",
+            "keyword_boosted",
+            "semantic_search",
+            "graph_first"
+          ],
+          "coverage": 0.44295454545454543,
+          "ece": 0.24479836599925958,
+          "kendall_tau": 0.6666666666666666,
+          "n": 4400,
+          "n_observed": 1949,
+          "rank_agrees": false,
+          "signal_ranking": [
+            "hybrid",
+            "keyword_boosted",
+            "graph_first",
+            "semantic_search"
+          ],
+          "spearman": 0.0787941723886534,
+          "strategy_mean_f1": {
+            "graph_first": 0.15666263534445354,
+            "hybrid": 0.42902295293497644,
+            "keyword_boosted": 0.42871410202579835,
+            "semantic_search": 0.3319786035089368
+          },
+          "strategy_mean_signal": {
+            "graph_first": 0.980349344978166,
+            "hybrid": 0.9853658536585366,
+            "keyword_boosted": 0.9813008130081301,
+            "semantic_search": 0.976530612244898
+          }
+        },
+        "nli_grounding": {
+          "auroc": 0.48633951701180345,
+          "brier": 0.407548374133758,
+          "ci": {
+            "auroc": {
+              "estimate": 0.48633951701180345,
+              "hi": 0.5264685567117658,
+              "lo": 0.44998756398005,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "brier": {
+              "estimate": 0.407548374133758,
+              "hi": 0.4371522971707749,
+              "lo": 0.37815371755090904,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "coverage": {
+              "estimate": 0.44295454545454543,
+              "hi": 0.4643181818181818,
+              "lo": 0.42204545454545456,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "ece": {
+              "estimate": 0.4618065032704461,
+              "hi": 0.49182912131505907,
+              "lo": 0.4308766123871525,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "kendall_tau": {
+              "estimate": 0.6666666666666666,
+              "hi": 1.0,
+              "lo": 0.0,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "spearman": {
+              "estimate": -0.0688216294659927,
+              "hi": -0.003217527389754847,
+              "lo": -0.13095769968200602,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            }
+          },
+          "correctness_ranking": [
+            "hybrid",
+            "keyword_boosted",
+            "semantic_search",
+            "graph_first"
+          ],
+          "coverage": 0.44295454545454543,
+          "ece": 0.4618065032704461,
+          "kendall_tau": 0.6666666666666666,
+          "n": 4400,
+          "n_observed": 1949,
+          "rank_agrees": false,
+          "signal_ranking": [
+            "hybrid",
+            "semantic_search",
+            "keyword_boosted",
+            "graph_first"
+          ],
+          "spearman": -0.0688216294659927,
+          "strategy_mean_f1": {
+            "graph_first": 0.15666263534445354,
+            "hybrid": 0.42902295293497644,
+            "keyword_boosted": 0.42871410202579835,
+            "semantic_search": 0.3319786035089368
+          },
+          "strategy_mean_signal": {
+            "graph_first": 0.5458515283842795,
+            "hybrid": 0.6260162601626016,
+            "keyword_boosted": 0.5994579945799459,
+            "semantic_search": 0.6
+          }
+        },
+        "self": {
+          "auroc": 0.48988976407866575,
+          "brier": 0.5701835812114877,
+          "ci": {
+            "auroc": {
+              "estimate": 0.48988976407866575,
+              "hi": 0.5103326355501369,
+              "lo": 0.4679792723705206,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "brier": {
+              "estimate": 0.5701835812114877,
+              "hi": 0.5885839996250285,
+              "lo": 0.5521176659473822,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "coverage": {
+              "estimate": 0.9995454545454545,
+              "hi": 1.0,
+              "lo": 0.9988636363636364,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "ece": {
+              "estimate": 0.6005173893897271,
+              "hi": 0.621013768136679,
+              "lo": 0.5819479455684681,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "kendall_tau": {
+              "estimate": -1.0,
+              "hi": -0.3333333333333333,
+              "lo": -1.0,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "spearman": {
+              "estimate": -0.010221159952316098,
+              "hi": 0.03428561346231117,
+              "lo": -0.056966591730243085,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            }
+          },
+          "correctness_ranking": [
+            "hybrid",
+            "keyword_boosted",
+            "semantic_search",
+            "graph_first"
+          ],
+          "coverage": 0.9995454545454545,
+          "ece": 0.6005173893897271,
+          "kendall_tau": -1.0,
+          "n": 4400,
+          "n_observed": 4398,
+          "rank_agrees": false,
+          "signal_ranking": [
+            "graph_first",
+            "semantic_search",
+            "keyword_boosted",
+            "hybrid"
+          ],
+          "spearman": -0.010221159952316098,
+          "strategy_mean_f1": {
+            "graph_first": 0.15666263534445354,
+            "hybrid": 0.42902295293497644,
+            "keyword_boosted": 0.42871410202579835,
+            "semantic_search": 0.3319786035089368
+          },
+          "strategy_mean_signal": {
+            "graph_first": 0.9529090909090909,
+            "hybrid": 0.925395814376706,
+            "keyword_boosted": 0.9280727272727273,
+            "semantic_search": 0.9321838034576888
+          }
+        }
+      }
+    },
+    "nq": {
+      "prediction": {
+        "checks": {
+          "grounding_coverage_lower": true,
+          "grounding_ranking_agrees": false,
+          "self_auroc_low": true,
+          "self_coverage_high": true,
+          "self_ranking_fails": true
+        },
+        "reasons": [
+          "grounding_ranking_agrees"
+        ],
+        "verdict": "contradicted"
+      },
+      "signals": {
+        "judge": {
+          "auroc": 0.49912241189628603,
+          "brier": 0.47402841625643993,
+          "ci": {
+            "auroc": {
+              "estimate": 0.49912241189628603,
+              "hi": 0.5129105676319381,
+              "lo": 0.4855813953488372,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "brier": {
+              "estimate": 0.47402841625643993,
+              "hi": 0.5011126406974549,
+              "lo": 0.4469892246439502,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "coverage": {
+              "estimate": 0.5920454545454545,
+              "hi": 0.6202272727272727,
+              "lo": 0.5622727272727273,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "ece": {
+              "estimate": 0.5182626136180428,
+              "hi": 0.5470369951413682,
+              "lo": 0.493572016837822,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "kendall_tau": {
+              "estimate": -1.0,
+              "hi": -0.3333333333333333,
+              "lo": -1.0,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "spearman": {
+              "estimate": -0.006811833391842407,
+              "hi": 0.04725721241061541,
+              "lo": -0.06048068873618878,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            }
+          },
+          "correctness_ranking": [
+            "keyword_boosted",
+            "semantic_search",
+            "hybrid",
+            "graph_first"
+          ],
+          "coverage": 0.5920454545454545,
+          "ece": 0.5182626136180428,
+          "kendall_tau": -1.0,
+          "n": 4400,
+          "n_observed": 2605,
+          "rank_agrees": false,
+          "signal_ranking": [
+            "graph_first",
+            "hybrid",
+            "semantic_search",
+            "keyword_boosted"
+          ],
+          "spearman": -0.006811833391842407,
+          "strategy_mean_f1": {
+            "graph_first": 0.21763954601226193,
+            "hybrid": 0.527947343584051,
+            "keyword_boosted": 0.5503288295769962,
+            "semantic_search": 0.5419330301460072
+          },
+          "strategy_mean_signal": {
+            "graph_first": 0.9923312883435583,
+            "hybrid": 0.9675883256528417,
+            "keyword_boosted": 0.9575384615384614,
+            "semantic_search": 0.9576687116564416
+          }
+        },
+        "lexical_grounding": {
+          "auroc": 0.4946640744887387,
+          "brier": 0.22051822620738926,
+          "ci": {
+            "auroc": {
+              "estimate": 0.4946640744887387,
+              "hi": 0.49857546299187466,
+              "lo": 0.4904158756589353,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "brier": {
+              "estimate": 0.22051822620738926,
+              "hi": 0.24276684905794496,
+              "lo": 0.19787741809979592,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "coverage": {
+              "estimate": 0.6438636363636364,
+              "hi": 0.665,
+              "lo": 0.6247727272727273,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "ece": {
+              "estimate": 0.2945528009708653,
+              "hi": 0.31847534797869376,
+              "lo": 0.27249741184515475,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "kendall_tau": {
+              "estimate": 0.3333333333333333,
+              "hi": 1.0,
+              "lo": -0.6666666666666666,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "spearman": {
+              "estimate": -0.05367334253222308,
+              "hi": -0.012058704310951265,
+              "lo": -0.08507742992965754,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            }
+          },
+          "correctness_ranking": [
+            "keyword_boosted",
+            "semantic_search",
+            "hybrid",
+            "graph_first"
+          ],
+          "coverage": 0.6438636363636364,
+          "ece": 0.2945528009708653,
+          "kendall_tau": 0.3333333333333333,
+          "n": 4400,
+          "n_observed": 2833,
+          "rank_agrees": false,
+          "signal_ranking": [
+            "semantic_search",
+            "keyword_boosted",
+            "graph_first",
+            "hybrid"
+          ],
+          "spearman": -0.05367334253222308,
+          "strategy_mean_f1": {
+            "graph_first": 0.21763954601226193,
+            "hybrid": 0.527947343584051,
+            "keyword_boosted": 0.5503288295769962,
+            "semantic_search": 0.5419330301460072
+          },
+          "strategy_mean_signal": {
+            "graph_first": 0.9880239520958084,
+            "hybrid": 0.9870530209617756,
+            "keyword_boosted": 0.9900117508813161,
+            "semantic_search": 0.9922341696535245
+          }
+        },
+        "nli_grounding": {
+          "auroc": 0.5000687115770923,
+          "brier": 0.2891283428855455,
+          "ci": {
+            "auroc": {
+              "estimate": 0.5000687115770923,
+              "hi": 0.5268946411871614,
+              "lo": 0.4756382226356111,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "brier": {
+              "estimate": 0.2891283428855455,
+              "hi": 0.312767060518233,
+              "lo": 0.26660348559878094,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "coverage": {
+              "estimate": 0.6438636363636364,
+              "hi": 0.6645454545454546,
+              "lo": 0.6245454545454545,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "ece": {
+              "estimate": 0.3636813044275566,
+              "hi": 0.3884962313524013,
+              "lo": 0.33794820660473796,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "kendall_tau": {
+              "estimate": 0.6666666666666666,
+              "hi": 1.0,
+              "lo": -0.6666666666666666,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "spearman": {
+              "estimate": 0.04778573513861776,
+              "hi": 0.10379998286969178,
+              "lo": -0.00417071046886924,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            }
+          },
+          "correctness_ranking": [
+            "keyword_boosted",
+            "semantic_search",
+            "hybrid",
+            "graph_first"
+          ],
+          "coverage": 0.6438636363636364,
+          "ece": 0.3636813044275566,
+          "kendall_tau": 0.6666666666666666,
+          "n": 4400,
+          "n_observed": 2833,
+          "rank_agrees": false,
+          "signal_ranking": [
+            "keyword_boosted",
+            "hybrid",
+            "semantic_search",
+            "graph_first"
+          ],
+          "spearman": 0.04778573513861776,
+          "strategy_mean_f1": {
+            "graph_first": 0.21763954601226193,
+            "hybrid": 0.527947343584051,
+            "keyword_boosted": 0.5503288295769962,
+            "semantic_search": 0.5419330301460072
+          },
+          "strategy_mean_signal": {
+            "graph_first": 0.7859281437125748,
+            "hybrid": 0.7919235511713933,
+            "keyword_boosted": 0.8028789659224442,
+            "semantic_search": 0.7915173237753883
+          }
+        },
+        "self": {
+          "auroc": 0.447137458364168,
+          "brier": 0.44886145230570457,
+          "ci": {
+            "auroc": {
+              "estimate": 0.447137458364168,
+              "hi": 0.46893709327548805,
+              "lo": 0.4250456170108146,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "brier": {
+              "estimate": 0.44886145230570457,
+              "hi": 0.4680990033971686,
+              "lo": 0.4301666703481769,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "coverage": {
+              "estimate": 1.0,
+              "hi": 1.0,
+              "lo": 1.0,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "ece": {
+              "estimate": 0.4916355399428981,
+              "hi": 0.5140666107568718,
+              "lo": 0.4703879113590751,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "kendall_tau": {
+              "estimate": -0.3333333333333333,
+              "hi": 0.0,
+              "lo": -1.0,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "spearman": {
+              "estimate": -0.14110469979631793,
+              "hi": -0.0987801350578285,
+              "lo": -0.18442251203249174,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            }
+          },
+          "correctness_ranking": [
+            "keyword_boosted",
+            "semantic_search",
+            "hybrid",
+            "graph_first"
+          ],
+          "coverage": 1.0,
+          "ece": 0.4916355399428981,
+          "kendall_tau": -0.3333333333333333,
+          "n": 4400,
+          "n_observed": 4400,
+          "rank_agrees": false,
+          "signal_ranking": [
+            "graph_first",
+            "semantic_search",
+            "keyword_boosted",
+            "hybrid"
+          ],
+          "spearman": -0.14110469979631793,
+          "strategy_mean_f1": {
+            "graph_first": 0.21763954601226193,
+            "hybrid": 0.527947343584051,
+            "keyword_boosted": 0.5503288295769962,
+            "semantic_search": 0.5419330301460072
+          },
+          "strategy_mean_signal": {
+            "graph_first": 0.9693272727272727,
+            "hybrid": 0.943609090909091,
+            "keyword_boosted": 0.9447181818181819,
+            "semantic_search": 0.9467363636363635
+          }
+        }
+      }
+    },
+    "squad": {
+      "prediction": {
+        "checks": {
+          "grounding_coverage_lower": true,
+          "grounding_ranking_agrees": false,
+          "self_auroc_low": true,
+          "self_coverage_high": true,
+          "self_ranking_fails": true
+        },
+        "reasons": [
+          "grounding_ranking_agrees"
+        ],
+        "verdict": "contradicted"
+      },
+      "signals": {
+        "judge": {
+          "auroc": 0.5468102807828131,
+          "brier": 0.20979237831590125,
+          "ci": {
+            "auroc": {
+              "estimate": 0.5468102807828131,
+              "hi": 0.5686889599933078,
+              "lo": 0.5274337969136978,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "brier": {
+              "estimate": 0.20979237831590125,
+              "hi": 0.2343092639295819,
+              "lo": 0.18638885371294245,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "coverage": {
+              "estimate": 0.5927272727272728,
+              "hi": 0.6236363636363637,
+              "lo": 0.5638636363636363,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "ece": {
+              "estimate": 0.22573181019735428,
+              "hi": 0.24994818464190824,
+              "lo": 0.20077351172894423,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "kendall_tau": {
+              "estimate": -0.6666666666666666,
+              "hi": 0.0,
+              "lo": -1.0,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "spearman": {
+              "estimate": 0.2107042618125235,
+              "hi": 0.2753420547176872,
+              "lo": 0.14467930205526505,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            }
+          },
+          "correctness_ranking": [
+            "keyword_boosted",
+            "semantic_search",
+            "hybrid",
+            "graph_first"
+          ],
+          "coverage": 0.5927272727272728,
+          "ece": 0.22573181019735428,
+          "kendall_tau": -0.6666666666666666,
+          "n": 4400,
+          "n_observed": 2608,
+          "rank_agrees": false,
+          "signal_ranking": [
+            "graph_first",
+            "semantic_search",
+            "hybrid",
+            "keyword_boosted"
+          ],
+          "spearman": 0.2107042618125235,
+          "strategy_mean_f1": {
+            "graph_first": 0.6975490726134522,
+            "hybrid": 0.7765869317947084,
+            "keyword_boosted": 0.7837962871401715,
+            "semantic_search": 0.7818844150722201
+          },
+          "strategy_mean_signal": {
+            "graph_first": 0.9791090629800306,
+            "hybrid": 0.9629402756508422,
+            "keyword_boosted": 0.9610429447852761,
+            "semantic_search": 0.9670245398773006
+          }
+        },
+        "lexical_grounding": {
+          "auroc": 0.5087929291052832,
+          "brier": 0.26288689871850984,
+          "ci": {
+            "auroc": {
+              "estimate": 0.5087929291052832,
+              "hi": 0.5213135631118483,
+              "lo": 0.49945246539110055,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "brier": {
+              "estimate": 0.26288689871850984,
+              "hi": 0.29672857117124624,
+              "lo": 0.23101103736403408,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "coverage": {
+              "estimate": 0.5131818181818182,
+              "hi": 0.5386363636363637,
+              "lo": 0.4875,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "ece": {
+              "estimate": 0.29597741688785534,
+              "hi": 0.3290102188837355,
+              "lo": 0.2647803864319244,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "kendall_tau": {
+              "estimate": -1.0,
+              "hi": 0.6666666666666666,
+              "lo": -1.0,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "spearman": {
+              "estimate": 0.05659154337604346,
+              "hi": 0.12257750823245674,
+              "lo": -0.016838975082625603,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            }
+          },
+          "correctness_ranking": [
+            "keyword_boosted",
+            "semantic_search",
+            "hybrid",
+            "graph_first"
+          ],
+          "coverage": 0.5131818181818182,
+          "ece": 0.29597741688785534,
+          "kendall_tau": -1.0,
+          "n": 4400,
+          "n_observed": 2258,
+          "rank_agrees": false,
+          "signal_ranking": [
+            "graph_first",
+            "hybrid",
+            "semantic_search",
+            "keyword_boosted"
+          ],
+          "spearman": 0.05659154337604346,
+          "strategy_mean_f1": {
+            "graph_first": 0.6975490726134522,
+            "hybrid": 0.7765869317947084,
+            "keyword_boosted": 0.7837962871401715,
+            "semantic_search": 0.7818844150722201
+          },
+          "strategy_mean_signal": {
+            "graph_first": 0.9880952380952381,
+            "hybrid": 0.9871589085072231,
+            "keyword_boosted": 0.984251968503937,
+            "semantic_search": 0.9870689655172413
+          }
+        },
+        "nli_grounding": {
+          "auroc": 0.49721998238702947,
+          "brier": 0.4777560538894036,
+          "ci": {
+            "auroc": {
+              "estimate": 0.49721998238702947,
+              "hi": 0.5348441451727218,
+              "lo": 0.45638869614967925,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "brier": {
+              "estimate": 0.4777560538894036,
+              "hi": 0.511090777848553,
+              "lo": 0.4428459556813563,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "coverage": {
+              "estimate": 0.5131818181818182,
+              "hi": 0.54,
+              "lo": 0.4884090909090909,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "ece": {
+              "estimate": 0.5114001593040991,
+              "hi": 0.5475650012670459,
+              "lo": 0.4785192528589248,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "kendall_tau": {
+              "estimate": 0.6666666666666666,
+              "hi": 1.0,
+              "lo": -0.6666666666666666,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "spearman": {
+              "estimate": -0.006205464293132039,
+              "hi": 0.062483040030272906,
+              "lo": -0.07685876765733879,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            }
+          },
+          "correctness_ranking": [
+            "keyword_boosted",
+            "semantic_search",
+            "hybrid",
+            "graph_first"
+          ],
+          "coverage": 0.5131818181818182,
+          "ece": 0.5114001593040991,
+          "kendall_tau": 0.6666666666666666,
+          "n": 4400,
+          "n_observed": 2258,
+          "rank_agrees": false,
+          "signal_ranking": [
+            "keyword_boosted",
+            "hybrid",
+            "semantic_search",
+            "graph_first"
+          ],
+          "spearman": -0.006205464293132039,
+          "strategy_mean_f1": {
+            "graph_first": 0.6975490726134522,
+            "hybrid": 0.7765869317947084,
+            "keyword_boosted": 0.7837962871401715,
+            "semantic_search": 0.7818844150722201
+          },
+          "strategy_mean_signal": {
+            "graph_first": 0.4738095238095238,
+            "hybrid": 0.4767255216693419,
+            "keyword_boosted": 0.4921259842519685,
+            "semantic_search": 0.475
+          }
+        },
+        "self": {
+          "auroc": 0.5850235161030051,
+          "brier": 0.1951572223157293,
+          "ci": {
+            "auroc": {
+              "estimate": 0.5850235161030051,
+              "hi": 0.6106819910371739,
+              "lo": 0.5595277414975022,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "brier": {
+              "estimate": 0.1951572223157293,
+              "hi": 0.21237334696326854,
+              "lo": 0.17952992648699098,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "coverage": {
+              "estimate": 1.0,
+              "hi": 1.0,
+              "lo": 1.0,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "ece": {
+              "estimate": 0.18915491425395278,
+              "hi": 0.20815825535745228,
+              "lo": 0.1697378779603592,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "kendall_tau": {
+              "estimate": -0.6666666666666666,
+              "hi": 0.0,
+              "lo": -1.0,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            },
+            "spearman": {
+              "estimate": 0.1744272435153901,
+              "hi": 0.22062096254073382,
+              "lo": 0.1270377077104568,
+              "n_boot": 1000,
+              "n_clusters": 1100
+            }
+          },
+          "correctness_ranking": [
+            "keyword_boosted",
+            "semantic_search",
+            "hybrid",
+            "graph_first"
+          ],
+          "coverage": 1.0,
+          "ece": 0.18915491425395278,
+          "kendall_tau": -0.6666666666666666,
+          "n": 4400,
+          "n_observed": 4400,
+          "rank_agrees": false,
+          "signal_ranking": [
+            "graph_first",
+            "semantic_search",
+            "hybrid",
+            "keyword_boosted"
+          ],
+          "spearman": 0.1744272435153901,
+          "strategy_mean_f1": {
+            "graph_first": 0.6975490726134522,
+            "hybrid": 0.7765869317947084,
+            "keyword_boosted": 0.7837962871401715,
+            "semantic_search": 0.7818844150722201
+          },
+          "strategy_mean_signal": {
+            "graph_first": 0.9569090909090908,
+            "hybrid": 0.9465090909090907,
+            "keyword_boosted": 0.9445181818181818,
+            "semantic_search": 0.9484999999999999
+          }
+        }
+      }
+    }
+  },
+  "git": {
+    "commit": "9c27d0c35198028a53a8597807ec5f857de2b752",
+    "dirty": true
+  },
+  "prediction": {
+    "reasons": [
+      "at least one dataset contradicted the prediction"
+    ],
+    "verdict": "contradicted"
+  },
+  "seed": 0,
+  "signals_present": [
+    "self",
+    "lexical_grounding",
+    "nli_grounding",
+    "judge"
+  ],
+  "stage": "calibration",
+  "unavailable_signals": {}
+}

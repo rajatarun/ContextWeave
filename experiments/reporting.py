@@ -141,13 +141,38 @@ def _num(block: Any, key: str) -> float | None:
     return float(value)
 
 
+def _interval(doc: _Doc, analyses: dict[str, Any] | None, name: str, signal: str) -> tuple[str, str]:
+    """The cluster-bootstrap interval for ``s`` from the analyses stage, and whether it excludes 0."""
+    if name == "all" or signal == "verified":
+        return "none", "none"
+    cell = f"{name} {signal}"
+    if analyses is None:
+        reason = "results/analyses/analyses.json is missing"
+        return (
+            doc.cell("measured slopes", f"{cell} s interval", None, reason),
+            doc.cell("measured slopes", f"{cell} excludes 0", None, reason),
+        )
+    block = (((analyses.get("datasets") or {}).get(name) or {}).get(signal) or {})
+    est = (block.get("slope") or {}).get("s") if isinstance(block, dict) else None
+    lo, hi = _num(est, "lo"), _num(est, "hi")
+    if lo is None or hi is None:
+        reason = str(block.get("unavailable") or f"no slope interval for {cell}")
+        return (
+            doc.cell("measured slopes", f"{cell} s interval", None, reason),
+            doc.cell("measured slopes", f"{cell} excludes 0", None, reason),
+        )
+    return f"[{_fmt(lo)}, {_fmt(hi)}]", _fmt(lo > 0 or hi < 0)
+
+
 def _measured_rows(
     doc: _Doc, info: dict[str, Any], name: str, assumed: dict[str, Any] | None,
+    analyses: dict[str, Any] | None,
 ) -> list[list[str]]:
     rows = []
     for signal in MEASURED_SIGNALS:
         block = (info.get(name) or {}).get(signal)
         cell = f"{name} {signal}"
+        interval, excludes = _interval(doc, analyses, name, signal)
         key = ASSUMED_KEY.get(signal)
         if key is None:
             assumed_text = "none"
@@ -168,6 +193,8 @@ def _measured_rows(
             _ratio_cell(doc, "measured slopes", f"{cell} c0", block, "c0"),
             _ratio_cell(doc, "measured slopes", f"{cell} c1", block, "c1"),
             _ratio_cell(doc, "measured slopes", f"{cell} s", block, "s"),
+            interval,
+            excludes,
             _ratio_cell(doc, "measured slopes", f"{cell} var", block, "var_r"),
             _ratio_cell(doc, "measured slopes", f"{cell} s2/var", block, "s2_over_var_r"),
             assumed_text,
@@ -186,7 +213,10 @@ def _sign(value: float | None) -> str | None:
     return "zero"
 
 
-def _measured_slopes(doc: _Doc, study: dict[str, Any], assumed: dict[str, Any] | None) -> None:
+def _measured_slopes(
+    doc: _Doc, study: dict[str, Any], assumed: dict[str, Any] | None,
+    analyses: dict[str, Any] | None,
+) -> None:
     """Measured slopes from the study, beside the slopes the simulation assumed.
 
     Per-dataset rows come first. The pooled row mixes datasets whose base
@@ -196,16 +226,17 @@ def _measured_slopes(doc: _Doc, study: dict[str, Any], assumed: dict[str, Any] |
     """
     info = study.get("information") or {}
     headers = [
-        "dataset", "signal", "n", "m", "c0", "c1", "s", "Var(R)", "s^2/Var(R)",
+        "dataset", "signal", "n", "m", "c0", "c1", "s", "s interval", "excludes 0",
+        "Var(R)", "s^2/Var(R)",
         "assumed s", "measured / assumed",
     ]
     rows = []
     for name in DATASETS:
-        rows += _measured_rows(doc, info, name, assumed)
+        rows += _measured_rows(doc, info, name, assumed, analyses)
     doc.table("Measured slopes by dataset", headers, rows)
     doc.table(
         "Measured slopes pooled over the datasets (summary)",
-        headers, _measured_rows(doc, info, "all", assumed),
+        headers, _measured_rows(doc, info, "all", assumed, analyses),
     )
     base = []
     for name in DATASETS:
@@ -250,10 +281,10 @@ def _measured_slopes(doc: _Doc, study: dict[str, Any], assumed: dict[str, Any] |
                 f"{_fmt(v_ver)} for the verified reward, so the ratio is large because the "
                 "variance is small, not because the slope is."
             )
-        if s_self is not None and s_self <= 0:
-            notes.append(f"On {name}, the self-confidence slope is {_sign(s_self)} ({_fmt(s_self)}).")
-        if s_ver is not None and s_ver <= 0:
-            notes.append(f"On {name}, the verified slope is {_sign(s_ver)} ({_fmt(s_ver)}).")
+        for signal in MEASURED_SIGNALS:
+            value = _num((info.get(name) or {}).get(signal), "s")
+            if value is not None and value <= 0:
+                notes.append(f"On {name}, the {signal} slope is {_sign(value)} ({_fmt(value)}).")
     doc.table(
         "Self-confidence against the verified reward",
         [
@@ -814,9 +845,11 @@ def render(results: Path) -> tuple[str, str]:
         doc.p(
             "s = c1 - c0 is the mean reward on correct answers minus the mean on wrong ones. "
             "The assumed slopes are the verified-reward simulation's pre-clip values from "
-            "`results/simulation_assumptions.json`. The judge and the verified reward have none."
+            "`results/simulation_assumptions.json`. The judge and the verified reward have none. "
+            "The interval on s is the cluster-bootstrap interval from `results/analyses/analyses.json`; "
+            "that stage has none for the verified reward or the pooled row."
         )
-        _measured_slopes(doc, study, assumed)
+        _measured_slopes(doc, study, assumed, analyses)
 
     doc.h("Thompson sampling streams")
     if study is None:

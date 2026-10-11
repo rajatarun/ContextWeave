@@ -1,0 +1,733 @@
+{
+  "config": {
+    "adjudicator_max_output_tokens": 1024,
+    "adjudicator_model_id": "openai.gpt-oss-120b-1:0",
+    "adjudicator_temperature": 0,
+    "already_spent_usd": 12.02,
+    "batch": {
+      "bucket": "",
+      "bucket_env": "BEDROCK_BATCH_BUCKET",
+      "min_records": 100,
+      "poll_seconds": 30,
+      "prefix": "experiments/v2",
+      "role_arn": "",
+      "role_arn_env": "BEDROCK_BATCH_ROLE_ARN",
+      "timeout_hours": 24
+    },
+    "batch_prices_usd_per_million_tokens": {
+      "openai.gpt-oss-120b-1:0": {
+        "input": 0.075,
+        "output": 0.3,
+        "source": "AWS Price List AmazonBedrock us-east-1 version 20261006144726. Batch $0.000075 per 1K input (SKU P9G2AVNMEZE36NEN) and $0.0003 per 1K output (SKU AQEZQAY2B27EKGDJ).\n"
+      },
+      "us.amazon.nova-pro-v1:0": {
+        "input": 0.4,
+        "output": 1.6,
+        "source": "AWS Price List AmazonBedrock us-east-1 version 20261006144726. Batch $0.0004 per 1K input (SKU 6FVZT3BBCSHTHQND, USE1-NovaPro-input-tokens-batch) and $0.0016 per 1K output (SKU URFXX2XGYJ66495M, USE1-NovaPro-output-tokens-batch).\n"
+      },
+      "us.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "input": 0.55,
+        "output": 2.75,
+        "source": "Half of the billed cross-region on-demand rate 1.10 / 5.50. The AmazonBedrock offer does not list Claude Haiku 4.5.\n"
+      },
+      "us.meta.llama3-3-70b-instruct-v1:0": {
+        "input": 0.36,
+        "output": 0.36,
+        "source": "AWS Price List AmazonBedrock us-east-1 version 20261006144726. Batch $0.00036 per 1K input (SKU E748GM9E4FUC8WY6) and output (SKU D96KFRU98U5RRW7F).\n"
+      }
+    },
+    "bm25_b": 0.75,
+    "bm25_k1": 1.5,
+    "bootstrap_samples": 1000,
+    "datasets": {
+      "hotpot": {
+        "config": "distractor",
+        "huggingface": "hotpotqa/hotpot_qa",
+        "id": "hotpot",
+        "split": "validation"
+      },
+      "nq": {
+        "description": "MRQA 2019 in-domain dev file NaturalQuestionsShort. Natural Questions adapted to extractive QA: gold short-answer strings and the Wikipedia context, truncated by MRQA to the first 800 tokens and kept only when the short answer occurs in that window.\n",
+        "id": "nq",
+        "md5": "c0347eebbca02d10d1b07b9a64efe61d",
+        "url": "https://s3.us-east-2.amazonaws.com/mrqa/release/v2/dev/NaturalQuestionsShort.jsonl.gz"
+      },
+      "squad": {
+        "huggingface": "rajpurkar/squad_v2",
+        "id": "squad",
+        "split": "validation"
+      }
+    },
+    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "expected_output_tokens": {
+      "openai.gpt-oss-120b-1:0": 64,
+      "us.amazon.nova-pro-v1:0": 70,
+      "us.anthropic.claude-haiku-4-5-20251001-v1:0": 70,
+      "us.meta.llama3-3-70b-instruct-v1:0": 20
+    },
+    "fallback_failed": 0.0,
+    "fallback_omitted": 0.7,
+    "fallback_unparseable": 0.5,
+    "generator_max_output_tokens": 256,
+    "generator_model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "graph_damping": 0.85,
+    "graph_max_iter": 40,
+    "graph_tol": 1e-10,
+    "grounding_threshold": 0.6,
+    "grounding_weight": 1.0,
+    "high_coverage": 0.8,
+    "inference_mode": "batch",
+    "judge_max_output_tokens": 300,
+    "judge_model_id": "us.meta.llama3-3-70b-instruct-v1:0",
+    "judge_sample_rate": 0.05,
+    "judge_weight": 2.0,
+    "keyword_weight": 0.25,
+    "low_auroc_max": 0.6,
+    "n_per_dataset": 1100,
+    "nli_max_tokens": 512,
+    "nli_model": "cross-encoder/nli-deberta-v3-small",
+    "nli_special_tokens": 3,
+    "normalized_self_gap_fraction": 0.5,
+    "nq_overlap_chars": 200,
+    "nq_pool_size": 10,
+    "nq_window_chars": 800,
+    "prices_usd_per_million_tokens": {
+      "openai.gpt-oss-120b-1:0": {
+        "input": 0.15,
+        "output": 0.6,
+        "source": "AWS Price List AmazonBedrock us-east-1 version 20261006144726, publication 2026-10-06T14:47:26Z. On-demand $0.00015 per 1K input (SKU Q2U4FFKKTW34QVFG, USE1-gpt-oss-120b-input-tokens) and $0.0006 per 1K output (SKU KGHQD8ZHB5468Z38, USE1-gpt-oss-120b-output-tokens). Applied to openai.gpt-oss-120b-1:0. No separate profile premium was in that offer.\n"
+      },
+      "us.amazon.nova-pro-v1:0": {
+        "input": 0.8,
+        "output": 3.2,
+        "source": "AWS Price List AmazonBedrock us-east-1 version 20261006144726, publication 2026-10-06T14:47:26Z. On-demand $0.0008 per 1K input (SKU 8X836UXRHN5Q5T2H, USE1-NovaPro-input-tokens) and $0.0032 per 1K output (SKU ARFVY95XGU794VBG, USE1-NovaPro-output-tokens). Applied to the configured inference-profile id. No separate profile premium was in that offer.\n"
+      },
+      "us.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "input": 1.1,
+        "output": 5.5,
+        "source": "AWS Cost Explorer 2026-10-06 for the US cross-region inference profile: list price input 1.00 / output 5.00 plus a 10% premium. USE1-MP:USE1_InputTokenCount-Units, 9.39M tokens, $10.3296. USE1-MP:USE1_OutputTokenCount-Units, 0.30M tokens, $1.6376. List price: AWS pricing page metered unit map bedrockfoundationmodels, US East (N. Virginia), publication 2026-09-30T00:19:12Z. Input rate code DY4B4Q3TRTAY8V6G.4799GE89SK.6YS6EN2CT7, output rate code XADKFYXVGBFBJSU7.4799GE89SK.6YS6EN2CT7.\n"
+      },
+      "us.meta.llama3-3-70b-instruct-v1:0": {
+        "input": 0.72,
+        "output": 0.72,
+        "source": "AWS Price List AmazonBedrock us-east-1 version 20261005210410, publication 2026-10-05T21:04:10Z. On-demand $0.00072 per 1K tokens for Llama 3.3 70B input and output.\n"
+      }
+    },
+    "region": "us-east-1",
+    "replay_seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "schema_version": 2,
+    "seed": 0,
+    "self_weight": 1.0,
+    "spacy_model": "en_core_web_sm",
+    "spend_safety_factor": 1.1,
+    "subset_generator_model_id": "us.amazon.nova-pro-v1:0",
+    "temperature": 0,
+    "token_estimate": "ceil_utf8_bytes_div_4",
+    "top_k": 5,
+    "total_usd_cap": 30,
+    "v2": {
+      "adjudication_band_fraction": 0.15,
+      "adjudication_f1_high": 0.8,
+      "adjudication_f1_low": 0.2,
+      "drift_discounts": [
+        0.99,
+        0.995,
+        0.999
+      ],
+      "held_out_fraction": 0.2,
+      "judge_coverage": [
+        0.01,
+        0.05,
+        0.2,
+        1.0
+      ],
+      "judge_sample_rate": 0.6,
+      "replay_rounds": 10000,
+      "replay_seeds": 500,
+      "subset_questions": 250,
+      "subset_samples": 4,
+      "subset_temperature": 1
+    }
+  },
+  "created_at": "2026-10-11T10:11:03.307405+00:00",
+  "datasets": {
+    "hotpot": {
+      "lexical_grounding": {
+        "bernoulli": {
+          "best_arm_share_mean": 0.2418181818181818,
+          "pseudo_regret_mean": 36.59799999999985,
+          "realized_regret_mean": 147.4,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "fractional": {
+          "best_arm_share_mean": 0.17927272727272728,
+          "pseudo_regret_mean": 46.50927272727244,
+          "realized_regret_mean": 159.0,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      },
+      "normalized_self": {
+        "bernoulli": {
+          "best_arm_share_mean": 0.09472727272727273,
+          "pseudo_regret_mean": 157.9414545454519,
+          "realized_regret_mean": 278.0,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "fractional": {
+          "best_arm_share_mean": 0.21745454545454543,
+          "pseudo_regret_mean": 110.2010909090894,
+          "realized_regret_mean": 229.8,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      },
+      "oracle": {
+        "bernoulli": {
+          "best_arm_share_mean": 0.3927272727272727,
+          "pseudo_regret_mean": 13.674363636363381,
+          "realized_regret_mean": 130.8,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "fractional": {
+          "best_arm_share_mean": 0.3927272727272727,
+          "pseudo_regret_mean": 13.674363636363381,
+          "realized_regret_mean": 130.8,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      },
+      "self": {
+        "bernoulli": {
+          "best_arm_share_mean": 0.16618181818181818,
+          "pseudo_regret_mean": 135.31109090908927,
+          "realized_regret_mean": 254.8,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "fractional": {
+          "best_arm_share_mean": 0.12272727272727273,
+          "pseudo_regret_mean": 190.6425454545421,
+          "realized_regret_mean": 310.0,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      },
+      "self_with_fallbacks": {
+        "bernoulli": {
+          "best_arm_share_mean": 0.18145454545454545,
+          "pseudo_regret_mean": 115.14945454545276,
+          "realized_regret_mean": 225.8,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "fractional": {
+          "best_arm_share_mean": 0.3698181818181818,
+          "pseudo_regret_mean": 83.35854545454475,
+          "realized_regret_mean": 195.8,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      },
+      "verified": {
+        "bernoulli": {
+          "best_arm_share_mean": 0.05472727272727272,
+          "pseudo_regret_mean": 131.6334545454523,
+          "realized_regret_mean": 243.8,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "fractional": {
+          "best_arm_share_mean": 0.022727272727272728,
+          "pseudo_regret_mean": 143.65690909090745,
+          "realized_regret_mean": 259.2,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      },
+      "verified_plus_self": {
+        "bernoulli": {
+          "best_arm_share_mean": 0.2016363636363636,
+          "pseudo_regret_mean": 136.55636363636148,
+          "realized_regret_mean": 248.2,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "fractional": {
+          "best_arm_share_mean": 0.04654545454545454,
+          "pseudo_regret_mean": 194.96581818181502,
+          "realized_regret_mean": 312.4,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      }
+    },
+    "nq": {
+      "lexical_grounding": {
+        "bernoulli": {
+          "best_arm_share_mean": 0.12945454545454543,
+          "pseudo_regret_mean": 17.403818181818014,
+          "realized_regret_mean": 84.6,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "fractional": {
+          "best_arm_share_mean": 0.12945454545454543,
+          "pseudo_regret_mean": 17.429999999999833,
+          "realized_regret_mean": 84.8,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      },
+      "normalized_self": {
+        "bernoulli": {
+          "best_arm_share_mean": 0.2545454545454545,
+          "pseudo_regret_mean": 96.1510909090907,
+          "realized_regret_mean": 165.2,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "fractional": {
+          "best_arm_share_mean": 0.22836363636363638,
+          "pseudo_regret_mean": 135.4347272727265,
+          "realized_regret_mean": 202.6,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      },
+      "oracle": {
+        "bernoulli": {
+          "best_arm_share_mean": 0.42690909090909085,
+          "pseudo_regret_mean": 16.562181818181777,
+          "realized_regret_mean": 86.0,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "fractional": {
+          "best_arm_share_mean": 0.42690909090909085,
+          "pseudo_regret_mean": 16.562181818181777,
+          "realized_regret_mean": 86.0,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      },
+      "self": {
+        "bernoulli": {
+          "best_arm_share_mean": 0.045636363636363635,
+          "pseudo_regret_mean": 188.34218181818093,
+          "realized_regret_mean": 258.6,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "fractional": {
+          "best_arm_share_mean": 0.07054545454545455,
+          "pseudo_regret_mean": 265.84418181818063,
+          "realized_regret_mean": 333.2,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      },
+      "self_with_fallbacks": {
+        "bernoulli": {
+          "best_arm_share_mean": 0.15872727272727272,
+          "pseudo_regret_mean": 197.2570909090902,
+          "realized_regret_mean": 264.0,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "fractional": {
+          "best_arm_share_mean": 0.12872727272727275,
+          "pseudo_regret_mean": 213.2285454545443,
+          "realized_regret_mean": 285.8,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      },
+      "verified": {
+        "bernoulli": {
+          "best_arm_share_mean": 0.16672727272727272,
+          "pseudo_regret_mean": 60.2209090909087,
+          "realized_regret_mean": 123.6,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "fractional": {
+          "best_arm_share_mean": 0.042545454545454546,
+          "pseudo_regret_mean": 178.9898181818174,
+          "realized_regret_mean": 245.6,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      },
+      "verified_plus_self": {
+        "bernoulli": {
+          "best_arm_share_mean": 0.02327272727272727,
+          "pseudo_regret_mean": 221.78399999999897,
+          "realized_regret_mean": 286.0,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "fractional": {
+          "best_arm_share_mean": 0.07181818181818181,
+          "pseudo_regret_mean": 184.88618181818111,
+          "realized_regret_mean": 246.8,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      }
+    },
+    "squad": {
+      "lexical_grounding": {
+        "bernoulli": {
+          "best_arm_share_mean": 0.06254545454545454,
+          "pseudo_regret_mean": 60.16236363636365,
+          "realized_regret_mean": 110.2,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "fractional": {
+          "best_arm_share_mean": 0.04218181818181818,
+          "pseudo_regret_mean": 60.88145454545456,
+          "realized_regret_mean": 110.4,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      },
+      "normalized_self": {
+        "bernoulli": {
+          "best_arm_share_mean": 0.1969090909090909,
+          "pseudo_regret_mean": 128.1596363636365,
+          "realized_regret_mean": 180.0,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "fractional": {
+          "best_arm_share_mean": 0.20454545454545453,
+          "pseudo_regret_mean": 93.98200000000001,
+          "realized_regret_mean": 145.8,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      },
+      "oracle": {
+        "bernoulli": {
+          "best_arm_share_mean": 0.6076363636363636,
+          "pseudo_regret_mean": 16.56781818181802,
+          "realized_regret_mean": 71.0,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "fractional": {
+          "best_arm_share_mean": 0.6076363636363636,
+          "pseudo_regret_mean": 16.56781818181802,
+          "realized_regret_mean": 71.0,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      },
+      "self": {
+        "bernoulli": {
+          "best_arm_share_mean": 0.08181818181818182,
+          "pseudo_regret_mean": 125.19527272727287,
+          "realized_regret_mean": 181.4,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "fractional": {
+          "best_arm_share_mean": 0.13272727272727272,
+          "pseudo_regret_mean": 113.45581818181816,
+          "realized_regret_mean": 171.8,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      },
+      "self_with_fallbacks": {
+        "bernoulli": {
+          "best_arm_share_mean": 0.11654545454545455,
+          "pseudo_regret_mean": 158.51545454545493,
+          "realized_regret_mean": 211.0,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "fractional": {
+          "best_arm_share_mean": 0.13,
+          "pseudo_regret_mean": 166.09781818181847,
+          "realized_regret_mean": 224.0,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      },
+      "verified": {
+        "bernoulli": {
+          "best_arm_share_mean": 0.04690909090909091,
+          "pseudo_regret_mean": 94.09472727272731,
+          "realized_regret_mean": 151.0,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "fractional": {
+          "best_arm_share_mean": 0.03618181818181818,
+          "pseudo_regret_mean": 91.11218181818174,
+          "realized_regret_mean": 143.2,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      },
+      "verified_plus_self": {
+        "bernoulli": {
+          "best_arm_share_mean": 0.08618181818181818,
+          "pseudo_regret_mean": 117.63600000000012,
+          "realized_regret_mean": 171.4,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "fractional": {
+          "best_arm_share_mean": 0.08636363636363636,
+          "pseudo_regret_mean": 113.29836363636352,
+          "realized_regret_mean": 160.2,
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      }
+    }
+  },
+  "git": {
+    "commit": "9c27d0c35198028a53a8597807ec5f857de2b752",
+    "dirty": true
+  },
+  "prior_strength": 4.0,
+  "priors": {
+    "graph_first": 0.55,
+    "hybrid": 0.6,
+    "keyword_boosted": 0.55,
+    "semantic_search": 0.7
+  },
+  "seed": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "stage": "replay",
+  "unavailable_rewards": {}
+}

@@ -1,0 +1,2512 @@
+{
+  "assumed_simulation": {
+    "clip": "means are before the [0, 1] clip applied by draw_rewards",
+    "grounding": {
+      "c0": 0.3,
+      "c1": 0.8,
+      "s": 0.5
+    },
+    "rho": 0.7,
+    "routing_regret_sim": {
+      "noise_k": 20.0,
+      "note": "That simulation has no overconfidence slope. The slopes above are the verified-reward simulation.",
+      "reward": "Beta(mu * noise_k, (1 - mu) * noise_k)",
+      "s_ground": null,
+      "s_self": null,
+      "source": "scripts/routing_regret_sim.py"
+    },
+    "self": {
+      "c0": 0.8560000000000001,
+      "c0_prime": 0.8,
+      "c1": 0.88,
+      "s": 0.02399999999999991
+    },
+    "source": "scripts/verified_reward_bench.py draw_rewards, CLI defaults"
+  },
+  "bootstrap_samples": 1000,
+  "config": {
+    "adjudicator_max_output_tokens": 1024,
+    "adjudicator_model_id": "openai.gpt-oss-120b-1:0",
+    "adjudicator_temperature": 0,
+    "already_spent_usd": 12.02,
+    "batch": {
+      "bucket": "",
+      "bucket_env": "BEDROCK_BATCH_BUCKET",
+      "min_records": 100,
+      "poll_seconds": 30,
+      "prefix": "experiments/v2",
+      "role_arn": "",
+      "role_arn_env": "BEDROCK_BATCH_ROLE_ARN",
+      "timeout_hours": 24
+    },
+    "batch_prices_usd_per_million_tokens": {
+      "openai.gpt-oss-120b-1:0": {
+        "input": 0.075,
+        "output": 0.3,
+        "source": "AWS Price List AmazonBedrock us-east-1 version 20261006144726. Batch $0.000075 per 1K input (SKU P9G2AVNMEZE36NEN) and $0.0003 per 1K output (SKU AQEZQAY2B27EKGDJ).\n"
+      },
+      "us.amazon.nova-pro-v1:0": {
+        "input": 0.4,
+        "output": 1.6,
+        "source": "AWS Price List AmazonBedrock us-east-1 version 20261006144726. Batch $0.0004 per 1K input (SKU 6FVZT3BBCSHTHQND, USE1-NovaPro-input-tokens-batch) and $0.0016 per 1K output (SKU URFXX2XGYJ66495M, USE1-NovaPro-output-tokens-batch).\n"
+      },
+      "us.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "input": 0.55,
+        "output": 2.75,
+        "source": "Half of the billed cross-region on-demand rate 1.10 / 5.50. The AmazonBedrock offer does not list Claude Haiku 4.5.\n"
+      },
+      "us.meta.llama3-3-70b-instruct-v1:0": {
+        "input": 0.36,
+        "output": 0.36,
+        "source": "AWS Price List AmazonBedrock us-east-1 version 20261006144726. Batch $0.00036 per 1K input (SKU E748GM9E4FUC8WY6) and output (SKU D96KFRU98U5RRW7F).\n"
+      }
+    },
+    "bm25_b": 0.75,
+    "bm25_k1": 1.5,
+    "bootstrap_samples": 1000,
+    "datasets": {
+      "hotpot": {
+        "config": "distractor",
+        "huggingface": "hotpotqa/hotpot_qa",
+        "id": "hotpot",
+        "split": "validation"
+      },
+      "nq": {
+        "description": "MRQA 2019 in-domain dev file NaturalQuestionsShort. Natural Questions adapted to extractive QA: gold short-answer strings and the Wikipedia context, truncated by MRQA to the first 800 tokens and kept only when the short answer occurs in that window.\n",
+        "id": "nq",
+        "md5": "c0347eebbca02d10d1b07b9a64efe61d",
+        "url": "https://s3.us-east-2.amazonaws.com/mrqa/release/v2/dev/NaturalQuestionsShort.jsonl.gz"
+      },
+      "squad": {
+        "huggingface": "rajpurkar/squad_v2",
+        "id": "squad",
+        "split": "validation"
+      }
+    },
+    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "expected_output_tokens": {
+      "openai.gpt-oss-120b-1:0": 64,
+      "us.amazon.nova-pro-v1:0": 70,
+      "us.anthropic.claude-haiku-4-5-20251001-v1:0": 70,
+      "us.meta.llama3-3-70b-instruct-v1:0": 20
+    },
+    "fallback_failed": 0.0,
+    "fallback_omitted": 0.7,
+    "fallback_unparseable": 0.5,
+    "generator_max_output_tokens": 256,
+    "generator_model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "graph_damping": 0.85,
+    "graph_max_iter": 40,
+    "graph_tol": 1e-10,
+    "grounding_threshold": 0.6,
+    "grounding_weight": 1.0,
+    "high_coverage": 0.8,
+    "inference_mode": "batch",
+    "judge_max_output_tokens": 300,
+    "judge_model_id": "us.meta.llama3-3-70b-instruct-v1:0",
+    "judge_sample_rate": 0.05,
+    "judge_weight": 2.0,
+    "keyword_weight": 0.25,
+    "low_auroc_max": 0.6,
+    "n_per_dataset": 1100,
+    "nli_max_tokens": 512,
+    "nli_model": "cross-encoder/nli-deberta-v3-small",
+    "nli_special_tokens": 3,
+    "normalized_self_gap_fraction": 0.5,
+    "nq_overlap_chars": 200,
+    "nq_pool_size": 10,
+    "nq_window_chars": 800,
+    "prices_usd_per_million_tokens": {
+      "openai.gpt-oss-120b-1:0": {
+        "input": 0.15,
+        "output": 0.6,
+        "source": "AWS Price List AmazonBedrock us-east-1 version 20261006144726, publication 2026-10-06T14:47:26Z. On-demand $0.00015 per 1K input (SKU Q2U4FFKKTW34QVFG, USE1-gpt-oss-120b-input-tokens) and $0.0006 per 1K output (SKU KGHQD8ZHB5468Z38, USE1-gpt-oss-120b-output-tokens). Applied to openai.gpt-oss-120b-1:0. No separate profile premium was in that offer.\n"
+      },
+      "us.amazon.nova-pro-v1:0": {
+        "input": 0.8,
+        "output": 3.2,
+        "source": "AWS Price List AmazonBedrock us-east-1 version 20261006144726, publication 2026-10-06T14:47:26Z. On-demand $0.0008 per 1K input (SKU 8X836UXRHN5Q5T2H, USE1-NovaPro-input-tokens) and $0.0032 per 1K output (SKU ARFVY95XGU794VBG, USE1-NovaPro-output-tokens). Applied to the configured inference-profile id. No separate profile premium was in that offer.\n"
+      },
+      "us.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "input": 1.1,
+        "output": 5.5,
+        "source": "AWS Cost Explorer 2026-10-06 for the US cross-region inference profile: list price input 1.00 / output 5.00 plus a 10% premium. USE1-MP:USE1_InputTokenCount-Units, 9.39M tokens, $10.3296. USE1-MP:USE1_OutputTokenCount-Units, 0.30M tokens, $1.6376. List price: AWS pricing page metered unit map bedrockfoundationmodels, US East (N. Virginia), publication 2026-09-30T00:19:12Z. Input rate code DY4B4Q3TRTAY8V6G.4799GE89SK.6YS6EN2CT7, output rate code XADKFYXVGBFBJSU7.4799GE89SK.6YS6EN2CT7.\n"
+      },
+      "us.meta.llama3-3-70b-instruct-v1:0": {
+        "input": 0.72,
+        "output": 0.72,
+        "source": "AWS Price List AmazonBedrock us-east-1 version 20261005210410, publication 2026-10-05T21:04:10Z. On-demand $0.00072 per 1K tokens for Llama 3.3 70B input and output.\n"
+      }
+    },
+    "region": "us-east-1",
+    "replay_seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "schema_version": 2,
+    "seed": 0,
+    "self_weight": 1.0,
+    "spacy_model": "en_core_web_sm",
+    "spend_safety_factor": 1.1,
+    "subset_generator_model_id": "us.amazon.nova-pro-v1:0",
+    "temperature": 0,
+    "token_estimate": "ceil_utf8_bytes_div_4",
+    "top_k": 5,
+    "total_usd_cap": 30,
+    "v2": {
+      "adjudication_band_fraction": 0.15,
+      "adjudication_f1_high": 0.8,
+      "adjudication_f1_low": 0.2,
+      "drift_discounts": [
+        0.99,
+        0.995,
+        0.999
+      ],
+      "held_out_fraction": 0.2,
+      "judge_coverage": [
+        0.01,
+        0.05,
+        0.2,
+        1.0
+      ],
+      "judge_sample_rate": 0.6,
+      "replay_rounds": 10000,
+      "replay_seeds": 500,
+      "subset_questions": 250,
+      "subset_samples": 4,
+      "subset_temperature": 1
+    }
+  },
+  "created_at": "2026-10-11T10:13:52.598747+00:00",
+  "datasets": {
+    "hotpot": {
+      "combination": {
+        "grounding": {
+          "c0": {
+            "estimate": 0.9558139534883721,
+            "hi": 0.987012987012987,
+            "lo": 0.9211822660098522,
+            "n_boot": 1000,
+            "n_clusters": 457
+          },
+          "c1": {
+            "estimate": 0.9872838250254323,
+            "hi": 0.9946859903381643,
+            "lo": 0.9779713114754098,
+            "n_boot": 1000,
+            "n_clusters": 457
+          },
+          "n_y0": 215,
+          "n_y1": 983,
+          "s": {
+            "estimate": 0.03146987153706027,
+            "hi": 0.07038952276412114,
+            "lo": 9.14804769900357e-05,
+            "n_boot": 1000,
+            "n_clusters": 457
+          }
+        },
+        "judge": {
+          "c0": {
+            "estimate": 0.7772093023255814,
+            "hi": 0.85,
+            "lo": 0.6972222222222222,
+            "n_boot": 1000,
+            "n_clusters": 457
+          },
+          "c1": {
+            "estimate": 0.9582909460834181,
+            "hi": 0.975418410041841,
+            "lo": 0.9402061855670103,
+            "n_boot": 1000,
+            "n_clusters": 457
+          },
+          "n_y0": 215,
+          "n_y1": 983,
+          "s": {
+            "estimate": 0.18108164375783675,
+            "hi": 0.26443925833939963,
+            "lo": 0.10578297370429479,
+            "n_boot": 1000,
+            "n_clusters": 457
+          }
+        },
+        "n": 1198,
+        "verified": {
+          "c0": {
+            "estimate": 0.8367441860465117,
+            "hi": 0.885691056910569,
+            "lo": 0.7822695035460993,
+            "n_boot": 1000,
+            "n_clusters": 457
+          },
+          "c1": {
+            "estimate": 0.9679552390640895,
+            "hi": 0.9789176626826029,
+            "lo": 0.9555106167846309,
+            "n_boot": 1000,
+            "n_clusters": 457
+          },
+          "n_y0": 215,
+          "n_y1": 983,
+          "s": {
+            "estimate": 0.13121105301757785,
+            "hi": 0.18748505118070347,
+            "lo": 0.08022776103064322,
+            "n_boot": 1000,
+            "n_clusters": 457
+          }
+        }
+      },
+      "correctness_sensitivity": {
+        "n": 4400,
+        "n_with_gold": 4400,
+        "primary_rate": 0.3618181818181818,
+        "primary_rule": "Joined correct uses the abstention label when the answer abstains: it is correct only when every source passage was retrieved and the question is unanswerable. Otherwise token F1 decides outside [0.2, 0.8], and the adjudicator decides inside that band.",
+        "secondary_rate": 0.3104545454545454,
+        "secondary_rule": "normalized gold string contained in the normalized answer"
+      },
+      "fallback": {
+        "by_arm": {
+          "graph_first": {
+            "mean_fallback": 0.7717636363636363,
+            "mean_skip": 0.9536267071320181
+          },
+          "hybrid": {
+            "mean_fallback": 0.7745131938125568,
+            "mean_skip": 0.9255148095909731
+          },
+          "keyword_boosted": {
+            "mean_fallback": 0.7725090909090909,
+            "mean_skip": 0.9306896551724138
+          },
+          "semantic_search": {
+            "mean_fallback": 0.748989990900819,
+            "mean_skip": 0.9309291338582677
+          }
+        },
+        "order_fallback": [
+          "hybrid",
+          "keyword_boosted",
+          "graph_first",
+          "semantic_search"
+        ],
+        "order_reversed": true,
+        "order_skip": [
+          "graph_first",
+          "semantic_search",
+          "keyword_boosted",
+          "hybrid"
+        ]
+      },
+      "judge": {
+        "assumption": {
+          "by_arm": {
+            "graph_first": {
+              "n0": 563,
+              "n1": 111,
+              "y0": {
+                "estimate": 0.9875666074600356,
+                "hi": 0.9963503649635036,
+                "lo": 0.9784172661870504,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.954954954954955,
+                "hi": 0.9907407407407407,
+                "lo": 0.911504424778761,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "hybrid": {
+              "n0": 358,
+              "n1": 315,
+              "y0": {
+                "estimate": 0.9416201117318437,
+                "hi": 0.9644699140401147,
+                "lo": 0.9168044077134987,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9634920634920635,
+                "hi": 0.9818481848184818,
+                "lo": 0.9425087108013938,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "keyword_boosted": {
+              "n0": 358,
+              "n1": 316,
+              "y0": {
+                "estimate": 0.9329608938547486,
+                "hi": 0.9576719576719577,
+                "lo": 0.9065155807365439,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9509493670886076,
+                "hi": 0.973186119873817,
+                "lo": 0.9276729559748428,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "semantic_search": {
+              "n0": 427,
+              "n1": 247,
+              "y0": {
+                "estimate": 0.949648711943794,
+                "hi": 0.9695550351288056,
+                "lo": 0.9277251184834123,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9595141700404858,
+                "hi": 0.9811715481171548,
+                "lo": 0.9350180505415162,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            }
+          },
+          "nonoverlapping_pairs": [
+            {
+              "arms": [
+                "graph_first",
+                "hybrid"
+              ],
+              "y": 0
+            },
+            {
+              "arms": [
+                "graph_first",
+                "keyword_boosted"
+              ],
+              "y": 0
+            },
+            {
+              "arms": [
+                "graph_first",
+                "semantic_search"
+              ],
+              "y": 0
+            }
+          ]
+        },
+        "missingness": {
+          "graph_first": {
+            "accuracy_when_missing": 0.1784037558685446,
+            "accuracy_when_observed": 0.16468842729970326,
+            "m": 0.38727272727272727,
+            "n": 1100,
+            "n_missing": 426,
+            "reasons": {
+              "not_sampled": 426,
+              "observed": 674
+            }
+          },
+          "hybrid": {
+            "accuracy_when_missing": 0.4426229508196721,
+            "accuracy_when_observed": 0.46805349182763745,
+            "m": 0.3881818181818182,
+            "n": 1100,
+            "n_missing": 427,
+            "reasons": {
+              "not_sampled": 426,
+              "observed": 673,
+              "unparseable": 1
+            }
+          },
+          "keyword_boosted": {
+            "accuracy_when_missing": 0.44366197183098594,
+            "accuracy_when_observed": 0.4688427299703264,
+            "m": 0.38727272727272727,
+            "n": 1100,
+            "n_missing": 426,
+            "reasons": {
+              "not_sampled": 426,
+              "observed": 674
+            }
+          },
+          "semantic_search": {
+            "accuracy_when_missing": 0.34976525821596244,
+            "accuracy_when_observed": 0.3664688427299703,
+            "m": 0.38727272727272727,
+            "n": 1100,
+            "n_missing": 426,
+            "reasons": {
+              "not_sampled": 426,
+              "observed": 674
+            }
+          }
+        },
+        "slope": {
+          "c0": {
+            "estimate": 0.9569753810082062,
+            "hi": 0.9691724941724941,
+            "lo": 0.9435327635327636,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "c1": {
+            "estimate": 0.9575328614762386,
+            "hi": 0.9750240153698367,
+            "lo": 0.9386056191467221,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "n_y0": 1706,
+          "n_y1": 989,
+          "s": {
+            "estimate": 0.0005574804680323897,
+            "hi": 0.022435370421119982,
+            "lo": -0.023263222914048698,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          }
+        }
+      },
+      "lexical_grounding": {
+        "assumption": {
+          "by_arm": {
+            "graph_first": {
+              "n0": 45,
+              "n1": 184,
+              "y0": {
+                "estimate": 0.9555555555555556,
+                "hi": 1.0,
+                "lo": 0.8837209302325582,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9864130434782609,
+                "hi": 1.0,
+                "lo": 0.9699453551912568,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "hybrid": {
+              "n0": 115,
+              "n1": 500,
+              "y0": {
+                "estimate": 0.9521739130434783,
+                "hi": 0.9872881355932204,
+                "lo": 0.9126984126984127,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.993,
+                "hi": 0.9990234375,
+                "lo": 0.9847870182555781,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "keyword_boosted": {
+              "n0": 113,
+              "n1": 502,
+              "y0": {
+                "estimate": 0.9690265486725663,
+                "hi": 0.9956521739130435,
+                "lo": 0.9342105263157895,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9840637450199203,
+                "hi": 0.9940476190476191,
+                "lo": 0.972,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "semantic_search": {
+              "n0": 94,
+              "n1": 396,
+              "y0": {
+                "estimate": 0.9414893617021277,
+                "hi": 0.9821428571428571,
+                "lo": 0.8882978723404256,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9848484848484849,
+                "hi": 0.9950738916256158,
+                "lo": 0.9710526315789474,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            }
+          },
+          "nonoverlapping_pairs": []
+        },
+        "missingness": {
+          "graph_first": {
+            "accuracy_when_missing": 0.003444316877152698,
+            "accuracy_when_observed": 0.8034934497816594,
+            "m": 0.7918181818181819,
+            "n": 1100,
+            "n_missing": 871,
+            "reasons": {
+              "no_claims": 871,
+              "observed": 229
+            }
+          },
+          "hybrid": {
+            "accuracy_when_missing": 0.008247422680412371,
+            "accuracy_when_observed": 0.8130081300813008,
+            "m": 0.4409090909090909,
+            "n": 1100,
+            "n_missing": 485,
+            "reasons": {
+              "no_claim": 1,
+              "no_claims": 484,
+              "observed": 615
+            }
+          },
+          "keyword_boosted": {
+            "accuracy_when_missing": 0.006185567010309278,
+            "accuracy_when_observed": 0.816260162601626,
+            "m": 0.4409090909090909,
+            "n": 1100,
+            "n_missing": 485,
+            "reasons": {
+              "no_claims": 485,
+              "observed": 615
+            }
+          },
+          "semantic_search": {
+            "accuracy_when_missing": 0.0,
+            "accuracy_when_observed": 0.8081632653061225,
+            "m": 0.5545454545454546,
+            "n": 1100,
+            "n_missing": 610,
+            "reasons": {
+              "no_claim": 1,
+              "no_claims": 609,
+              "observed": 490
+            }
+          }
+        },
+        "slope": {
+          "c0": {
+            "estimate": 0.9550408719346049,
+            "hi": 0.9794303797468354,
+            "lo": 0.9261363636363636,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "c1": {
+            "estimate": 0.9873577749683944,
+            "hi": 0.993006993006993,
+            "lo": 0.9809850374064838,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "n_y0": 367,
+          "n_y1": 1582,
+          "s": {
+            "estimate": 0.032316903033789535,
+            "hi": 0.06200220812899582,
+            "lo": 0.006072719502857815,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          }
+        }
+      },
+      "nli_grounding": {
+        "assumption": {
+          "by_arm": {
+            "graph_first": {
+              "n0": 45,
+              "n1": 184,
+              "y0": {
+                "estimate": 0.5333333333333333,
+                "hi": 0.6739130434782609,
+                "lo": 0.38,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.5489130434782609,
+                "hi": 0.6202185792349727,
+                "lo": 0.4720670391061452,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "hybrid": {
+              "n0": 115,
+              "n1": 500,
+              "y0": {
+                "estimate": 0.5956521739130435,
+                "hi": 0.6875,
+                "lo": 0.5084745762711864,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.633,
+                "hi": 0.6746506986027944,
+                "lo": 0.5926315789473684,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "keyword_boosted": {
+              "n0": 113,
+              "n1": 502,
+              "y0": {
+                "estimate": 0.6238938053097345,
+                "hi": 0.7072072072072072,
+                "lo": 0.5363636363636364,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.5939575033200531,
+                "hi": 0.6323924731182796,
+                "lo": 0.5492957746478874,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "semantic_search": {
+              "n0": 94,
+              "n1": 396,
+              "y0": {
+                "estimate": 0.601063829787234,
+                "hi": 0.7,
+                "lo": 0.504950495049505,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.5997474747474747,
+                "hi": 0.6518072289156627,
+                "lo": 0.554726368159204,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            }
+          },
+          "nonoverlapping_pairs": []
+        },
+        "missingness": {
+          "graph_first": {
+            "accuracy_when_missing": 0.003444316877152698,
+            "accuracy_when_observed": 0.8034934497816594,
+            "m": 0.7918181818181819,
+            "n": 1100,
+            "n_missing": 871,
+            "reasons": {
+              "no_claims": 871,
+              "observed": 229
+            }
+          },
+          "hybrid": {
+            "accuracy_when_missing": 0.008247422680412371,
+            "accuracy_when_observed": 0.8130081300813008,
+            "m": 0.4409090909090909,
+            "n": 1100,
+            "n_missing": 485,
+            "reasons": {
+              "no_claim": 1,
+              "no_claims": 484,
+              "observed": 615
+            }
+          },
+          "keyword_boosted": {
+            "accuracy_when_missing": 0.006185567010309278,
+            "accuracy_when_observed": 0.816260162601626,
+            "m": 0.4409090909090909,
+            "n": 1100,
+            "n_missing": 485,
+            "reasons": {
+              "no_claims": 485,
+              "observed": 615
+            }
+          },
+          "semantic_search": {
+            "accuracy_when_missing": 0.0,
+            "accuracy_when_observed": 0.8081632653061225,
+            "m": 0.5545454545454546,
+            "n": 1100,
+            "n_missing": 610,
+            "reasons": {
+              "no_claim": 1,
+              "no_claims": 609,
+              "observed": 490
+            }
+          }
+        },
+        "slope": {
+          "c0": {
+            "estimate": 0.5980926430517711,
+            "hi": 0.6690340909090909,
+            "lo": 0.523121387283237,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "c1": {
+            "estimate": 0.6025073746312685,
+            "hi": 0.6413612565445026,
+            "lo": 0.5628847845206685,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "n_y0": 367,
+          "n_y1": 1582,
+          "s": {
+            "estimate": 0.004414731579497344,
+            "hi": 0.07851353749679557,
+            "lo": -0.0719724762866476,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          }
+        }
+      },
+      "self": {
+        "assumption": {
+          "by_arm": {
+            "graph_first": {
+              "n0": 913,
+              "n1": 187,
+              "y0": {
+                "estimate": 0.959802847754655,
+                "hi": 0.9640649496080627,
+                "lo": 0.9550379198266522,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9192513368983958,
+                "hi": 0.9350526315789474,
+                "lo": 0.9018333333333333,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "hybrid": {
+              "n0": 595,
+              "n1": 504,
+              "y0": {
+                "estimate": 0.9142857142857143,
+                "hi": 0.9254058721934368,
+                "lo": 0.901265164644714,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9385119047619047,
+                "hi": 0.9461111111111111,
+                "lo": 0.929938775510204,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "keyword_boosted": {
+              "n0": 595,
+              "n1": 505,
+              "y0": {
+                "estimate": 0.9217478991596638,
+                "hi": 0.9315268456375838,
+                "lo": 0.911103448275862,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9355247524752475,
+                "hi": 0.9435930735930735,
+                "lo": 0.9265209125475284,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "semantic_search": {
+              "n0": 703,
+              "n1": 396,
+              "y0": {
+                "estimate": 0.9296159317211948,
+                "hi": 0.9381422351233671,
+                "lo": 0.9200561009817672,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9367424242424243,
+                "hi": 0.945530303030303,
+                "lo": 0.9265517241379311,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            }
+          },
+          "nonoverlapping_pairs": [
+            {
+              "arms": [
+                "graph_first",
+                "hybrid"
+              ],
+              "y": 0
+            },
+            {
+              "arms": [
+                "graph_first",
+                "keyword_boosted"
+              ],
+              "y": 0
+            },
+            {
+              "arms": [
+                "graph_first",
+                "semantic_search"
+              ],
+              "y": 0
+            }
+          ]
+        },
+        "missingness": {
+          "graph_first": {
+            "accuracy_when_missing": null,
+            "accuracy_when_observed": 0.17,
+            "m": 0.0,
+            "n": 1100,
+            "n_missing": 0,
+            "reasons": {
+              "observed": 1100
+            }
+          },
+          "hybrid": {
+            "accuracy_when_missing": 0.0,
+            "accuracy_when_observed": 0.4585987261146497,
+            "m": 0.0009090909090909091,
+            "n": 1100,
+            "n_missing": 1,
+            "reasons": {
+              "observed": 1099,
+              "truncated": 1
+            }
+          },
+          "keyword_boosted": {
+            "accuracy_when_missing": null,
+            "accuracy_when_observed": 0.4590909090909091,
+            "m": 0.0,
+            "n": 1100,
+            "n_missing": 0,
+            "reasons": {
+              "observed": 1100
+            }
+          },
+          "semantic_search": {
+            "accuracy_when_missing": 0.0,
+            "accuracy_when_observed": 0.36032757051865333,
+            "m": 0.0009090909090909091,
+            "n": 1100,
+            "n_missing": 1,
+            "reasons": {
+              "observed": 1099,
+              "truncated": 1
+            }
+          }
+        },
+        "slope": {
+          "c0": {
+            "estimate": 0.9345188880969351,
+            "hi": 0.9405450805622214,
+            "lo": 0.9285432098765433,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "c1": {
+            "estimate": 0.9348618090452261,
+            "hi": 0.9408749189889825,
+            "lo": 0.9281664499349804,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "n_y0": 2806,
+          "n_y1": 1592,
+          "s": {
+            "estimate": 0.0003429209482910256,
+            "hi": 0.00894323585918555,
+            "lo": -0.00824978177667357,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          }
+        }
+      },
+      "yes_no": {
+        "other": {
+          "abstain_correct": 0,
+          "abstain_incorrect": 177,
+          "abstain_retrieval_miss": 2127,
+          "correct_rate": 0.3520309477756286,
+          "gold_in_top_k_rate": 0.844294003868472,
+          "n": 4136,
+          "source_retrieved_rate": 0.34308510638297873,
+          "token_f1_rate": 0.34332688588007737
+        },
+        "yes_no": {
+          "abstain_correct": 0,
+          "abstain_incorrect": 18,
+          "abstain_retrieval_miss": 104,
+          "correct_rate": 0.5151515151515151,
+          "gold_in_top_k_rate": 0.8674242424242424,
+          "n": 264,
+          "source_retrieved_rate": 0.5340909090909091,
+          "token_f1_rate": 0.5151515151515151
+        }
+      }
+    },
+    "nq": {
+      "combination": {
+        "grounding": {
+          "c0": {
+            "estimate": 0.9940476190476191,
+            "hi": 1.0,
+            "lo": 0.9841269841269841,
+            "n_boot": 1000,
+            "n_clusters": 537
+          },
+          "c1": {
+            "estimate": 0.9897810218978103,
+            "hi": 0.9963898916967509,
+            "lo": 0.9809802487198245,
+            "n_boot": 1000,
+            "n_clusters": 537
+          },
+          "n_y0": 336,
+          "n_y1": 1370,
+          "s": {
+            "estimate": -0.004266597149808815,
+            "hi": 0.007273215244229747,
+            "lo": -0.015162454873646203,
+            "n_boot": 1000,
+            "n_clusters": 537
+          }
+        },
+        "judge": {
+          "c0": {
+            "estimate": 0.8785714285714286,
+            "hi": 0.920388349514563,
+            "lo": 0.8333333333333334,
+            "n_boot": 1000,
+            "n_clusters": 537
+          },
+          "c1": {
+            "estimate": 0.9718978102189781,
+            "hi": 0.9809037900874635,
+            "lo": 0.9612426035502958,
+            "n_boot": 1000,
+            "n_clusters": 537
+          },
+          "n_y0": 336,
+          "n_y1": 1370,
+          "s": {
+            "estimate": 0.09332638164754958,
+            "hi": 0.14120016603460317,
+            "lo": 0.05037737115246954,
+            "n_boot": 1000,
+            "n_clusters": 537
+          }
+        },
+        "n": 1706,
+        "verified": {
+          "c0": {
+            "estimate": 0.917063492063492,
+            "hi": 0.9451676528599605,
+            "lo": 0.884136546184739,
+            "n_boot": 1000,
+            "n_clusters": 537
+          },
+          "c1": {
+            "estimate": 0.9778588807785888,
+            "hi": 0.9842424242424241,
+            "lo": 0.9705515587529976,
+            "n_boot": 1000,
+            "n_clusters": 537
+          },
+          "n_y0": 336,
+          "n_y1": 1370,
+          "s": {
+            "estimate": 0.06079538871509682,
+            "hi": 0.09433060651788328,
+            "lo": 0.030704930624133375,
+            "n_boot": 1000,
+            "n_clusters": 537
+          }
+        }
+      },
+      "correctness_sensitivity": {
+        "n": 4400,
+        "n_with_gold": 4400,
+        "primary_rate": 0.5145454545454545,
+        "primary_rule": "Joined correct uses the abstention label when the answer abstains: it is correct only when every source passage was retrieved and the question is unanswerable. Otherwise token F1 decides outside [0.2, 0.8], and the adjudicator decides inside that band.",
+        "secondary_rate": 0.4431818181818182,
+        "secondary_rule": "normalized gold string contained in the normalized answer"
+      },
+      "fallback": {
+        "by_arm": {
+          "graph_first": {
+            "mean_fallback": 0.9398181818181818,
+            "mean_skip": 0.9697087378640776
+          },
+          "hybrid": {
+            "mean_fallback": 0.9217818181818181,
+            "mean_skip": 0.9431327602674306
+          },
+          "keyword_boosted": {
+            "mean_fallback": 0.9272727272727272,
+            "mean_skip": 0.9446546830652791
+          },
+          "semantic_search": {
+            "mean_fallback": 0.9225636363636363,
+            "mean_skip": 0.9465129682997118
+          }
+        },
+        "order_fallback": [
+          "graph_first",
+          "keyword_boosted",
+          "semantic_search",
+          "hybrid"
+        ],
+        "order_reversed": true,
+        "order_skip": [
+          "graph_first",
+          "semantic_search",
+          "keyword_boosted",
+          "hybrid"
+        ]
+      },
+      "judge": {
+        "assumption": {
+          "by_arm": {
+            "graph_first": {
+              "n0": 486,
+              "n1": 166,
+              "y0": {
+                "estimate": 0.995679012345679,
+                "hi": 0.9992047713717694,
+                "lo": 0.9897590361445783,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9825301204819277,
+                "hi": 0.9951612903225806,
+                "lo": 0.9668674698795181,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "hybrid": {
+              "n0": 260,
+              "n1": 391,
+              "y0": {
+                "estimate": 0.9642307692307692,
+                "hi": 0.983132530120482,
+                "lo": 0.9448,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9698209718670077,
+                "hi": 0.9821339950372209,
+                "lo": 0.9555555555555556,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "keyword_boosted": {
+              "n0": 239,
+              "n1": 411,
+              "y0": {
+                "estimate": 0.9364016736401675,
+                "hi": 0.9621848739495799,
+                "lo": 0.9075757575757576,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9698296836982969,
+                "hi": 0.9826966292134832,
+                "lo": 0.9551724137931035,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "semantic_search": {
+              "n0": 250,
+              "n1": 402,
+              "y0": {
+                "estimate": 0.9352,
+                "hi": 0.9600000000000001,
+                "lo": 0.9079831932773109,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9716417910447762,
+                "hi": 0.9834975369458129,
+                "lo": 0.9574938574938575,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            }
+          },
+          "nonoverlapping_pairs": [
+            {
+              "arms": [
+                "graph_first",
+                "hybrid"
+              ],
+              "y": 0
+            },
+            {
+              "arms": [
+                "graph_first",
+                "keyword_boosted"
+              ],
+              "y": 0
+            },
+            {
+              "arms": [
+                "graph_first",
+                "semantic_search"
+              ],
+              "y": 0
+            }
+          ]
+        },
+        "missingness": {
+          "graph_first": {
+            "accuracy_when_missing": 0.22991071428571427,
+            "accuracy_when_observed": 0.254601226993865,
+            "m": 0.4072727272727273,
+            "n": 1100,
+            "n_missing": 448,
+            "reasons": {
+              "not_sampled": 448,
+              "observed": 652
+            }
+          },
+          "hybrid": {
+            "accuracy_when_missing": 0.5634743875278396,
+            "accuracy_when_observed": 0.6006144393241167,
+            "m": 0.4081818181818182,
+            "n": 1100,
+            "n_missing": 449,
+            "reasons": {
+              "not_sampled": 448,
+              "observed": 651,
+              "unparseable": 1
+            }
+          },
+          "keyword_boosted": {
+            "accuracy_when_missing": 0.6044444444444445,
+            "accuracy_when_observed": 0.6323076923076923,
+            "m": 0.4090909090909091,
+            "n": 1100,
+            "n_missing": 450,
+            "reasons": {
+              "not_sampled": 448,
+              "observed": 650,
+              "unparseable": 2
+            }
+          },
+          "semantic_search": {
+            "accuracy_when_missing": 0.59375,
+            "accuracy_when_observed": 0.6165644171779141,
+            "m": 0.4072727272727273,
+            "n": 1100,
+            "n_missing": 448,
+            "reasons": {
+              "not_sampled": 448,
+              "observed": 652
+            }
+          }
+        },
+        "slope": {
+          "c0": {
+            "estimate": 0.9653441295546559,
+            "hi": 0.9773692810457516,
+            "lo": 0.952760736196319,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "c1": {
+            "estimate": 0.9718978102189781,
+            "hi": 0.9811198851399857,
+            "lo": 0.961388888888889,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "n_y0": 1235,
+          "n_y1": 1370,
+          "s": {
+            "estimate": 0.00655368066432227,
+            "hi": 0.023487319649221572,
+            "lo": -0.008064469628352056,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          }
+        }
+      },
+      "lexical_grounding": {
+        "assumption": {
+          "by_arm": {
+            "graph_first": {
+              "n0": 65,
+              "n1": 269,
+              "y0": {
+                "estimate": 1.0,
+                "hi": 1.0,
+                "lo": 1.0,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9851301115241635,
+                "hi": 0.996551724137931,
+                "lo": 0.9682539682539683,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "hybrid": {
+              "n0": 167,
+              "n1": 644,
+              "y0": {
+                "estimate": 0.9820359281437125,
+                "hi": 1.0,
+                "lo": 0.9595375722543352,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9883540372670807,
+                "hi": 0.9952978056426333,
+                "lo": 0.9805295950155763,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "keyword_boosted": {
+              "n0": 168,
+              "n1": 683,
+              "y0": {
+                "estimate": 1.0,
+                "hi": 1.0,
+                "lo": 1.0,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9875549048316252,
+                "hi": 0.9953775038520801,
+                "lo": 0.9785031847133758,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "semantic_search": {
+              "n0": 169,
+              "n1": 668,
+              "y0": {
+                "estimate": 0.9940828402366864,
+                "hi": 1.0,
+                "lo": 0.9802631578947368,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9917664670658682,
+                "hi": 0.9977511244377811,
+                "lo": 0.9843982169390788,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            }
+          },
+          "nonoverlapping_pairs": []
+        },
+        "missingness": {
+          "graph_first": {
+            "accuracy_when_missing": 0.0,
+            "accuracy_when_observed": 0.8053892215568862,
+            "m": 0.6963636363636364,
+            "n": 1100,
+            "n_missing": 766,
+            "reasons": {
+              "no_claims": 766,
+              "observed": 334
+            }
+          },
+          "hybrid": {
+            "accuracy_when_missing": 0.0,
+            "accuracy_when_observed": 0.7940813810110974,
+            "m": 0.26272727272727275,
+            "n": 1100,
+            "n_missing": 289,
+            "reasons": {
+              "no_claims": 289,
+              "observed": 811
+            }
+          },
+          "keyword_boosted": {
+            "accuracy_when_missing": 0.0,
+            "accuracy_when_observed": 0.8025851938895417,
+            "m": 0.22636363636363635,
+            "n": 1100,
+            "n_missing": 249,
+            "reasons": {
+              "no_claims": 249,
+              "observed": 851
+            }
+          },
+          "semantic_search": {
+            "accuracy_when_missing": 0.0,
+            "accuracy_when_observed": 0.7980884109916367,
+            "m": 0.2390909090909091,
+            "n": 1100,
+            "n_missing": 263,
+            "reasons": {
+              "no_claims": 263,
+              "observed": 837
+            }
+          }
+        },
+        "slope": {
+          "c0": {
+            "estimate": 0.9929701230228472,
+            "hi": 0.9982847341337907,
+            "lo": 0.9860383944153578,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "c1": {
+            "estimate": 0.9887367491166078,
+            "hi": 0.9946356727760394,
+            "lo": 0.9817101051668953,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "n_y0": 569,
+          "n_y1": 2264,
+          "s": {
+            "estimate": -0.004233373906239346,
+            "hi": 0.005368399027018467,
+            "lo": -0.013240246088512486,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          }
+        }
+      },
+      "nli_grounding": {
+        "assumption": {
+          "by_arm": {
+            "graph_first": {
+              "n0": 65,
+              "n1": 269,
+              "y0": {
+                "estimate": 0.8,
+                "hi": 0.8970588235294118,
+                "lo": 0.6986301369863014,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.7825278810408922,
+                "hi": 0.832046332046332,
+                "lo": 0.7332089552238806,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "hybrid": {
+              "n0": 167,
+              "n1": 644,
+              "y0": {
+                "estimate": 0.7455089820359282,
+                "hi": 0.8125,
+                "lo": 0.6779141104294478,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.8039596273291926,
+                "hi": 0.8347457627118644,
+                "lo": 0.7738654147104851,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "keyword_boosted": {
+              "n0": 168,
+              "n1": 683,
+              "y0": {
+                "estimate": 0.8035714285714286,
+                "hi": 0.8622754491017964,
+                "lo": 0.7402597402597403,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.8027086383601757,
+                "hi": 0.8323485967503693,
+                "lo": 0.7722809667673716,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "semantic_search": {
+              "n0": 169,
+              "n1": 668,
+              "y0": {
+                "estimate": 0.7988165680473372,
+                "hi": 0.8555555555555555,
+                "lo": 0.7378048780487805,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.7896706586826348,
+                "hi": 0.8191964285714286,
+                "lo": 0.7588757396449705,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            }
+          },
+          "nonoverlapping_pairs": []
+        },
+        "missingness": {
+          "graph_first": {
+            "accuracy_when_missing": 0.0,
+            "accuracy_when_observed": 0.8053892215568862,
+            "m": 0.6963636363636364,
+            "n": 1100,
+            "n_missing": 766,
+            "reasons": {
+              "no_claims": 766,
+              "observed": 334
+            }
+          },
+          "hybrid": {
+            "accuracy_when_missing": 0.0,
+            "accuracy_when_observed": 0.7940813810110974,
+            "m": 0.26272727272727275,
+            "n": 1100,
+            "n_missing": 289,
+            "reasons": {
+              "no_claims": 289,
+              "observed": 811
+            }
+          },
+          "keyword_boosted": {
+            "accuracy_when_missing": 0.0,
+            "accuracy_when_observed": 0.8025851938895417,
+            "m": 0.22636363636363635,
+            "n": 1100,
+            "n_missing": 249,
+            "reasons": {
+              "no_claims": 249,
+              "observed": 851
+            }
+          },
+          "semantic_search": {
+            "accuracy_when_missing": 0.0,
+            "accuracy_when_observed": 0.7980884109916367,
+            "m": 0.2390909090909091,
+            "n": 1100,
+            "n_missing": 263,
+            "reasons": {
+              "no_claims": 263,
+              "observed": 837
+            }
+          }
+        },
+        "slope": {
+          "c0": {
+            "estimate": 0.7847100175746925,
+            "hi": 0.8301158301158301,
+            "lo": 0.7360594795539034,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "c1": {
+            "estimate": 0.7968197879858657,
+            "hi": 0.8225737494655836,
+            "lo": 0.7702272727272728,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "n_y0": 569,
+          "n_y1": 2264,
+          "s": {
+            "estimate": 0.012109770411173226,
+            "hi": 0.07117684221125442,
+            "lo": -0.04480380290303265,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          }
+        }
+      },
+      "self": {
+        "assumption": {
+          "by_arm": {
+            "graph_first": {
+              "n0": 831,
+              "n1": 269,
+              "y0": {
+                "estimate": 0.9751865222623345,
+                "hi": 0.9767765567765568,
+                "lo": 0.9732593457943925,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9512267657992565,
+                "hi": 0.9560536398467433,
+                "lo": 0.9459010600706713,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "hybrid": {
+              "n0": 456,
+              "n1": 644,
+              "y0": {
+                "estimate": 0.9414254385964912,
+                "hi": 0.9471875,
+                "lo": 0.9348729792147806,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9451552795031055,
+                "hi": 0.9489258698940999,
+                "lo": 0.9413161875945536,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "keyword_boosted": {
+              "n0": 417,
+              "n1": 683,
+              "y0": {
+                "estimate": 0.9405755395683453,
+                "hi": 0.9459367945823928,
+                "lo": 0.9340410958904108,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9472474377745242,
+                "hi": 0.9508395802098949,
+                "lo": 0.9435632183908046,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "semantic_search": {
+              "n0": 432,
+              "n1": 668,
+              "y0": {
+                "estimate": 0.9423379629629629,
+                "hi": 0.9472748815165877,
+                "lo": 0.9355633802816902,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9495808383233532,
+                "hi": 0.9528851963746223,
+                "lo": 0.9461883408071748,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            }
+          },
+          "nonoverlapping_pairs": [
+            {
+              "arms": [
+                "graph_first",
+                "hybrid"
+              ],
+              "y": 0
+            },
+            {
+              "arms": [
+                "graph_first",
+                "keyword_boosted"
+              ],
+              "y": 0
+            },
+            {
+              "arms": [
+                "graph_first",
+                "semantic_search"
+              ],
+              "y": 0
+            }
+          ]
+        },
+        "missingness": {
+          "graph_first": {
+            "accuracy_when_missing": null,
+            "accuracy_when_observed": 0.24454545454545454,
+            "m": 0.0,
+            "n": 1100,
+            "n_missing": 0,
+            "reasons": {
+              "observed": 1100
+            }
+          },
+          "hybrid": {
+            "accuracy_when_missing": null,
+            "accuracy_when_observed": 0.5854545454545454,
+            "m": 0.0,
+            "n": 1100,
+            "n_missing": 0,
+            "reasons": {
+              "observed": 1100
+            }
+          },
+          "keyword_boosted": {
+            "accuracy_when_missing": null,
+            "accuracy_when_observed": 0.6209090909090909,
+            "m": 0.0,
+            "n": 1100,
+            "n_missing": 0,
+            "reasons": {
+              "observed": 1100
+            }
+          },
+          "semantic_search": {
+            "accuracy_when_missing": null,
+            "accuracy_when_observed": 0.6072727272727273,
+            "m": 0.0,
+            "n": 1100,
+            "n_missing": 0,
+            "reasons": {
+              "observed": 1100
+            }
+          }
+        },
+        "slope": {
+          "c0": {
+            "estimate": 0.9545786516853932,
+            "hi": 0.9578889943074004,
+            "lo": 0.9511028730305838,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "c1": {
+            "estimate": 0.9478136042402826,
+            "hi": 0.9505344827586206,
+            "lo": 0.9447904461469129,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "n_y0": 2136,
+          "n_y1": 2264,
+          "s": {
+            "estimate": -0.006765047445110639,
+            "hi": -0.0027226122646584194,
+            "lo": -0.011223430650897481,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          }
+        }
+      }
+    },
+    "squad": {
+      "combination": {
+        "grounding": {
+          "c0": {
+            "estimate": 0.9721362229102167,
+            "hi": 0.9947643979057592,
+            "lo": 0.9407894736842105,
+            "n_boot": 1000,
+            "n_clusters": 402
+          },
+          "c1": {
+            "estimate": 0.9931640625,
+            "hi": 0.9980787704130644,
+            "lo": 0.9867075664621677,
+            "n_boot": 1000,
+            "n_clusters": 402
+          },
+          "n_y0": 323,
+          "n_y1": 1024,
+          "s": {
+            "estimate": 0.02102783958978327,
+            "hi": 0.05645516505934722,
+            "lo": -0.0031188984963359534,
+            "n_boot": 1000,
+            "n_clusters": 402
+          }
+        },
+        "judge": {
+          "c0": {
+            "estimate": 0.8535603715170278,
+            "hi": 0.9003389830508476,
+            "lo": 0.801246105919003,
+            "n_boot": 1000,
+            "n_clusters": 402
+          },
+          "c1": {
+            "estimate": 0.9693359375,
+            "hi": 0.9839494163424124,
+            "lo": 0.9547227926078029,
+            "n_boot": 1000,
+            "n_clusters": 402
+          },
+          "n_y0": 323,
+          "n_y1": 1024,
+          "s": {
+            "estimate": 0.11577556598297223,
+            "hi": 0.16969150641025643,
+            "lo": 0.0647741467542412,
+            "n_boot": 1000,
+            "n_clusters": 402
+          }
+        },
+        "n": 1347,
+        "verified": {
+          "c0": {
+            "estimate": 0.8930856553147574,
+            "hi": 0.9219467401285584,
+            "lo": 0.859538784067086,
+            "n_boot": 1000,
+            "n_clusters": 402
+          },
+          "c1": {
+            "estimate": 0.9772786458333333,
+            "hi": 0.9866790009250693,
+            "lo": 0.9659033078880407,
+            "n_boot": 1000,
+            "n_clusters": 402
+          },
+          "n_y0": 323,
+          "n_y1": 1024,
+          "s": {
+            "estimate": 0.08419299051857598,
+            "hi": 0.12070077147113101,
+            "lo": 0.051464139725009295,
+            "n_boot": 1000,
+            "n_clusters": 402
+          }
+        }
+      },
+      "correctness_sensitivity": {
+        "n": 4400,
+        "n_with_gold": 2172,
+        "primary_rate": 0.7059090909090909,
+        "primary_rule": "Joined correct uses the abstention label when the answer abstains: it is correct only when every source passage was retrieved and the question is unanswerable. Otherwise token F1 decides outside [0.2, 0.8], and the adjudicator decides inside that band.",
+        "secondary_rate": 0.7845303867403315,
+        "secondary_rule": "normalized gold string contained in the normalized answer"
+      },
+      "fallback": {
+        "by_arm": {
+          "graph_first": {
+            "mean_fallback": 0.8604909090909091,
+            "mean_skip": 0.9584277456647399
+          },
+          "hybrid": {
+            "mean_fallback": 0.8349727272727273,
+            "mean_skip": 0.946630303030303
+          },
+          "keyword_boosted": {
+            "mean_fallback": 0.8298181818181818,
+            "mean_skip": 0.9451533742331287
+          },
+          "semantic_search": {
+            "mean_fallback": 0.8328363636363636,
+            "mean_skip": 0.9475794621026895
+          }
+        },
+        "order_fallback": [
+          "graph_first",
+          "hybrid",
+          "semantic_search",
+          "keyword_boosted"
+        ],
+        "order_reversed": true,
+        "order_skip": [
+          "graph_first",
+          "semantic_search",
+          "hybrid",
+          "keyword_boosted"
+        ]
+      },
+      "judge": {
+        "assumption": {
+          "by_arm": {
+            "graph_first": {
+              "n0": 295,
+              "n1": 356,
+              "y0": {
+                "estimate": 0.9772881355932204,
+                "hi": 0.9896428571428573,
+                "lo": 0.9629032258064516,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.98061797752809,
+                "hi": 0.992507204610951,
+                "lo": 0.96566757493188,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "hybrid": {
+              "n0": 148,
+              "n1": 505,
+              "y0": {
+                "estimate": 0.9094594594594594,
+                "hi": 0.9503649635036495,
+                "lo": 0.8652439024390244,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9786138613861386,
+                "hi": 0.990530303030303,
+                "lo": 0.9652351738241309,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "keyword_boosted": {
+              "n0": 130,
+              "n1": 522,
+              "y0": {
+                "estimate": 0.8761538461538462,
+                "hi": 0.9253731343283582,
+                "lo": 0.8200000000000001,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9821839080459771,
+                "hi": 0.9912790697674418,
+                "lo": 0.9710679611650486,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "semantic_search": {
+              "n0": 165,
+              "n1": 487,
+              "y0": {
+                "estimate": 0.9327272727272727,
+                "hi": 0.9629629629629629,
+                "lo": 0.8993333333333333,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9786447638603697,
+                "hi": 0.9893069306930693,
+                "lo": 0.9665280665280664,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            }
+          },
+          "nonoverlapping_pairs": [
+            {
+              "arms": [
+                "graph_first",
+                "hybrid"
+              ],
+              "y": 0
+            },
+            {
+              "arms": [
+                "graph_first",
+                "keyword_boosted"
+              ],
+              "y": 0
+            }
+          ]
+        },
+        "missingness": {
+          "graph_first": {
+            "accuracy_when_missing": 0.5300668151447662,
+            "accuracy_when_observed": 0.5468509984639017,
+            "m": 0.4081818181818182,
+            "n": 1100,
+            "n_missing": 449,
+            "reasons": {
+              "not_sampled": 446,
+              "observed": 651,
+              "unparseable": 3
+            }
+          },
+          "hybrid": {
+            "accuracy_when_missing": 0.7606263982102909,
+            "accuracy_when_observed": 0.7733537519142419,
+            "m": 0.40636363636363637,
+            "n": 1100,
+            "n_missing": 447,
+            "reasons": {
+              "not_sampled": 446,
+              "observed": 653,
+              "unparseable": 1
+            }
+          },
+          "keyword_boosted": {
+            "accuracy_when_missing": 0.7723214285714286,
+            "accuracy_when_observed": 0.8006134969325154,
+            "m": 0.4072727272727273,
+            "n": 1100,
+            "n_missing": 448,
+            "reasons": {
+              "not_sampled": 446,
+              "observed": 652,
+              "unparseable": 2
+            }
+          },
+          "semantic_search": {
+            "accuracy_when_missing": 0.6964285714285714,
+            "accuracy_when_observed": 0.7469325153374233,
+            "m": 0.4072727272727273,
+            "n": 1100,
+            "n_missing": 448,
+            "reasons": {
+              "not_sampled": 446,
+              "observed": 652,
+              "unparseable": 2
+            }
+          }
+        },
+        "slope": {
+          "c0": {
+            "estimate": 0.9359078590785909,
+            "hi": 0.9574825174825176,
+            "lo": 0.9133676092544988,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "c1": {
+            "estimate": 0.98,
+            "hi": 0.9887347391786904,
+            "lo": 0.9700654307524536,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "n_y0": 738,
+          "n_y1": 1870,
+          "s": {
+            "estimate": 0.04409214092140912,
+            "hi": 0.07134304554329496,
+            "lo": 0.020918563953387315,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          }
+        }
+      },
+      "lexical_grounding": {
+        "assumption": {
+          "by_arm": {
+            "graph_first": {
+              "n0": 102,
+              "n1": 318,
+              "y0": {
+                "estimate": 0.9803921568627451,
+                "hi": 1.0,
+                "lo": 0.9479166666666666,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9905660377358491,
+                "hi": 1.0,
+                "lo": 0.9795221843003413,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "hybrid": {
+              "n0": 168,
+              "n1": 455,
+              "y0": {
+                "estimate": 0.9761904761904762,
+                "hi": 0.9943502824858758,
+                "lo": 0.9510869565217391,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9912087912087912,
+                "hi": 0.997867803837953,
+                "lo": 0.9812889812889813,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "keyword_boosted": {
+              "n0": 168,
+              "n1": 467,
+              "y0": {
+                "estimate": 0.9583333333333334,
+                "hi": 0.9872611464968153,
+                "lo": 0.9259259259259259,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9935760171306209,
+                "hi": 1.0,
+                "lo": 0.9853249475890985,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "semantic_search": {
+              "n0": 143,
+              "n1": 437,
+              "y0": {
+                "estimate": 0.9790209790209791,
+                "hi": 1.0,
+                "lo": 0.9513888888888888,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9897025171624714,
+                "hi": 0.9977477477477478,
+                "lo": 0.979498861047836,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            }
+          },
+          "nonoverlapping_pairs": []
+        },
+        "missingness": {
+          "graph_first": {
+            "accuracy_when_missing": 0.40588235294117647,
+            "accuracy_when_observed": 0.7571428571428571,
+            "m": 0.6181818181818182,
+            "n": 1100,
+            "n_missing": 680,
+            "reasons": {
+              "no_claims": 680,
+              "observed": 420
+            }
+          },
+          "hybrid": {
+            "accuracy_when_missing": 0.8176100628930818,
+            "accuracy_when_observed": 0.7303370786516854,
+            "m": 0.43363636363636365,
+            "n": 1100,
+            "n_missing": 477,
+            "reasons": {
+              "no_claims": 477,
+              "observed": 623
+            }
+          },
+          "keyword_boosted": {
+            "accuracy_when_missing": 0.8623655913978494,
+            "accuracy_when_observed": 0.7354330708661417,
+            "m": 0.42272727272727273,
+            "n": 1100,
+            "n_missing": 465,
+            "reasons": {
+              "no_claims": 465,
+              "observed": 635
+            }
+          },
+          "semantic_search": {
+            "accuracy_when_missing": 0.6961538461538461,
+            "accuracy_when_observed": 0.753448275862069,
+            "m": 0.4727272727272727,
+            "n": 1100,
+            "n_missing": 520,
+            "reasons": {
+              "no_claims": 520,
+              "observed": 580
+            }
+          }
+        },
+        "slope": {
+          "c0": {
+            "estimate": 0.9724612736660929,
+            "hi": 0.9900332225913622,
+            "lo": 0.9504424778761061,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "c1": {
+            "estimate": 0.9913536076326774,
+            "hi": 0.9973297730307076,
+            "lo": 0.9839506172839506,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "n_y0": 581,
+          "n_y1": 1677,
+          "s": {
+            "estimate": 0.018892333966584518,
+            "hi": 0.04183945497630337,
+            "lo": -0.0019113743803464978,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          }
+        }
+      },
+      "nli_grounding": {
+        "assumption": {
+          "by_arm": {
+            "graph_first": {
+              "n0": 102,
+              "n1": 318,
+              "y0": {
+                "estimate": 0.46078431372549017,
+                "hi": 0.5564516129032258,
+                "lo": 0.36363636363636365,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.4779874213836478,
+                "hi": 0.5340909090909091,
+                "lo": 0.42467948717948717,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "hybrid": {
+              "n0": 168,
+              "n1": 455,
+              "y0": {
+                "estimate": 0.47619047619047616,
+                "hi": 0.5503355704697986,
+                "lo": 0.4025974025974026,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.47692307692307695,
+                "hi": 0.5227272727272727,
+                "lo": 0.43333333333333335,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "keyword_boosted": {
+              "n0": 168,
+              "n1": 467,
+              "y0": {
+                "estimate": 0.47619047619047616,
+                "hi": 0.5555555555555556,
+                "lo": 0.40641711229946526,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.49785867237687365,
+                "hi": 0.5437636761487965,
+                "lo": 0.45397489539748953,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "semantic_search": {
+              "n0": 143,
+              "n1": 437,
+              "y0": {
+                "estimate": 0.46153846153846156,
+                "hi": 0.5481927710843374,
+                "lo": 0.3782051282051282,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.4794050343249428,
+                "hi": 0.5292792792792793,
+                "lo": 0.4362745098039216,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            }
+          },
+          "nonoverlapping_pairs": []
+        },
+        "missingness": {
+          "graph_first": {
+            "accuracy_when_missing": 0.40588235294117647,
+            "accuracy_when_observed": 0.7571428571428571,
+            "m": 0.6181818181818182,
+            "n": 1100,
+            "n_missing": 680,
+            "reasons": {
+              "no_claims": 680,
+              "observed": 420
+            }
+          },
+          "hybrid": {
+            "accuracy_when_missing": 0.8176100628930818,
+            "accuracy_when_observed": 0.7303370786516854,
+            "m": 0.43363636363636365,
+            "n": 1100,
+            "n_missing": 477,
+            "reasons": {
+              "no_claims": 477,
+              "observed": 623
+            }
+          },
+          "keyword_boosted": {
+            "accuracy_when_missing": 0.8623655913978494,
+            "accuracy_when_observed": 0.7354330708661417,
+            "m": 0.42272727272727273,
+            "n": 1100,
+            "n_missing": 465,
+            "reasons": {
+              "no_claims": 465,
+              "observed": 635
+            }
+          },
+          "semantic_search": {
+            "accuracy_when_missing": 0.6961538461538461,
+            "accuracy_when_observed": 0.753448275862069,
+            "m": 0.4727272727272727,
+            "n": 1100,
+            "n_missing": 520,
+            "reasons": {
+              "no_claims": 520,
+              "observed": 580
+            }
+          }
+        },
+        "slope": {
+          "c0": {
+            "estimate": 0.46987951807228917,
+            "hi": 0.536178107606679,
+            "lo": 0.40407470288624786,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "c1": {
+            "estimate": 0.4836016696481813,
+            "hi": 0.5285628382441371,
+            "lo": 0.44062688366485836,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "n_y0": 581,
+          "n_y1": 1677,
+          "s": {
+            "estimate": 0.013722151575892128,
+            "hi": 0.08808450137118617,
+            "lo": -0.06533283945391044,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          }
+        }
+      },
+      "self": {
+        "assumption": {
+          "by_arm": {
+            "graph_first": {
+              "n0": 506,
+              "n1": 594,
+              "y0": {
+                "estimate": 0.9602371541501976,
+                "hi": 0.9639869281045751,
+                "lo": 0.9563759689922481,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9540740740740741,
+                "hi": 0.9561435726210351,
+                "lo": 0.9521122112211221,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "hybrid": {
+              "n0": 255,
+              "n1": 845,
+              "y0": {
+                "estimate": 0.9258823529411765,
+                "hi": 0.9343548387096774,
+                "lo": 0.9165587044534412,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9527337278106508,
+                "hi": 0.9544523809523809,
+                "lo": 0.9506771463119709,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "keyword_boosted": {
+              "n0": 232,
+              "n1": 868,
+              "y0": {
+                "estimate": 0.9161206896551723,
+                "hi": 0.9292796610169491,
+                "lo": 0.8990763052208836,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9521082949308756,
+                "hi": 0.9541909196740396,
+                "lo": 0.9498039215686275,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            },
+            "semantic_search": {
+              "n0": 301,
+              "n1": 799,
+              "y0": {
+                "estimate": 0.9377408637873754,
+                "hi": 0.9448692810457516,
+                "lo": 0.9294385964912281,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              },
+              "y1": {
+                "estimate": 0.9525531914893616,
+                "hi": 0.9543414634146341,
+                "lo": 0.9506287787182587,
+                "n_boot": 1000,
+                "n_clusters": 1100
+              }
+            }
+          },
+          "nonoverlapping_pairs": [
+            {
+              "arms": [
+                "graph_first",
+                "hybrid"
+              ],
+              "y": 0
+            },
+            {
+              "arms": [
+                "graph_first",
+                "keyword_boosted"
+              ],
+              "y": 0
+            },
+            {
+              "arms": [
+                "graph_first",
+                "semantic_search"
+              ],
+              "y": 0
+            },
+            {
+              "arms": [
+                "keyword_boosted",
+                "semantic_search"
+              ],
+              "y": 0
+            }
+          ]
+        },
+        "missingness": {
+          "graph_first": {
+            "accuracy_when_missing": null,
+            "accuracy_when_observed": 0.54,
+            "m": 0.0,
+            "n": 1100,
+            "n_missing": 0,
+            "reasons": {
+              "observed": 1100
+            }
+          },
+          "hybrid": {
+            "accuracy_when_missing": null,
+            "accuracy_when_observed": 0.7681818181818182,
+            "m": 0.0,
+            "n": 1100,
+            "n_missing": 0,
+            "reasons": {
+              "observed": 1100
+            }
+          },
+          "keyword_boosted": {
+            "accuracy_when_missing": null,
+            "accuracy_when_observed": 0.7890909090909091,
+            "m": 0.0,
+            "n": 1100,
+            "n_missing": 0,
+            "reasons": {
+              "observed": 1100
+            }
+          },
+          "semantic_search": {
+            "accuracy_when_missing": null,
+            "accuracy_when_observed": 0.7263636363636363,
+            "m": 0.0,
+            "n": 1100,
+            "n_missing": 0,
+            "reasons": {
+              "observed": 1100
+            }
+          }
+        },
+        "slope": {
+          "c0": {
+            "estimate": 0.9403245749613601,
+            "hi": 0.9452982731554159,
+            "lo": 0.934351145038168,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "c1": {
+            "estimate": 0.9527688345138441,
+            "hi": 0.9543173672205929,
+            "lo": 0.9510310913705584,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          },
+          "n_y0": 1294,
+          "n_y1": 3106,
+          "s": {
+            "estimate": 0.01244425955248396,
+            "hi": 0.017991482023411276,
+            "lo": 0.007192873457832705,
+            "n_boot": 1000,
+            "n_clusters": 1100
+          }
+        }
+      }
+    }
+  },
+  "git": {
+    "commit": "9c27d0c35198028a53a8597807ec5f857de2b752",
+    "dirty": true
+  },
+  "normalized_self_definition": "Causal per-arm rank of verbalized self-confidence. History H is the self-confidences seen on earlier selections of this (question type, arm) in this replay only. Reward = (|{h in H: h < c}| + 0.5 |{h in H: h = c}|) / |H|. Empty H yields a missing reward and no posterior update. Logged confidences from arms that were not selected are not used.",
+  "seed": 0,
+  "stage": "analyses",
+  "unavailable_signals": {}
+}

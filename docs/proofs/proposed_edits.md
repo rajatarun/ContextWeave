@@ -67,36 +67,49 @@ has mean \(c_0+\bar s\mu_a\) with \(\bar s=\sum_i w_i s_i/\sum_i w_i\). On the n
 
 Current statement. The numerical illustrations use the verified-reward simulation's assumed slopes, \(s_{\mathrm{self}}=0.024\) (\(\rho=0.7\), \(c_1=0.88\), \(c_0'=0.80\)) and \(s_{\mathrm{ground}}=0.5\). These are inputs to `scripts/verified_reward_bench.py`, not measurements, and the study contradicts them.
 
-Proposed statement. Replace both with the measured slopes from `results/study/study.json` (table "Measured slopes against the simulation's assumptions" in `results/FINDINGS.md`). \(s=c_1-c_0\) is the mean reward on correct answers minus the mean on wrong ones.
+Proposed statement. Replace both with the measured slopes. Every number below is copied from `results/study/study.json` (\(s\), \(s^2/\mathrm{Var}(R)\)) and `results/analyses/analyses.json` (cluster-bootstrap 95% interval on \(s\), 1000 resamples over 1100 questions per dataset), and the same table is generated in `results/FINDINGS.md`, section "Measured slopes against the simulation's assumptions". \(s=c_1-c_0\) is the mean reward on correct answers minus the mean on wrong ones. The verified reward is lexical grounding plus the judge; the analyses stage stores no interval for it or for the pooled row.
 
-Lead with the per-dataset table and give the pooled row as a summary only, because the pooled row mixes datasets whose base accuracy differs. Reproduce the whole table, every dataset and every signal, including the cells listed under "What does not support the paper". Quoting only the favourable cells would be cherry-picking.
+Lead with the per-dataset table, and give the pooled row as a summary only: it mixes datasets whose base accuracy differs (0.71 SQuAD, 0.36 HotpotQA, 0.51 NQ). Reproduce the whole table. Quoting only the favourable cells would be cherry-picking.
 
-Cells quoted by the author from the study:
+| dataset | signal | \(s\) | 95% interval | \(s^2/\mathrm{Var}(R)\) |
+|---|---|---|---|---|
+| SQuAD | self-confidence | 0.0124 | [0.0072, 0.0180] | 0.0701 |
+| SQuAD | lexical grounding | 0.0189 | [−0.0019, 0.0418] | 0.0270 |
+| SQuAD | NLI grounding | 0.0137 | [−0.0653, 0.0881] | 0.0008 |
+| SQuAD | judge | 0.0441 | [0.0209, 0.0713] | 0.0748 |
+| SQuAD | verified | 0.0271 | — | 0.0527 |
+| HotpotQA | self-confidence | 0.0003 | [−0.0082, 0.0089] | 0.000009 |
+| HotpotQA | lexical grounding | 0.0323 | [0.0061, 0.0620] | 0.0589 |
+| HotpotQA | NLI grounding | 0.0044 | [−0.0720, 0.0785] | 0.0001 |
+| HotpotQA | judge | 0.0006 | [−0.0233, 0.0224] | 0.000008 |
+| HotpotQA | verified | 0.0112 | — | 0.0054 |
+| NQ | self-confidence | −0.0068 | [−0.0112, −0.0027] | 0.0173 |
+| NQ | lexical grounding | −0.0042 | [−0.0132, 0.0054] | 0.0018 |
+| NQ | NLI grounding | 0.0121 | [−0.0448, 0.0712] | 0.0009 |
+| NQ | judge | 0.0066 | [−0.0081, 0.0235] | 0.0021 |
+| NQ | verified | 0.0032 | — | 0.0010 |
+| pooled | self-confidence | 0.0045 | — | 0.0033 |
+| pooled | lexical grounding | 0.0132 | — | 0.0132 |
+| pooled | NLI grounding | 0.0271 | — | 0.0032 |
+| pooled | judge | 0.0166 | — | 0.0095 |
+| pooled | verified | 0.0140 | — | 0.0124 |
 
-| scope | signal | \(s\) | \(s^2/\mathrm{Var}(R)\) |
-|---|---|---|---|
-| SQuAD | self-confidence | 0.0124 | 0.070 |
-| SQuAD | verified (grounding + judge) | 0.0271 | 0.053 |
-| SQuAD | judge | 0.0441 (interval excludes 0) | — |
-| HotpotQA | self-confidence | 0.0003 | \(\approx 0.000009\) |
-| HotpotQA | lexical grounding | 0.0323 (interval excludes 0) | 0.059 |
-| NQ | self-confidence | −0.0068 | 0.0173 |
-| NQ | verified | 0.0032 | 0.0010 |
-| pooled | self-confidence | 0.0045 | 0.0033 |
-| pooled | verified | 0.0140 | 0.0124 |
-| pooled | lexical grounding | 0.0132 | 0.0132 |
-| pooled | judge | 0.0166 | — |
+**What supports the paper.**
 
-Copy the remaining cells from the generated table rather than from this note.
-
-**What supports the paper.** Pooled, the verified reward has about 3.1 times the slope of self-confidence and about 3.7 times its \(s^2/\mathrm{Var}(R)\). On HotpotQA self-confidence carries essentially no signal while lexical grounding's slope is positive with an interval that excludes 0. On SQuAD the verified slope is about twice self-confidence's, and the judge's interval excludes 0. On NQ self-confidence's slope is negative (higher confidence goes with slightly worse answers) and the verified slope is positive.
+- The verified slope is positive on every dataset and pooled. Self-confidence's is not: on NQ it is negative with an interval that excludes 0, so there higher confidence goes with worse answers.
+- Pooled, the verified reward has 3.1 times the slope of self-confidence (0.0140 against 0.0045) and 3.7 times its \(s^2/\mathrm{Var}(R)\) (0.0124 against 0.0033).
+- HotpotQA: self-confidence carries no signal (0.0003, interval spans 0). Lexical grounding's slope is 0.0323 with an interval that excludes 0. The verified slope is 0.0112.
+- SQuAD: the verified slope is 2.2 times self-confidence's. The judge's slope is 0.0441 with an interval that excludes 0.
 
 **What does not support the paper.**
 
-- The assumed grounding slope 0.5 is off by more than an order of magnitude (pooled lexical grounding measures 0.0132, about 38 times smaller).
-- On SQuAD and on NQ self-confidence has the larger \(s^2/\mathrm{Var}(R)\) (0.070 against 0.053, and 0.0173 against 0.0010). Its reward variance is tiny, so the ratio is large while the slope is still small (SQuAD) or negative (NQ).
-- Every slope is small in absolute terms.
+- The assumed grounding slope 0.5 is off by more than an order of magnitude on every dataset (15 to 26 times lexical grounding where that slope is positive, about 38 times pooled). The assumed self slope 0.024 is also too large: it is 70 times the HotpotQA value, and on NQ the sign is wrong.
+- On SQuAD and NQ self-confidence has the larger \(s^2/\mathrm{Var}(R)\) (0.070 against 0.053, and 0.0173 against 0.0010). Its reward variance is tiny (0.0022 and 0.0027 against 0.0140 and 0.0108), so the ratio is large while the slope is small (SQuAD) or negative (NQ).
+- On SQuAD self-confidence's slope is positive with an interval that excludes 0. It is not uninformative there.
+- The components of the verified reward are not reliably signed either. Lexical grounding is negative on NQ (−0.0042, interval spans 0). The judge is about 0 on HotpotQA (0.0006). NLI grounding's intervals span 0 on every dataset. Only two component cells have intervals that exclude 0: lexical grounding on HotpotQA and the judge on SQuAD.
+- The pre-registered Section 6 prediction is contradicted on all three datasets (`results/calibration/calibration.json`). The self-confidence clauses hold everywhere: coverage at least 0.8, AUROC at most 0.6 (0.585, 0.490, 0.447), and a strategy ranking that disagrees with correctness. The grounding clause fails everywhere: lexical grounding's strategy ranking also disagrees with correctness, and its AUROC is about 0.5 (0.509, 0.516, 0.495). The paper should not say grounding ranks strategies correctly.
+- Every slope is small in absolute terms. The largest is 0.044.
 
-**Wording of the claim.** State that verified rewards carry a more reliable, correctly signed signal than self-confidence. Do not state that they have large slopes.
+**Wording of the claim.** State that verified rewards carry a more reliable, correctly signed signal than self-confidence: the verified slope is positive on every dataset, while self-confidence's is about zero on HotpotQA and negative on NQ, and the verified slope is larger pooled. Do not state that they have large slopes, that they dominate self-confidence on \(s^2/\mathrm{Var}(R)\) on every dataset, or that grounding alone ranks strategies correctly.
 
-**Effect on Theorem 1's illustration.** With the assumed values the \(1/s^2\) factor makes self-confidence about \((0.5/0.024)^2\approx 434\) times more expensive than grounding. With the pooled measured values the slope-squared ratio is \((0.0140/0.0045)^2\approx 9.7\) for the verified reward, and the information ratio \(s^2/\mathrm{Var}(R)\) is about 3.7. Any sentence that quotes the size of that gap should quote the measured numbers and say that per dataset the information ratio does not always favour the verified reward.
+**Effect on Theorem 1's illustration.** With the assumed values, the \(1/s^2\) factor makes self-confidence about \((0.5/0.024)^2\approx 434\) times more expensive than grounding. With the measured pooled values the slope-squared ratio of verified to self is \((0.0140/0.0045)^2\approx 9.8\) and the \(s^2/\mathrm{Var}(R)\) ratio is about 3.7. On SQuAD and NQ that ratio favours self-confidence. Any sentence that quotes the size of the gap should quote the measured numbers and give this per-dataset caveat.

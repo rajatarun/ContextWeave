@@ -660,18 +660,20 @@ def test_measured_slopes_sit_beside_the_assumed_ones_and_report_unfavourable_cel
     # Per-dataset table before the pooled summary.
     assert section.index("Measured slopes by dataset") < section.index("pooled over the datasets")
     # Assumed values sit beside the measured ones.
-    assert "| all | self | 100 | 0.6000 | 0.5000 | 0.5045 | 0.0045 |" in section
+    assert "| all | self | 100 | 0.6000 | 0.5000 | 0.5045 | 0.0045 | none | none |" in section
     assert "0.0240" in section and "0.5000" in section
     # Pooled: about 3 times the slope and 3.7 times s^2/Var(R).
     assert "| all | 0.0045 | 0.0140 | positive | positive | 3.1111 | 0.0033 | 0.0124 | 3.7576 | verified |" in section
     # The cells that do not favour the verified reward are reported, not dropped.
     assert "On squad, self-confidence has the larger s^2/Var(R) (0.0700 against 0.0530)" in section
     assert "On nq, self-confidence has the larger s^2/Var(R) (0.0173 against 0.0010)" in section
-    assert "On nq, the self-confidence slope is negative (-0.0068)." in section
+    assert "On nq, the self slope is negative (-0.0068)." in section
     assert "| nq | -0.0068 | 0.0032 | negative | positive | pending |" in section
     assert "self slope is not positive" in pending
     assert "the assumed grounding slope 0.5000 is 37.8788 times off the measured lexical_grounding slope 0.0132" in section
     assert "On nq, the assumed self slope 0.0240 has the wrong sign" in section
+    # Without analyses.json the per-dataset intervals are pending, not invented.
+    assert "results/analyses/analyses.json is missing" in pending
     assert "oracle m: squad 0.7000, hotpot 0.4000, nq 0.5000" in section
 
 
