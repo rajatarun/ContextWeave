@@ -626,6 +626,55 @@ def test_findings_pending_until_artifacts_exist_and_then_copies_them(tmp_path):
     assert "judge values are absent" in pending
 
 
+def _info(s, s2v, m=0.6, n=100):
+    # var_r chosen so that s^2 / var_r reproduces s2v.
+    return {
+        "n": n, "m": m, "c0": 0.5, "c1": 0.5 + s, "s": s,
+        "var_r": s * s / s2v, "s2_over_var_r": s2v, "null_reasons": {},
+    }
+
+
+def test_measured_slopes_sit_beside_the_assumed_ones_and_report_unfavourable_cells(tmp_path):
+    from experiments.reporting import write_assumptions
+    write_assumptions(tmp_path / "simulation_assumptions.json", load_config(), 0)
+    write_json(tmp_path / "study" / "study.json", {"information": {
+        "squad": {
+            "self": _info(0.0124, 0.070), "verified": _info(0.0271, 0.053),
+            "judge": _info(0.0441, 0.05), "oracle": _info(1.0, 4.0, m=0.7),
+        },
+        "hotpot": {
+            "self": _info(0.0003, 0.000009), "lexical_grounding": _info(0.0323, 0.059),
+            "verified": _info(0.03, 0.05), "oracle": _info(1.0, 4.0, m=0.4),
+        },
+        "nq": {
+            "self": _info(-0.0068, 0.0173), "verified": _info(0.0032, 0.0010),
+            "oracle": _info(1.0, 4.0, m=0.5),
+        },
+        "all": {
+            "self": _info(0.0045, 0.0033), "verified": _info(0.0140, 0.0124),
+            "lexical_grounding": _info(0.0132, 0.0132), "judge": _info(0.0166, 0.02),
+        },
+    }})
+    findings, pending = render(tmp_path)
+    section = findings.split("## Measured slopes against the simulation's assumptions")[1].split("\n## ")[0]
+    # Per-dataset table before the pooled summary.
+    assert section.index("Measured slopes by dataset") < section.index("pooled over the datasets")
+    # Assumed values sit beside the measured ones.
+    assert "| all | self | 100 | 0.6000 | 0.5000 | 0.5045 | 0.0045 |" in section
+    assert "0.0240" in section and "0.5000" in section
+    # Pooled: about 3 times the slope and 3.7 times s^2/Var(R).
+    assert "| all | 0.0045 | 0.0140 | positive | positive | 3.1111 | 0.0033 | 0.0124 | 3.7576 | verified |" in section
+    # The cells that do not favour the verified reward are reported, not dropped.
+    assert "On squad, self-confidence has the larger s^2/Var(R) (0.0700 against 0.0530)" in section
+    assert "On nq, self-confidence has the larger s^2/Var(R) (0.0173 against 0.0010)" in section
+    assert "On nq, the self-confidence slope is negative (-0.0068)." in section
+    assert "| nq | -0.0068 | 0.0032 | negative | positive | pending |" in section
+    assert "self slope is not positive" in pending
+    assert "the assumed grounding slope 0.5000 is 37.8788 times off the measured lexical_grounding slope 0.0132" in section
+    assert "On nq, the assumed self slope 0.0240 has the wrong sign" in section
+    assert "oracle m: squad 0.7000, hotpot 0.4000, nq 0.5000" in section
+
+
 def test_study_cli_on_a_joined_log(tmp_path):
     _write_subset(tmp_path, "q1")
     extra = {

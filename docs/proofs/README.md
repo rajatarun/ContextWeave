@@ -15,6 +15,7 @@
 | Proposition (corrected Proposition 3), parts 1–2 | Proposition 3 | Proved under two added hypotheses: each signal's conditional mean given the mask does not depend on the arm, and the mask is independent of the arm given \(Y\). Given the mask, the slope is the renormalized weighted average and is positive. The marginalized reward still satisfies Assumption 1. |
 | Proposition (corrected Proposition 3), part 3 | Proposition 3, slope formula | Proved only with the further assumption that the mask is independent of \(Y\). Without it the marginal slope can be negative; see the remark immediately after the proposition. |
 | Remark (arm-dependent coverage) and Proposition (inverse propensity) | Proposition 3, interaction with Proposition 2 | Proved counterexample: arm-dependent masks reverse the ordering while every signal keeps a positive arm-free slope. Single-signal coverage that depends on the arm but not on \(Y\) does not reverse a skipped reward (Proposition 2, skipping). Filling with a constant can reverse it (Proposition 2). Known observation propensities, bounded away from zero, restore \(c_0+\bar s\mu_a\) by inverse-propensity weighting when the mask is independent of correctness given the arm. |
+| (no theorem) Slope values | Numerical illustrations using \(s_{\mathrm{self}}=0.024\), \(s_{\mathrm{ground}}=0.5\) | Contradicted by the study. Replace with the measured slopes from `results/study/study.json`; see the last section of `proposed_edits.md`. |
 
 Assumptions added beyond the paper:
 

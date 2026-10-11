@@ -4,7 +4,9 @@ A missing file, a missing key, or a null estimate becomes the cell text
 ``pending``. ``PENDING.md`` lists every such cell and the reason. Numbers are
 formatted from the stored JSON; this module does not compute a metric that
 the artifact does not already contain, except the simulation-assumption table,
-which is copied out of ``results/simulation_assumptions.json``.
+which is copied out of ``results/simulation_assumptions.json``, and the
+measured-slope comparison, which divides stored slopes and ``s^2 / Var(R)``
+values and reports their signs.
 """
 from __future__ import annotations
 
@@ -121,6 +123,165 @@ def _pending_file(doc: _Doc, results: Path, relative: str, table: str) -> None:
     reason = str(data.get("detail") or data.get("reason") or "pending")
     doc.p(f"`results/{relative}` lists {len(rows)} rows not yet written. {reason}")
     doc.pending.append({"table": table, "cell": f"{len(rows)} rows", "reason": reason})
+
+
+MEASURED_SIGNALS = ("self", "lexical_grounding", "nli_grounding", "judge", "verified")
+# The simulation assumes one slope for self-confidence and one for grounding.
+# The judge and the verified combination have no assumed slope.
+ASSUMED_KEY = {"self": "self", "lexical_grounding": "grounding", "nli_grounding": "grounding"}
+ASSUMED_OFF_FACTOR = 10.0
+
+
+def _num(block: Any, key: str) -> float | None:
+    if not isinstance(block, dict):
+        return None
+    value = block.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _measured_rows(
+    doc: _Doc, info: dict[str, Any], name: str, assumed: dict[str, Any] | None,
+) -> list[list[str]]:
+    rows = []
+    for signal in MEASURED_SIGNALS:
+        block = (info.get(name) or {}).get(signal)
+        cell = f"{name} {signal}"
+        key = ASSUMED_KEY.get(signal)
+        if key is None:
+            assumed_text = "none"
+            ratio_text = "none"
+        elif assumed is None:
+            assumed_text = doc.cell("measured slopes", f"{cell} assumed s", None, "results/simulation_assumptions.json is missing")
+            ratio_text = doc.cell("measured slopes", f"{cell} measured/assumed", None, "assumed slope is missing")
+        else:
+            a_s = _num(assumed.get(key), "s")
+            m_s = _num(block, "s")
+            assumed_text = doc.cell("measured slopes", f"{cell} assumed s", a_s, "assumed slope is null")
+            ratio = m_s / a_s if (m_s is not None and a_s) else None
+            ratio_text = doc.cell("measured slopes", f"{cell} measured/assumed", ratio, "measured or assumed slope is null")
+        rows.append([
+            name, signal,
+            _ratio_cell(doc, "measured slopes", f"{cell} n", block, "n"),
+            _ratio_cell(doc, "measured slopes", f"{cell} m", block, "m"),
+            _ratio_cell(doc, "measured slopes", f"{cell} c0", block, "c0"),
+            _ratio_cell(doc, "measured slopes", f"{cell} c1", block, "c1"),
+            _ratio_cell(doc, "measured slopes", f"{cell} s", block, "s"),
+            _ratio_cell(doc, "measured slopes", f"{cell} var", block, "var_r"),
+            _ratio_cell(doc, "measured slopes", f"{cell} s2/var", block, "s2_over_var_r"),
+            assumed_text,
+            ratio_text,
+        ])
+    return rows
+
+
+def _sign(value: float | None) -> str | None:
+    if value is None:
+        return None
+    if value > 0:
+        return "positive"
+    if value < 0:
+        return "negative"
+    return "zero"
+
+
+def _measured_slopes(doc: _Doc, study: dict[str, Any], assumed: dict[str, Any] | None) -> None:
+    """Measured slopes from the study, beside the slopes the simulation assumed.
+
+    Per-dataset rows come first. The pooled row mixes datasets whose base
+    accuracy differs, so it is a summary, not the headline. Ratios and signs
+    are computed here from the stored ``s`` and ``s2_over_var_r``; nothing
+    else is.
+    """
+    info = study.get("information") or {}
+    headers = [
+        "dataset", "signal", "n", "m", "c0", "c1", "s", "Var(R)", "s^2/Var(R)",
+        "assumed s", "measured / assumed",
+    ]
+    rows = []
+    for name in DATASETS:
+        rows += _measured_rows(doc, info, name, assumed)
+    doc.table("Measured slopes by dataset", headers, rows)
+    doc.table(
+        "Measured slopes pooled over the datasets (summary)",
+        headers, _measured_rows(doc, info, "all", assumed),
+    )
+    base = []
+    for name in DATASETS:
+        m = _num((info.get(name) or {}).get("oracle"), "m")
+        base.append(f"{name} {doc.cell('measured slopes', f'{name} base m', m, 'oracle m is null')}")
+    doc.p(
+        "The pooled row mixes datasets with different base accuracy (oracle m: "
+        + ", ".join(base) + "). Read the per-dataset rows first."
+    )
+
+    cmp_rows = []
+    notes = []
+    for name in (*DATASETS, "all"):
+        s_self = _num((info.get(name) or {}).get("self"), "s")
+        s_ver = _num((info.get(name) or {}).get("verified"), "s")
+        i_self = _num((info.get(name) or {}).get("self"), "s2_over_var_r")
+        i_ver = _num((info.get(name) or {}).get("verified"), "s2_over_var_r")
+        v_self = _num((info.get(name) or {}).get("self"), "var_r")
+        v_ver = _num((info.get(name) or {}).get("verified"), "var_r")
+        s_ratio = s_ver / s_self if (s_ver is not None and s_self is not None and s_self > 0) else None
+        i_ratio = i_ver / i_self if (i_ver is not None and i_self) else None
+        larger = None
+        if i_self is not None and i_ver is not None:
+            larger = "verified" if i_ver > i_self else ("self" if i_self > i_ver else "tie")
+        s_reason = "self slope is not positive" if (s_self is not None and s_self <= 0) else "a slope is null"
+        cmp_rows.append([
+            name,
+            doc.cell("self vs verified", f"{name} self s", s_self, "self slope is null"),
+            doc.cell("self vs verified", f"{name} verified s", s_ver, "verified slope is null"),
+            doc.cell("self vs verified", f"{name} self sign", _sign(s_self), "self slope is null"),
+            doc.cell("self vs verified", f"{name} verified sign", _sign(s_ver), "verified slope is null"),
+            doc.cell("self vs verified", f"{name} s ratio", s_ratio, s_reason),
+            doc.cell("self vs verified", f"{name} self s2/var", i_self, "self s^2/Var(R) is null"),
+            doc.cell("self vs verified", f"{name} verified s2/var", i_ver, "verified s^2/Var(R) is null"),
+            doc.cell("self vs verified", f"{name} s2/var ratio", i_ratio, "an s^2/Var(R) is null or self's is 0"),
+            doc.cell("self vs verified", f"{name} larger s2/var", larger, "an s^2/Var(R) is null"),
+        ])
+        if larger == "self" and None not in (v_self, v_ver, s_self):
+            notes.append(
+                f"On {name}, self-confidence has the larger s^2/Var(R) ({_fmt(i_self)} against "
+                f"{_fmt(i_ver)}) with slope {_fmt(s_self)}. Its Var(R) is {_fmt(v_self)} against "
+                f"{_fmt(v_ver)} for the verified reward, so the ratio is large because the "
+                "variance is small, not because the slope is."
+            )
+        if s_self is not None and s_self <= 0:
+            notes.append(f"On {name}, the self-confidence slope is {_sign(s_self)} ({_fmt(s_self)}).")
+        if s_ver is not None and s_ver <= 0:
+            notes.append(f"On {name}, the verified slope is {_sign(s_ver)} ({_fmt(s_ver)}).")
+    doc.table(
+        "Self-confidence against the verified reward",
+        [
+            "dataset", "self s", "verified s", "self sign", "verified sign", "verified s / self s",
+            "self s^2/Var(R)", "verified s^2/Var(R)", "verified / self s^2/Var(R)", "larger s^2/Var(R)",
+        ],
+        cmp_rows,
+    )
+
+    if assumed is not None:
+        for name in (*DATASETS, "all"):
+            for signal, key in ASSUMED_KEY.items():
+                a_s = _num(assumed.get(key), "s")
+                m_s = _num((info.get(name) or {}).get(signal), "s")
+                if a_s is None or m_s is None:
+                    continue
+                if m_s <= 0:
+                    notes.append(
+                        f"On {name}, the assumed {key} slope {_fmt(a_s)} has the wrong sign: "
+                        f"{signal} measures {_fmt(m_s)}."
+                    )
+                elif a_s / m_s >= ASSUMED_OFF_FACTOR or m_s / a_s >= ASSUMED_OFF_FACTOR:
+                    notes.append(
+                        f"On {name}, the assumed {key} slope {_fmt(a_s)} is "
+                        f"{_fmt(max(a_s / m_s, m_s / a_s))} times off the measured {signal} slope {_fmt(m_s)}."
+                    )
+    for note in notes:
+        doc.p(note)
 
 
 def render(results: Path) -> tuple[str, str]:
@@ -641,6 +802,21 @@ def render(results: Path) -> tuple[str, str]:
             ["dataset", "signal", "n", "m", "s^2/Var(R)", "s^2/(m(1-m))", "information per round"],
             info_rows,
         )
+
+    doc.h("Measured slopes against the simulation's assumptions")
+    if study is None:
+        doc.p("Study artifact is missing.")
+        doc.pending.append({
+            "table": "measured slopes", "cell": "all",
+            "reason": "results/study/study.json is missing",
+        })
+    else:
+        doc.p(
+            "s = c1 - c0 is the mean reward on correct answers minus the mean on wrong ones. "
+            "The assumed slopes are the verified-reward simulation's pre-clip values from "
+            "`results/simulation_assumptions.json`. The judge and the verified reward have none."
+        )
+        _measured_slopes(doc, study, assumed)
 
     doc.h("Thompson sampling streams")
     if study is None:

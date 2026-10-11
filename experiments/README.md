@@ -379,6 +379,19 @@ Slopes are `c0 = E[R | Y=0, R observed]`, `c1 = E[R | Y=1, R observed]`,
 `scripts/verified_reward_bench.py`. `scripts/routing_regret_sim.py` draws
 `Beta(mu * 20, (1-mu) * 20)` and does not define those slopes.
 
+Those assumed values are not results. The study measures every slope, and
+`FINDINGS.md` section "Measured slopes against the simulation's assumptions"
+puts the measured `s`, `Var(R)` and `s^2 / Var(R)` from
+`results/study/study.json` beside the assumed ones: per dataset first, then the
+pooled row as a summary, because the pooled row mixes datasets with different
+base accuracy. A self-versus-verified table gives each slope's sign, the slope
+ratio and the `s^2 / Var(R)` ratio. The writer prints a sentence for every cell
+that does not favour the verified reward (self-confidence with the larger
+`s^2 / Var(R)`, a non-positive slope) and for every assumed slope that is ten
+times off the measured one or has the wrong sign. A paper quoting these numbers
+should quote the measured slopes and the whole table, not 0.024 and 0.5 and not
+a chosen subset of cells.
+
 ## Cost
 
 Prices are USD per million tokens in `config.yaml`, with the source they were
