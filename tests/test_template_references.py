@@ -217,6 +217,20 @@ def test_the_deploy_passes_the_authorizer_parameter():
         "the health surface is gated on a parameter the deploy never passes"
 
 
+def test_the_prod_deploy_names_the_mcp_bearer_secret():
+    """An empty McpAuthTokenSecretName deploys green and /mcp answers 401 to
+    every caller. The prod overrides have to pass the secret name. The token
+    value stays out of the workflow; a repository variable can replace the name.
+    Pull requests do not run this job."""
+    assert (
+        "McpAuthTokenSecretName=${{ vars.MCP_AUTH_TOKEN_SECRET_NAME || "
+        "'contextweave/prod/mcp-bearer-token' }}"
+    ) in WORKFLOW
+    header = WORKFLOW.split("  deploy-prod:\n", 1)[1].split("\n    steps:", 1)[0]
+    assert "pull_request" not in header
+    assert "github.event_name == 'push' || github.event_name == 'workflow_dispatch'" in header
+
+
 def test_the_deploy_reads_the_authorizer_from_a_stack_output():
     """What this proves: the ARN is read from a CloudFormation output rather
     than hardcoded. What it cannot prove: that `siwe-infra` is the right stack.
