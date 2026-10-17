@@ -339,6 +339,10 @@ def test_template_mcp_routes_leave_the_health_authorizer_in_place():
     role_text = json.dumps(RESOURCES["McpServerRole"])
     assert "HealthPostgresSecret" in role_text
     assert "HealthEnabled" in role_text
+    # Secrets Manager appends a hyphen and six random characters to the name.
+    # The grant has to be the wildcard form or GetSecretValue never matches.
+    assert "secretsmanager:GetSecretValue" in role_text
+    assert "secret:${McpAuthTokenSecretName}-*" in role_text
     query_role = json.dumps(RESOURCES["QueryAPIRole"])
     shared_secrets = json.dumps(RESOURCES["SecretsReadPolicy"])
     assert "HealthPostgresSecret" not in query_role

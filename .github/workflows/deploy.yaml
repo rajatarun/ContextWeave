@@ -509,6 +509,7 @@ jobs:
               SharedObservatoryMetricsTableName=${{ steps.shared-infra.outputs.observatory_metrics_table_name }} \
               SharedObservatoryMetricsTableArn=${{ steps.shared-infra.outputs.observatory_metrics_table_arn }} \
               SiweAuthorizerFunctionArn=${{ steps.siwe.outputs.arn }} \
+              McpAuthTokenSecretName=${{ vars.MCP_AUTH_TOKEN_SECRET_NAME || 'contextweave/prod/mcp-bearer-token' }} \
             --tags \
               Project=ExpertiseRAG \
               Environment=prod \

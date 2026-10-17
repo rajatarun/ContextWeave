@@ -404,22 +404,29 @@ The function caches a successful read for 60 seconds. After you rotate the
 secret, wait for that window or update the function so a new environment
 starts.
 
-Leave `McpAuthTokenSecretName` empty and every `/mcp` call returns 401.
-
 ### Deploy
 
-This repository's deploy is not run from here. To put the endpoint on
-`contextweave-rag-prod`:
+Merging to `main` runs `.github/workflows/deploy.yaml`, which deploys
+`contextweave-rag-prod`. That deploy passes `McpAuthTokenSecretName`. The
+value is the repository variable `MCP_AUTH_TOKEN_SECRET_NAME` when it is set,
+and `contextweave/prod/mcp-bearer-token` otherwise. Pull requests only
+validate and build; they do not deploy.
 
-1. Create the secret or parameter above.
-2. Build:
+**Create the secret before merging.** The workflow does not create it and
+does not contain the token. If `contextweave/prod/mcp-bearer-token` (or the
+name in `MCP_AUTH_TOKEN_SECRET_NAME`) is missing when prod deploys, the
+parameter is still set and `/mcp` returns 401 for every caller. An empty
+parameter does the same thing, which is how the first deploy of this endpoint
+behaved.
+
+1. Create the secret or parameter above, in the prod account, before the merge.
+2. Build, when deploying by hand:
 
 ```bash
 sam build --template template.yaml --parallel --cached
 ```
 
-3. Deploy with the parameter overrides the prod workflow already passes
-   (`.github/workflows/deploy.yaml`, job `deploy-prod`) **plus**
+3. A hand deploy has to pass the same overrides as job `deploy-prod`, including
    `McpAuthTokenSecretName`. Copy the current stack parameters so the other
    values stay as they are:
 
