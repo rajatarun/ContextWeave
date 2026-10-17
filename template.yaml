@@ -17,6 +17,16 @@ Parameters:
       disables the health surface entirely -- see HealthEnabled. It is never
       "authorizer optional": every expertise route on this API is open, which
       is why the health routes cannot be.
+  McpAuthTokenSecretName:
+    Type: String
+    Default: ""
+    MaxLength: 2048
+    Description: >
+      Name of the bearer token for POST /mcp and GET /mcp. This is a name, never
+      the token. A value that starts with / is an SSM SecureString parameter
+      name; any other value is a Secrets Manager secret name. Leave empty and
+      every /mcp call returns 401 until a name is set. The token itself is
+      created out of band and is not a template value.
   HealthDocsBucketName:
     Type: String
     Default: ""
@@ -182,6 +192,7 @@ Conditions:
   # routes cannot be -- and a health endpoint deployed without an authorizer by
   # accident is the failure this gate prevents. No authorizer, no surface.
   HealthEnabled: !Not [!Equals [!Ref SiweAuthorizerFunctionArn, '']]
+  HasMcpAuthSecret: !Not [!Equals [!Ref McpAuthTokenSecretName, '']]
   CreateHealthBucket: !And
     - !Condition HealthEnabled
     - !Equals [!Ref HealthDocsBucketName, '']
@@ -772,6 +783,17 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  McpServerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/contextweave-rag-mcp-${Environment}
+      RetentionInDays: !Ref LogRetentionDays
+      Tags:
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
   DBInitLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -1011,6 +1033,128 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # Role: MCP server Lambda.
+  # Not QueryAPIRole: that role is shared with the open query function, and the
+  # health credential must not be added to it. This role can read the health
+  # secret only when HealthEnabled is true — the same gate as the authorizer
+  # on /health/*. The MCP bearer-token secret is not in SecretsReadPolicy.
+  McpServerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub contextweave-rag-mcp-${Environment}
+      Description: Allows the MCP server to call the query and health handlers and to read its bearer token
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+        - !Ref LambdaVPCPolicy
+        - !Ref SecretsReadPolicy
+      Policies:
+        - PolicyName: BedrockInvokeModel
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: BedrockInvokeModel
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - arn:aws:bedrock:*::foundation-model/amazon.nova-pro-v1:0
+                  - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.amazon.nova-pro-v1:0
+                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-micro-v1:0
+                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0
+                  # Health-record answers use the health handler's default model.
+                  - arn:aws:bedrock:*::foundation-model/amazon.nova-lite-v1:0
+                  - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.amazon.nova-lite-v1:0
+        - !If
+          - HasRouterJudge
+          - PolicyName: BedrockRouterJudge
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Sid: JudgeInferenceProfile
+                  Effect: Allow
+                  Action: [bedrock:InvokeModel]
+                  Resource:
+                    - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${RouterJudgeModelId}
+                - Sid: JudgeFoundationModelsViaProfile
+                  Effect: Allow
+                  Action: [bedrock:InvokeModel]
+                  Resource: arn:aws:bedrock:*::foundation-model/*
+                  Condition:
+                    StringEquals:
+                      bedrock:InferenceProfileArn: !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${RouterJudgeModelId}
+          - !Ref AWS::NoValue
+        - PolicyName: S3ReadDerived
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub ${ArtifactsBucket.Arn}/derived/*
+        - PolicyName: KMSDecrypt
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource: !GetAtt ArtifactsKMSKey.Arn
+        - PolicyName: ObservatoryMetricsWrite
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !Ref SharedObservatoryMetricsTableArn
+        - !If
+          - HasMcpAuthSecret
+          - PolicyName: ReadMcpBearerToken
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${McpAuthTokenSecretName}-*"
+                - Effect: Allow
+                  Action: ssm:GetParameter
+                  Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${McpAuthTokenSecretName}"
+                # SecureString decryption. ViaService keeps this off the artifacts key
+                # and off any key a caller reaches without going through SSM or Secrets Manager.
+                - Effect: Allow
+                  Action: kms:Decrypt
+                  Resource: "*"
+                  Condition:
+                    StringEquals:
+                      kms:ViaService:
+                        - !Sub "ssm.${AWS::Region}.amazonaws.com"
+                        - !Sub "secretsmanager.${AWS::Region}.amazonaws.com"
+          - !Ref AWS::NoValue
+        - !If
+          - HealthEnabled
+          - PolicyName: ReadHealthStoreSecret
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !Ref HealthPostgresSecret
+          - !Ref AWS::NoValue
+      Tags:
+        - Key: Project
+          Value: ExpertiseRAG
+        - Key: Environment
+          Value: !Ref Environment
+
   # Role: DB Init Lambda
   DBInitRole:
     Type: AWS::IAM::Role
@@ -1233,6 +1377,76 @@ Resources:
             ApiId: !Ref ExpertiseAPI
             Path: /{proxy+}
             Method: OPTIONS
+
+  # ───────────────────────────────────────────
+  # Lambda: remote MCP server (Streamable HTTP)
+  # ───────────────────────────────────────────
+  # POST /mcp and GET /mcp. Auth is the bearer token checked in the function,
+  # not SiweAuthorizer: that authorizer's identity source is the Authorization
+  # header, and attaching it here would send the MCP token to the health-route
+  # authorizer. The events omit Auth on purpose. `Authorizer: NONE` is valid
+  # only when the API has a DefaultAuthorizer, and this API must not have one
+  # — it would cover the agent card and the open expertise routes. With no
+  # default, an event that does not name an authorizer is open at the gateway.
+  # The /health/* routes are not on this function and still name SiweAuthorizer.
+  McpServerFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: McpServerLogGroup
+    Properties:
+      FunctionName: !Sub contextweave-rag-mcp-${Environment}
+      Description: >
+        Streamable HTTP MCP server. initialize, tools/list, and tools/call wrap
+        the query and health handlers. GET /mcp returns 405.
+      CodeUri: src/
+      Handler: mcp_server.handler.lambda_handler
+      Role: !GetAtt McpServerRole.Arn
+      Timeout: 60
+      MemorySize: 1024
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSG
+        SubnetIds:
+          - !Ref SharedLambdaSubnetAz1Id
+          - !Ref SharedLambdaSubnetAz2Id
+        Ipv6AllowedForDualStack: true
+      Environment:
+        Variables:
+          GENERATION_MODEL_ID: !Ref GenerationModelId
+          ENVIRONMENT: !Ref Environment
+          LOG_LEVEL: DEBUG
+          CACHE_SIMILARITY_THRESHOLD: "0.95"
+          CACHE_TTL_DAYS: "7"
+          ROUTER_REWARD_SOURCE: !Ref RouterRewardSource
+          ROUTER_JUDGE_MODEL_ID: !Ref RouterJudgeModelId
+          ROUTER_JUDGE_SAMPLE_RATE: !Ref RouterJudgeSampleRate
+          MCP_AUTH_TOKEN_SECRET_NAME: !Ref McpAuthTokenSecretName
+          # Absent unless the health authorizer is configured. The function
+          # treats that as "do not advertise health-record tools".
+          HEALTH_POSTGRES_SECRET_ARN: !If
+            - HealthEnabled
+            - !Ref HealthPostgresSecret
+            - !Ref AWS::NoValue
+          HEALTH_POSTGRES_HOST: !If
+            - HealthEnabled
+            - !GetAtt PostgresRDS.Endpoint.Address
+            - !Ref AWS::NoValue
+          HEALTH_POSTGRES_PORT: !If
+            - HealthEnabled
+            - !GetAtt PostgresRDS.Endpoint.Port
+            - !Ref AWS::NoValue
+      Events:
+        McpPost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ExpertiseAPI
+            Path: /mcp
+            Method: POST
+        McpGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ExpertiseAPI
+            Path: /mcp
+            Method: GET
 
   # ───────────────────────────────────────────
   # Lambda: DB Initializer (replaces ingestion trigger)
@@ -1563,7 +1777,7 @@ Resources:
             - W1028
     Properties:
       StageName: !Ref Environment
-      Description: ExpertiseRAG query API – POST /query-expertise
+      Description: ExpertiseRAG query API – POST /query-expertise and POST /mcp
       AccessLogSettings:
         DestinationArn: !GetAtt ApiGatewayLogGroup.Arn
         Format: >
@@ -1608,6 +1822,9 @@ Resources:
         AllowHeaders:
           - Content-Type
           - Authorization
+          - Accept
+          - MCP-Protocol-Version
+          - Mcp-Session-Id
         AllowMethods:
           - POST
           - GET
@@ -1710,6 +1927,13 @@ Outputs:
   QueryExpertiseURL:
     Description: Full URL for the POST /query-expertise endpoint
     Value: !Sub https://${ExpertiseAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/query-expertise
+
+  McpEndpoint:
+    Description: >
+      Streamable HTTP MCP endpoint (protocol 2025-06-18). POST JSON-RPC to this
+      URL; GET returns 405. Requires Authorization: Bearer, checked against the
+      secret or SSM parameter named by McpAuthTokenSecretName.
+    Value: !Sub https://${ExpertiseAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/mcp
 
   OpenApiSpecPath:
     Description: >
