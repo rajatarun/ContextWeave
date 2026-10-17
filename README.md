@@ -130,6 +130,7 @@ API Gateway → Query API Lambda
 | Embeddings | Amazon Titan Text Embeddings V2 | 1024-dimensional semantic embeddings |
 | Routing Graph | Memgraph (EC2) | EFFECTIVE_FOR routing weights + graph expansion |
 | Query API | AWS Lambda + API Gateway HTTP v2 | POST /query-expertise with CAG + adaptive routing |
+| MCP | API Gateway `POST /mcp` and `GET /mcp` | Streamable HTTP MCP server (protocol 2025-06-18) |
 | Orchestration | AWS Step Functions | Preprocess → embed chunks → poll |
 | Encryption | AWS KMS | SSE-KMS on S3; key rotates annually |
 | Observability | AWS X-Ray + CloudWatch | Tracing on all Lambdas and Step Functions |
@@ -201,6 +202,7 @@ aws cloudformation describe-stacks \
 |------------|-------------|
 | `ArtifactsBucketName` | S3 bucket for uploads |
 | `QueryExpertiseURL` | Full POST /query-expertise URL |
+| `McpEndpoint` | Streamable HTTP MCP URL (`POST /mcp`) |
 | `MemgraphInstanceId` | Memgraph EC2 instance ID |
 
 ---
@@ -337,6 +339,169 @@ The response includes:
 
 ---
 
+## MCP connector
+
+The same API serves a remote MCP server on **Streamable HTTP**, protocol
+**2025-06-18**. Clients POST JSON-RPC to `/mcp`. `GET /mcp` returns **405**
+with `Allow: POST` — this server does not open a server-initiated SSE stream,
+which the transport permits.
+
+The endpoint is the `McpEndpoint` stack output:
+
+```bash
+aws cloudformation describe-stacks \
+  --stack-name contextweave-rag-prod \
+  --region us-east-1 \
+  --query "Stacks[0].Outputs[?OutputKey=='McpEndpoint'].OutputValue" \
+  --output text
+```
+
+It looks like `https://<api-id>.execute-api.us-east-1.amazonaws.com/prod/mcp`.
+The prod API is the HTTP API in `template.yaml` (stack `contextweave-rag-prod`).
+
+Every request must send `Authorization: Bearer <token>`. A missing or wrong
+token is **401**. The check does not say which of those it was.
+
+### Store the token
+
+The template parameter `McpAuthTokenSecretName` is the **name** of the secret,
+never the token. Do not commit the token and do not pass it as a parameter
+override.
+
+Secrets Manager (name does not start with `/`):
+
+```bash
+aws secretsmanager create-secret \
+  --region us-east-1 \
+  --name contextweave/prod/mcp-bearer-token \
+  --description "Bearer token for the ContextWeave MCP endpoint" \
+  --secret-string "$(openssl rand -base64 32)"
+```
+
+A JSON object is also accepted, with the token under `token`, `bearerToken`,
+`bearer_token`, or `value`.
+
+SSM SecureString (name starts with `/`):
+
+```bash
+aws ssm put-parameter \
+  --region us-east-1 \
+  --name /contextweave/prod/mcp-bearer-token \
+  --type SecureString \
+  --value "$(openssl rand -base64 32)"
+```
+
+Read the value back only to put it in the connector config, not into git:
+
+```bash
+aws secretsmanager get-secret-value \
+  --region us-east-1 \
+  --secret-id contextweave/prod/mcp-bearer-token \
+  --query SecretString --output text
+```
+
+The function caches a successful read for 60 seconds. After you rotate the
+secret, wait for that window or update the function so a new environment
+starts.
+
+Leave `McpAuthTokenSecretName` empty and every `/mcp` call returns 401.
+
+### Deploy
+
+This repository's deploy is not run from here. To put the endpoint on
+`contextweave-rag-prod`:
+
+1. Create the secret or parameter above.
+2. Build:
+
+```bash
+sam build --template template.yaml --parallel --cached
+```
+
+3. Deploy with the parameter overrides the prod workflow already passes
+   (`.github/workflows/deploy.yaml`, job `deploy-prod`) **plus**
+   `McpAuthTokenSecretName`. Copy the current stack parameters so the other
+   values stay as they are:
+
+```bash
+aws cloudformation describe-stacks \
+  --stack-name contextweave-rag-prod \
+  --region us-east-1 \
+  --query "Stacks[0].Parameters[].[ParameterKey,ParameterValue]" \
+  --output text
+```
+
+```bash
+sam deploy \
+  --stack-name contextweave-rag-prod \
+  --region us-east-1 \
+  --config-env prod \
+  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+  --no-confirm-changeset \
+  --no-fail-on-empty-changeset \
+  --resolve-s3 \
+  --parameter-overrides \
+    Environment=prod \
+    LogRetentionDays=365 \
+    GenerationModelId=us.amazon.nova-pro-v1:0 \
+    SharedVpcId=<current SharedVpcId> \
+    SharedLambdaSubnetAz1Id=<current SharedLambdaSubnetAz1Id> \
+    SharedLambdaSubnetAz2Id=<current SharedLambdaSubnetAz2Id> \
+    SharedPublicSubnetAz1Id=<current SharedPublicSubnetAz1Id> \
+    SharedObservatoryMetricsTableName=<current SharedObservatoryMetricsTableName> \
+    SharedObservatoryMetricsTableArn=<current SharedObservatoryMetricsTableArn> \
+    SiweAuthorizerFunctionArn=<current SiweAuthorizerFunctionArn> \
+    McpAuthTokenSecretName=contextweave/prod/mcp-bearer-token
+```
+
+For the SSM parameter, set `McpAuthTokenSecretName=/contextweave/prod/mcp-bearer-token`
+instead. Do not drop the existing overrides: a partial list can reset other
+parameters. An empty `SiweAuthorizerFunctionArn` leaves the health-record
+routes and the health-record MCP tools off, which is the existing gate.
+
+4. Confirm `McpEndpoint` with the `describe-stacks` command above.
+
+### Add the connector
+
+In Cursor, add a remote MCP server (Streamable HTTP) whose URL is `McpEndpoint`
+and whose header is the bearer token. The same config works in an MCP client
+that speaks Streamable HTTP:
+
+```json
+{
+  "mcpServers": {
+    "contextweave": {
+      "url": "https://<api-id>.execute-api.us-east-1.amazonaws.com/prod/mcp",
+      "headers": {
+        "Authorization": "Bearer <token>"
+      }
+    }
+  }
+}
+```
+
+The client sends `initialize`, then `tools/list` and `tools/call`. Supported
+methods also include `ping` and the `notifications/initialized` notification.
+
+| Tool | Wraps | Notes |
+|---|---|---|
+| `query_expertise` | `POST /query-expertise` | `question` required |
+| `submit_feedback` | `POST /feedback` | `queryId` and `rating` |
+| `list_routing_decisions` | `GET /routing-decisions` | `mode` `list` or `summary` |
+| `health` | `GET /health` | Liveness and routing-graph health |
+| `get_agent_card` | `GET /.well-known/agent-card.json` | |
+| `health_query` | `POST /health/query` | Listed only when the health store is enabled |
+| `list_health_documents` | `GET /health/documents` | Listed only when the health store is enabled |
+| `delete_health_document` | `DELETE /health/documents/{docId}` | `destructiveHint: true` |
+
+Direct HTTP calls to `/health/query`, `/health/documents`, and
+`/health/documents/{docId}` still use the API's custom authorizer. Those routes
+are unchanged. `/mcp` does not use that authorizer; it checks the bearer token
+above. The health-record tools are registered only when that authorizer is
+configured, which is the same condition that creates the health routes.
+
+---
+
 ## Observing Routing Behaviour
 
 ### Check current strategy weights
@@ -413,6 +578,10 @@ sam local invoke QueryAPIFunction \
 │   │   ├── graph_expander.py     # Memgraph graph expansion + routing queries
 │   │   ├── synthesizer.py        # Bedrock Converse answer synthesis
 │   │   └── requirements.txt
+│   ├── mcp_server/
+│   │   ├── handler.py            # POST /mcp and GET /mcp (Streamable HTTP MCP)
+│   │   ├── tools.py              # tools/list and tools/call wrappers
+│   │   └── auth.py               # Bearer token check (Secrets Manager or SSM)
 │   ├── ingestion_trigger/
 │   │   ├── handler.py            # CloudFormation custom resource + routing graph seed
 │   │   └── requirements.txt
@@ -481,6 +650,7 @@ To reduce costs in development:
 - Access to Memgraph and PostgreSQL is mediated by VPC security groups and Secrets Manager
 - Memgraph and PostgreSQL credentials stored in AWS Secrets Manager (never in env vars or code)
 - GitHub Actions deploys via OIDC — no long-lived access keys
+- `POST /mcp` and `GET /mcp` require a bearer token stored in Secrets Manager or SSM SecureString. The template holds the secret name (`McpAuthTokenSecretName`), not the token. A failed check returns 401
 - CloudWatch logs retained per `LogRetentionDays` parameter
 
 ---
